@@ -59,6 +59,49 @@ def _single_section_item(entry: dict) -> dict:
     }
 
 
+def summarize_compare_outcomes(report: dict) -> dict:
+    """按用户视角汇总 compare 结果。
+
+    算法层的 ORIG_INJECT/MODIFIED 等 actionability 保留给拼装决策；
+    报告摘要只说用户关心的事实去向，避免把可注入项误报成差异。
+    """
+    paired = report.get("paired", []) or []
+    only_source = report.get("only_a", []) or []
+    only_target = report.get("only_b", []) or []
+    identical = [
+        p for p in paired
+        if p.get("actionability") in ("IDENTICAL", "ORIG_INJECT")
+    ]
+    matched_different = [
+        p for p in paired
+        if p.get("actionability") in ("MODIFIED", "MERGE", "SPLIT")
+    ]
+    counts = {
+        "paired": len(paired),
+        "identical": len(identical),
+        "matched_different": len(matched_different),
+        "only_source": len(only_source),
+        "only_target": len(only_target),
+    }
+    counts["blocking"] = (
+        counts["matched_different"] +
+        counts["only_source"] +
+        counts["only_target"]
+    )
+    return counts
+
+
+def format_compare_summary(report: dict) -> str:
+    counts = summarize_compare_outcomes(report)
+    return (
+        f"{_report_label('metrics', 'paired')} {counts['paired']}，"
+        f"{_report_label('metrics', 'identical')} {counts['identical']}，"
+        f"{_report_label('metrics', 'matched_different')} {counts['matched_different']}，"
+        f"{_report_label('metrics', 'only_source')} {counts['only_source']}，"
+        f"{_report_label('metrics', 'only_target')} {counts['only_target']}"
+    )
+
+
 def build_compare_report_sections(report, info_source_path, info_target_path,
                                   label_source, label_target,
                                   source_file, target_file) -> list:
@@ -83,11 +126,12 @@ def build_compare_report_sections(report, info_source_path, info_target_path,
     only_source_items = [_single_section_item(x) for x in only_source]
     only_target_items = [_single_section_item(x) for x in only_target]
 
-    n_identical = len(identical_items)
-    n_matched = len(matched_different_items)
-    n_only_source = len(only_source_items)
-    n_only_target = len(only_target_items)
-    n_paired = len(paired)
+    counts = summarize_compare_outcomes(report)
+    n_identical = counts["identical"]
+    n_matched = counts["matched_different"]
+    n_only_source = counts["only_source"]
+    n_only_target = counts["only_target"]
+    n_paired = counts["paired"]
 
     action_counts = {}
     for p in paired:

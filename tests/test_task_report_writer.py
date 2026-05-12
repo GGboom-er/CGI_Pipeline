@@ -145,10 +145,67 @@ def test_file_flow_table_has_io_status_elapsed():
     print(f"✓ test_file_flow_table_has_io_status_elapsed → {report}")
 
 
+def test_file_flow_merges_across_segments():
+    sbx = _sandbox("file_flow_merge")
+    report = sbx / "REPORT.md"
+    writer.init_report(report, {"task_id": "task-file-flow-merge", "asset_name": "demo", "run_dir": str(sbx)})
+    writer.upsert_file_staged(report, [
+        {
+            "role": "source_path",
+            "origin": "X:/Project/ysj/pub/assets/chr/demo/tex/texMaster/demo.blend",
+            "sandbox": str(sbx / "demo.blend"),
+            "elapsed_sec": 0.2,
+        },
+    ])
+    writer.upsert_file_staged(report, [
+        {
+            "role": "step.maya_compare_asset_in_scene.input_source",
+            "origin": str(sbx / ".info" / "demo.abc"),
+            "sandbox": str(sbx / ".info" / "demo.abc"),
+            "skipped": True,
+            "elapsed_sec": 0.0,
+        },
+        {
+            "role": "source_path",
+            "origin": "X:/Project/ysj/pub/assets/chr/demo/rig/rigMaster/demo.ma",
+            "sandbox": str(sbx / "demo.ma"),
+            "elapsed_sec": 1.1,
+        },
+    ])
+    text = report.read_text(encoding="utf-8")
+    assert "demo.blend" in text
+    assert "demo.abc" in text
+    assert "demo.ma" in text
+    assert text.count("demo.blend") >= 1
+    print(f"✓ test_file_flow_merges_across_segments → {report}")
+
+
+def test_open_scene_merges_across_segments():
+    sbx = _sandbox("open_scene_merge")
+    report = sbx / "REPORT.md"
+    writer.init_report(report, {"task_id": "task-open-scene-merge", "asset_name": "demo", "run_dir": str(sbx)})
+    blend = str(sbx / "demo.blend")
+    maya = str(sbx / "demo.ma")
+    writer.upsert_open_scene(report, blend, "RUNNING")
+    writer.upsert_open_scene(report, blend, "SUCCESS", elapsed_sec=0.5)
+    writer.upsert_open_scene(report, maya, "RUNNING")
+    writer.upsert_open_scene(report, maya, "SUCCESS", elapsed_sec=2.0)
+    text = report.read_text(encoding="utf-8")
+    assert "打开Blender场景" in text
+    assert "打开Maya场景" in text
+    assert "demo.blend" in text
+    assert "demo.ma" in text
+    assert text.count("打开Blender场景") == 1, text
+    assert text.count("打开Maya场景") == 1, text
+    print(f"✓ test_open_scene_merges_across_segments → {report}")
+
+
 if __name__ == "__main__":
     print("=== task_report_writer unit tests ===\n")
     test_step_upsert_no_duplicate()
     test_error_block_contains_full_detail()
     test_sections_and_report_content()
     test_file_flow_table_has_io_status_elapsed()
+    test_file_flow_merges_across_segments()
+    test_open_scene_merges_across_segments()
     print("\n✅ all pass")

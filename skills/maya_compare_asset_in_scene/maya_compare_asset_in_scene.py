@@ -13,9 +13,11 @@ from core.asset_info_schema import compare
 from core.compare_result_io import (
     auto_label,
     build_compare_report_sections,
+    format_compare_summary,
     generate_report,
     load_info_from_path,
     resolve_compare_result_path,
+    summarize_compare_outcomes,
     write_compare_result,
 )
 from core.receipt import make_receipt
@@ -123,12 +125,8 @@ def execute(payload: dict) -> dict:
         target_info.get('source_file', target_scene),
     )
 
-    total = report.get('total_issues', 0)
-    paired = len(report.get('paired', []))
-    if total == 0:
-        status_msg = f'对比通过 — {paired} mesh 完全一致'
-    else:
-        status_msg = f'配对 {paired}, 差异 {total}'
+    counts = summarize_compare_outcomes(report)
+    status_msg = format_compare_summary(report)
 
     return make_receipt(
         skill_id='maya_compare_asset_in_scene',
@@ -136,8 +134,8 @@ def execute(payload: dict) -> dict:
         start_time=t0,
         summary_input=f'{os.path.basename(input_source)} vs 当前 Maya 场景',
         summary_action=status_msg,
-        summary_count=total,
-        summary_label='差异',
+        summary_count=counts['blocking'],
+        summary_label='问题',
         outputs={'output_path': output_path},
         report_content=md,
         report_sections=report_sections,

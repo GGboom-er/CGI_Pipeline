@@ -14,9 +14,11 @@ from core.asset_info_schema import compare
 from core.compare_result_io import (
     auto_label,
     build_compare_report_sections,
+    format_compare_summary,
     generate_report,
     load_info_from_path,
     resolve_compare_result_path,
+    summarize_compare_outcomes,
     write_compare_result,
 )
 
@@ -115,13 +117,8 @@ def execute(payload: dict) -> dict:
                             error=f'写入 compare_result 失败: {e}')
     sub_steps.append({'name': '写入 compare_result', 'elapsed_sec': round(time.time() - t_out, 3)})
 
-    total = report["total_issues"]
-    n_paired = len(report["paired"])
-
-    if total == 0:
-        status_msg = f"对比通过 — {n_paired} mesh 完全一致"
-    else:
-        status_msg = f"配对 {n_paired}, 差异 {total}"
+    counts = summarize_compare_outcomes(report)
+    status_msg = format_compare_summary(report)
 
     receipt = make_receipt(
         skill_id='pipeline_compare_asset',
@@ -129,8 +126,8 @@ def execute(payload: dict) -> dict:
         start_time=t0,
         summary_input=f'{os.path.basename(input_a)} vs {os.path.basename(input_b)}',
         summary_action=status_msg,
-        summary_count=total,
-        summary_label='差异',
+        summary_count=counts['blocking'],
+        summary_label='问题',
         outputs={
             'output_path': output_path,
         },

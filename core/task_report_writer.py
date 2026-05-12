@@ -14,6 +14,7 @@ import os
 import re
 import time
 import traceback as _traceback
+import base64
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -146,6 +147,54 @@ def _short_json(value: Any, max_chars: int = 6000) -> str:
     if len(text) > max_chars:
         return text[:max_chars] + f"\n... 已截断 {len(text) - max_chars} 字符"
     return text
+
+
+def _data_marker(kind: str, records: Any) -> str:
+    raw = json.dumps(records, ensure_ascii=False, separators=(",", ":"), default=str)
+    payload = base64.b64encode(raw.encode("utf-8")).decode("ascii")
+    return f"[//]: # (report:data:{kind}:{payload})"
+
+
+def _read_data_marker(report_path: str | Path, kind: str) -> List[Dict[str, Any]]:
+    path = Path(report_path)
+    if not path.exists():
+        return []
+    text = path.read_text(encoding="utf-8")
+    pattern = re.compile(
+        r"\[//\]: # \(report:data:" + re.escape(kind) + r":([A-Za-z0-9+/=]+)\)"
+    )
+    matches = pattern.findall(text)
+    if not matches:
+        return []
+    try:
+        decoded = base64.b64decode(matches[-1].encode("ascii")).decode("utf-8")
+        data = json.loads(decoded)
+    except Exception:
+        return []
+    if not isinstance(data, list):
+        return []
+    return [dict(x) for x in data if isinstance(x, dict)]
+
+
+def _merge_records(existing: Iterable[Dict[str, Any]],
+                   incoming: Iterable[Dict[str, Any]],
+                   key_fields: Iterable[str]) -> List[Dict[str, Any]]:
+    merged: List[Dict[str, Any]] = []
+    index: Dict[tuple, int] = {}
+    fields = list(key_fields)
+    for rec in list(existing or []) + list(incoming or []):
+        if not isinstance(rec, dict):
+            continue
+        key = tuple(str(rec.get(field, "")) for field in fields)
+        if not any(key):
+            key = (json.dumps(rec, ensure_ascii=False, sort_keys=True, default=str),)
+        clean = dict(rec)
+        if key in index:
+            merged[index[key]].update(clean)
+        else:
+            index[key] = len(merged)
+            merged.append(clean)
+    return merged
 
 
 def _skill_label(skill_id: str) -> str:
@@ -360,34 +409,87 @@ def render_file_staged(records: Iterable[Dict[str, Any]]) -> str:
             f"{_escape_cell(state)} | "
             f"{_fmt_elapsed_sec(rec.get('elapsed_sec'))} |"
         )
+    lines.extend(["", _data_marker("file_staged", records)])
     return "\n".join(lines)
 
 
 def upsert_file_staged(report_path: str | Path, records: Iterable[Dict[str, Any]]) -> None:
-    upsert_block(report_path, "context:file_staged", render_file_staged(records))
+    merged = _merge_records(
+        _read_data_marker(report_path, "file_staged"),
+        records,
+        ("role", "node", "param", "origin", "sandbox", "input", "output"),
+    )
+    upsert_block(report_path, "context:file_staged", render_file_staged(merged))
+
+
+def _open_scene_node(source_path: str) -> str:
+    lower = str(source_path or "").lower()
+    if lower.endswith(".blend"):
+        return "打开Blender场景"
+    if lower.endswith((".ma", ".mb")):
+        return "打开Maya场景"
+    return "打开场景"
+
+
+def render_open_scenes(records: Iterable[Dict[str, Any]]) -> str:
+    records = list(records or [])
+    lines = [
+        "## 打开场景",
+        "",
+        f"共 {len(records)} 次 DCC 场景打开记录。",
+        "",
+        "| 节点 | 输入 | 输出 | 状态 | 耗时 |",
+        "|---|---|---|---|---|",
+    ]
+    errors = []
+    for rec in records:
+        source_path = str(rec.get("source_path") or "")
+        status = str(rec.get("status") or "UNKNOWN")
+        lines.append(
+            f"| {_escape_cell(_open_scene_node(source_path))} | "
+            f"{_fmt_cell_path(source_path)} | 当前 DCC 会话 | "
+            f"{_status_icon(status)} {status} | {_fmt_elapsed_sec(rec.get('elapsed_sec'))} |"
+        )
+        if rec.get("error"):
+            errors.append((source_path, str(rec.get("error"))))
+    for source_path, error in errors:
+        lines.extend([
+            "",
+            f"**打开失败: {_escape_md(source_path)}**",
+            "",
+            "```text",
+            error,
+            "```",
+        ])
+    lines.extend(["", _data_marker("open_scene", records)])
+    return "\n".join(lines)
 
 
 def render_open_scene(source_path: str, status: str,
                       elapsed_sec: Optional[float] = None,
                       error: str = "") -> str:
-    elapsed_text = _fmt_elapsed_sec(elapsed_sec)
-    lines = [
-        "## 打开场景",
-        "",
-        "| 节点 | 输入 | 输出 | 状态 | 耗时 |",
-        "|---|---|---|---|---|",
-        f"| 打开场景 | {_fmt_cell_path(source_path)} | 当前 DCC 会话 | {_status_icon(status)} {status} | {elapsed_text} |",
-    ]
-    if error:
-        lines.extend(["", "**错误内容**", "", "```text", str(error), "```"])
-    return "\n".join(lines)
+    return render_open_scenes([{
+        "source_path": source_path,
+        "status": status,
+        "elapsed_sec": elapsed_sec,
+        "error": error,
+    }])
 
 
 def upsert_open_scene(report_path: str | Path, source_path: str, status: str,
                       elapsed_sec: Optional[float] = None,
                       error: str = "") -> None:
-    upsert_block(report_path, "context:open_scene",
-                 render_open_scene(source_path, status, elapsed_sec, error))
+    merged = _merge_records(
+        _read_data_marker(report_path, "open_scene"),
+        [{
+            "source_path": source_path,
+            "status": status,
+            "elapsed_sec": elapsed_sec,
+            "error": error,
+        }],
+        ("source_path",),
+    )
+    upsert_block(report_path, "context:open_scene", render_open_scenes(merged))
 
 
 def _step_block_id(step_context: Dict[str, Any]) -> str:
