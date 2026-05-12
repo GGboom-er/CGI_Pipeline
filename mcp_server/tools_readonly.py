@@ -195,6 +195,25 @@ def register_readonly_tools(mcp):
 
 
     @mcp.tool(
+        name="pipeline_service_status",
+        annotations={
+            "title": "查询服务和 Worker 心跳",
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": False,
+        }
+    )
+    async def pipeline_service_status() -> dict:
+        """查询 Redis、Maya/Blender/Workflow Worker 的 PID 与 Celery 队列心跳。"""
+        from core.service_manager import get_service_status
+        return {
+            'status': 'SUCCESS',
+            'services': get_service_status(include_heartbeat=True),
+        }
+
+
+    @mcp.tool(
         name="pipeline_explain_architecture",
         annotations={
             "title": "管线架构自证与白皮书查阅",
@@ -214,14 +233,19 @@ def register_readonly_tools(mcp):
         import os
         from pathlib import Path
         project_root = Path(os.getenv('PROJECT_ROOT', '.'))
-        doc_path = project_root / 'docs' / 'CGI_Pipeline_v2_Architecture_Specification.md'
-        
-        content = "架构白皮书未找到。"
-        if doc_path.exists():
-            content = doc_path.read_text(encoding='utf-8')
+        docs = []
+        for rel in (
+            'docs/README.md',
+            'docs/pipeline_runtime_contract_v1.md',
+            'docs/compare_and_assembly_pipeline_plan.md',
+        ):
+            doc_path = project_root / rel
+            if doc_path.exists():
+                docs.append(f'<!-- {rel} -->\n' + doc_path.read_text(encoding='utf-8'))
+        content = '\n\n---\n\n'.join(docs) if docs else "当前权威文档未找到。"
             
         return {
-            'document': 'CGI_Pipeline_v2_Architecture_Specification',
+            'document': 'current_pipeline_runtime_contract',
             'content': content
         }
 

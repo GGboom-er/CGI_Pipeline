@@ -1,4 +1,4 @@
-# skills/compare_asset.py
+# skills/pipeline_compare_asset/pipeline_compare_asset.py
 # ── 资产对比统一入口 ──
 #
 # 纯 JSON/ABC 数据对比，不依赖任何 DCC。

@@ -150,7 +150,7 @@ class ExecuteSkillInput(BaseModel):
 class StartWorkerInput(BaseModel):
     """启动 DCC Worker 参数"""
     model_config = ConfigDict()
-    dcc: str = Field(default="maya", description="要启动的 DCC 类型，例如 maya")
+    dcc: str = Field(default="maya", description="要启动或重启的 Worker 类型：maya / blender / workflow / pipeline")
 
 class CopyFilesInput(BaseModel):
     """文件拷贝参数"""

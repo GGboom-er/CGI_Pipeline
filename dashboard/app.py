@@ -29,7 +29,6 @@ from core.task_status import TERMINAL_STATUSES
 PROJECT_ROOT = Path(_cfg.PROJECT_ROOT)
 AUDIT_DIR = PROJECT_ROOT / 'audit'
 REPORT_DIR = PROJECT_ROOT / 'reports'
-SKILLS_REGISTRY = PROJECT_ROOT / 'skills' / 'registry.json'
 
 
 # ── 服务自举生命周期 ──
@@ -104,9 +103,8 @@ async def get_task_detail(task_id: str):
 # ── API：获取技能列表 ──
 @app.get('/api/skills')
 async def get_skills():
-    if not SKILLS_REGISTRY.exists():
-        return {'skills': []}
-    skills = json.loads(SKILLS_REGISTRY.read_text(encoding='utf-8'))
+    from core.skill_registry import get_all_skills
+    skills = get_all_skills()
     return {'skills': skills, 'total': len(skills)}
 
 
@@ -130,15 +128,21 @@ async def worker_status_api():
     ok, err = ensure_ready('maya')
     if not ok:
         return {'online': False, 'error': err, 'count': 0}
-    alive, pid = is_worker_alive('maya')
-    return {'online': True, 'count': 1 if alive else 0, 'pid': pid}
+    from core.service_manager import get_worker_health
+    health = get_worker_health('maya')
+    return {
+        'online': health.get('state') == 'HEALTHY',
+        'count': 1 if health.get('pid_alive') else 0,
+        'pid': health.get('pid'),
+        'health': health,
+    }
 
 
 # ── API：全部服务状态（状态指示灯） ──
 @app.get('/api/service_status')
 async def service_status_api():
     """返回所有后端服务的运行状态"""
-    status = get_service_status()
+    status = get_service_status(include_heartbeat=True)
     # 兼容前端 svc-redis / svc-worker 字段
     return {
         'redis': status['redis'],
@@ -290,22 +294,21 @@ async def preview_node_action(request: Request):
             if stage: suggested_params['stage'] = stage
 
         # === 2. 预测操作输出 ===
-        if skill_id in ['export_abc', 'blender_export_abc', 'export_abc_auto']:
-            from core.path_guard import is_protected_path, suggest_ai_publish_path
+        if skill_id in ['maya_export_abc', 'blender_export_abc', 'pipeline_export_abc_auto', 'export_abc', 'export_abc_auto']:
+            from core.path_guard import is_protected_path
             src_dir = os.path.dirname(source_path)
             src_stem = os.path.splitext(os.path.basename(source_path))[0]
             candidate = os.path.join(src_dir, src_stem + '.abc')
 
             if is_protected_path(candidate):
-                ai_path = suggest_ai_publish_path(source_path)
-                abc_path = os.path.splitext(ai_path)[0] + '.abc' if ai_path else candidate
+                abc_path = f'{PROJECT_ROOT}/projects/{project or "project"}/<task_sandbox>/.info/{src_stem}.abc'
             else:
                 abc_path = candidate
                 
             display_path = abc_path.replace('\\', '/')
             preview_html = f"<b>🗂️ 预估输出 ({skill_id}):</b><br>{display_path}"
             
-        elif skill_id == 'master_cleanup':
+        elif skill_id in ['master_cleanup', 'maya_master_cleanup']:
             mode = node_data.get('mode', 'check')
             preview_html = f"<b>🧹 预估动作:</b> {mode} 模式安全扫描诊断"
             

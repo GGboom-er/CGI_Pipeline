@@ -175,21 +175,22 @@ def register_operation_tools(mcp):
         使用 pidfile 防重复：Worker 已在运行时直接返回 SUCCESS。
         现在提交任务时会自动拉起 Worker，通常不需要手动调用此接口。
         """
-        if params.dcc not in ("maya", "blender"):
+        if params.dcc not in ("maya", "blender", "workflow", "pipeline"):
             return {"status": "ERROR", "message": f"暂不支持启动 {params.dcc} worker"}
 
-        pidfile = PROJECT_ROOT / 'runtime' / f'worker_{params.dcc}.pid'
+        dcc = 'maya' if params.dcc == 'pipeline' else params.dcc
+        pidfile = PROJECT_ROOT / 'runtime' / f'worker_{dcc}.pid'
 
-        # 已在运行
-        if pidfile.exists():
-            try:
-                pid = int(pidfile.read_text().strip())
-                if _is_pid_alive(pid):
-                    return {"status": "SUCCESS", "message": f"{params.dcc} Worker 已在运行 (PID={pid})"}
-            except (ValueError, OSError):
-                pass
+        from core.service_manager import ensure_worker_healthy, get_worker_health
+        ok, message = ensure_worker_healthy(dcc)
+        if ok:
+            return {
+                "status": "SUCCESS",
+                "message": message,
+                "health": get_worker_health(dcc),
+            }
 
-        _ensure_worker(params.dcc)
+        _ensure_worker(dcc)
 
         # 读取新 pid
         import time as _t
@@ -202,12 +203,37 @@ def register_operation_tools(mcp):
                     "pid": pid,
                     "python": sys.executable,
                     "pidfile": str(pidfile),
-                    "message": f"成功启动 {params.dcc} Worker (PID={pid})",
+                    "message": f"成功启动 {dcc} Worker (PID={pid})",
                 }
             except (ValueError, OSError):
                 pass
 
-        return {"status": "SUCCESS", "message": f"{params.dcc} Worker 启动中，pidfile 尚未写入"}
+        return {"status": "ERROR", "message": message or f"{dcc} Worker 启动失败"}
+
+
+    @mcp.tool(
+        name="pipeline_restart_worker",
+        annotations={
+            "title": "重启后台 Worker",
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": True,
+        }
+    )
+    async def pipeline_restart_worker(params: StartWorkerInput) -> dict:
+        """重启指定后台 Worker。用于 PID 存活但 Celery 心跳丢失、队列无响应等场景。"""
+        if params.dcc not in ("maya", "blender", "workflow", "pipeline"):
+            return {"status": "ERROR", "message": f"暂不支持重启 {params.dcc} worker"}
+        dcc = 'maya' if params.dcc == 'pipeline' else params.dcc
+        from core.service_manager import restart_worker, get_worker_health
+        ok = restart_worker(dcc)
+        return {
+            "status": "SUCCESS" if ok else "ERROR",
+            "dcc": dcc,
+            "health": get_worker_health(dcc),
+            "message": f"{dcc} Worker 已重启" if ok else f"{dcc} Worker 重启失败",
+        }
 
 
     @mcp.tool(

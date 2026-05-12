@@ -36,7 +36,7 @@ app = Celery('cgi_pipeline')
 app.config_from_object('config.celeryconfig')
 logger = get_task_logger(__name__)
 
-# ── 不需要走质检/发布的技能白名单（从 registry.json 的 skip_audit 字段读取）──
+# ── 不需要走质检/发布的技能白名单（从动态 skill_registry 读取）──
 _SKIP_AUDIT_SKILLS = get_skip_audit_skills()
 
 

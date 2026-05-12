@@ -15,7 +15,7 @@ import datetime
 from core.bootstrap import PROJECT_ROOT as _PROJECT_ROOT
 from core.config_loader import load_project_config
 from core.asset_resolver import AssetResolver
-from core.path_guard import is_protected_path, suggest_ai_publish_path
+from core.path_guard import is_protected_path
 from core.receipt import make_receipt
 
 
@@ -90,16 +90,12 @@ def execute(payload: dict) -> dict:
 
         # ── 安全检查 ──
         if is_protected_path(output_path):
-            ai_path = suggest_ai_publish_path(current_scene)
-            if ai_path:
-                output_dir = os.path.dirname(ai_path)
-                output_path = os.path.join(output_dir, standard_name).replace('\\', '/')
-            else:
-                return make_receipt(
-                    'rename_asset', 'BLOCKED', t0,
-                    summary_input=asset_name,
-                    error=f'输出路径受保护: {output_path}',
-                )
+            return make_receipt(
+                'rename_asset', 'BLOCKED', t0,
+                summary_input=asset_name,
+                error=f'输出路径受保护: {output_path}',
+                recovery_hint='请显式传入任务沙盒内的 output_dir；rename_asset 不再自动改写到历史发布代理目录。',
+            )
 
         # ── 确保目录存在 ──
         os.makedirs(os.path.dirname(output_path), exist_ok=True)

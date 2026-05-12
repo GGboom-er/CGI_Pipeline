@@ -22,11 +22,13 @@ conda activate cgi_pipeline
 python -m dashboard.app
 
 # 手动起 worker（调试用）
-python -m celery -A core.tasks worker -Q dcc_queue     --pool=solo -c 1 -l info   # Maya + pipeline
-python -m celery -A core.tasks worker -Q blender_queue --pool=solo -c 1 -l info
+python -m celery -A core.tasks worker -Q dcc_queue     --pool=solo -c 1 -l info --hostname=cgi_maya@%h      # Maya + pipeline
+python -m celery -A core.tasks worker -Q blender_queue --pool=solo -c 1 -l info --hostname=cgi_blender@%h
+python -m celery -A core.tasks worker -Q workflow_queue --pool=solo -c 1 -l info --hostname=cgi_workflow@%h
 ```
 
 **Celery 装在 conda 环境里，不在系统 PATH**。没激活环境就用 `conda run -n cgi_pipeline ...`。Maya worker 必须用 `mayapy` 启动，这块 `service_manager.py` 会自动处理。
+`service_manager.py` 会同时检查 PID 文件和 Celery 队列心跳；心跳窗口默认 5 秒，PID 存活但对应队列心跳丢失时会自动重启 Worker。
 
 ### CLI（脱离 AI 直接跑技能/工作流）
 

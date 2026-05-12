@@ -21,6 +21,8 @@
 ## Worker 与服务管理
 
 - [Maya commandPort 阻塞与静默崩溃] → [在 echoOutput=False 模式下强行通过 socket 发送超长字符串脚本，极易导致端口句柄卡死且无法捕获异常] → [放弃原生 socket 强压，改为使用 commandPort 仅发送单行 Base64 引导脚本，从而拉起独立的 RPyC (Remote Python Call) 服务端接管后续通信] → [必须利用 RPyC 代理机制结合 executeInMainThreadWithResult，彻底解决跨进程大对象回传与多线程安全问题]
+- [Worker假活] → [PID存活但队列无心跳] → [PID+active_queues双检] → [提交前心跳异常要重启]
+- [心跳误报] → [1秒inspect偶发超时] → [默认5秒窗口] → [服务探测不等于任务超时]
 - [多Maya误连] → [foreground省略端口会落到默认或首个端口] → [强制显式foreground_port] → [多端口场景禁隐式选择]
 - [AI误用Maya直连] → [入口文档仍写自动嗅探/旧maya-live] → [同步MCP说明和skill] → [当前场景必显式端口]
 - [原始MCP调用报参错] → [漏FastMCP params外壳] → [文档写明wrapper] → [手测禁平铺]
@@ -54,6 +56,7 @@
 - [复杂报告不可折叠] → [长Markdown混成一块] → [receipt.report_sections分章] → [复杂skill优先返回结构化事实]
 - [报告块外露] → [HTML和旧marker在查看器显示] → [普通Markdown+隐藏引用marker] → [报告渲染不依赖HTML折叠]
 - [报告重复] → [sections与旧content同时渲染] → [结构化优先屏蔽旧内容] → [同一事实只出现一次]
+- [跨段报告覆盖] → [固定block只存本段记录] → [REPORT内隐藏数据合并] → [跨DCC上下文要累积]
 - [入口硬编码] → [巡航脚本写死tex/rig路径] → [resolve_asset_files节点化解析] → [workflow只连outputs不写路径]
 
 ## 技能开发
@@ -73,6 +76,7 @@
 - [API 废弃导致依赖崩溃] → [移除核心路径保护逻辑时未连带清理子模块中对 suggest_ai_publish_path 的 import] → [全局搜索并移除废弃函数的引用] → [废弃或重构核心 API 时，必须执行全仓库 grep 搜索，确保无孤立的跨模块调用残余]
 - [Python 语法报错 (SyntaxError)] → [在 logger.info 中直接手敲换行符导致未闭合字符串] → [使用显式的转义字符 \n 或三引号] → [严禁在单行函数调用内混入原生回车换行]
 - [测试契约漂移] → [脚本读取旧uvsets字段] → [改测u/v/uv_indices] → [测试字段跟asset_info契约同步]
+- [旧测试误导] → [废弃脚本仍在根tests] → [归档legacy_manual] → [当前入口写README]
 
 ## 文档治理
 

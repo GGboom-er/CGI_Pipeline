@@ -52,10 +52,10 @@ def _resolve_queue(skill_id: str) -> str:
     return get_dcc_queue(dcc)
 
 
-def _ensure_worker(dcc: str) -> None:
-    """检测 Worker 是否存活，没有就自动拉起。委托给统一服务管理器。"""
-    from core.service_manager import start_worker
-    start_worker(dcc)
+def _ensure_worker(dcc: str) -> tuple[bool, str]:
+    """检测 Worker 是否健康；PID 活着但 Celery 心跳丢失时自动重启。"""
+    from core.service_manager import ensure_worker_healthy
+    return ensure_worker_healthy(dcc)
 
 
 def _submit_to_celery(skill_id: str, payload: dict) -> dict:
@@ -101,7 +101,14 @@ def _submit_to_celery(skill_id: str, payload: dict) -> dict:
             'error': 'Redis 未运行且启动失败',
             'recovery_hint': '请检查 Memurai/Redis 是否已安装并可执行',
         }
-    _ensure_worker(_SKILL_MAP.get(skill_id, {}).get('dcc', 'maya'))
+    ok, worker_msg = _ensure_worker(_SKILL_MAP.get(skill_id, {}).get('dcc', 'maya'))
+    if not ok:
+        return {
+            'task_id': task_id,
+            'status': 'SUBMIT_FAILED',
+            'error': worker_msg,
+            'recovery_hint': '请检查 Redis/Celery Worker 日志，或调用 pipeline_service_status 查看心跳状态。',
+        }
 
     try:
         from core.service_manager import get_celery_app
@@ -139,7 +146,15 @@ def _submit_chain(payload: dict) -> dict:
     skill_chain = payload.get('skill_chain', [])
     first_skill = skill_chain[0]['skill_id'] if skill_chain else 'ping'
     queue = _resolve_queue(first_skill)
-    _ensure_worker(_SKILL_MAP.get(first_skill, {}).get('dcc', 'maya'))
+    ok, worker_msg = _ensure_worker(_SKILL_MAP.get(first_skill, {}).get('dcc', 'maya'))
+    if not ok:
+        return {
+            'task_id': task_id,
+            'status': 'SUBMIT_FAILED',
+            'dispatched': False,
+            'error': worker_msg,
+            'recovery_hint': '请检查 Redis/Celery Worker 日志，或调用 pipeline_service_status 查看心跳状态。',
+        }
 
     try:
         from core.service_manager import get_celery_app
@@ -172,7 +187,15 @@ def _submit_workflow(payload: dict) -> dict:
     queue = 'workflow_queue'
 
     # 确保有 Worker 消费 workflow_queue
-    _ensure_worker('workflow')
+    ok, worker_msg = _ensure_worker('workflow')
+    if not ok:
+        return {
+            'task_id': task_id,
+            'status': 'SUBMIT_FAILED',
+            'workflow_id': payload.get('workflow_id', ''),
+            'error': worker_msg,
+            'recovery_hint': '请检查 workflow worker 日志，或调用 pipeline_service_status 查看心跳状态。',
+        }
 
     # 同时确保工作流中用到的 DCC Worker 也在运行
     from core.workflow_engine import load_workflow
@@ -183,9 +206,23 @@ def _submit_workflow(payload: dict) -> dict:
             dcc = get_skill_dcc(step['skill_id'])
             if dcc not in seen_dcc:
                 seen_dcc.add(dcc)
-                _ensure_worker(dcc)
+                ok, worker_msg = _ensure_worker(dcc)
+                if not ok:
+                    return {
+                        'task_id': task_id,
+                        'status': 'SUBMIT_FAILED',
+                        'workflow_id': payload.get('workflow_id', ''),
+                        'error': worker_msg,
+                    }
     except Exception:
-        _ensure_worker('maya')
+        ok, worker_msg = _ensure_worker('maya')
+        if not ok:
+            return {
+                'task_id': task_id,
+                'status': 'SUBMIT_FAILED',
+                'workflow_id': payload.get('workflow_id', ''),
+                'error': worker_msg,
+            }
 
     try:
         from core.service_manager import get_celery_app

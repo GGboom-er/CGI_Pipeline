@@ -60,6 +60,7 @@ description: 使用 CGI Pipeline MCP 对 Maya/Blender 场景进行自动化资�
 | `maya_resolve_shot` | 查询镜头路径和版本（ly/ani/cfx/efx/lgt/mat 等阶段） |
 | `list_workflows` | 列出所有已注册工作流及其步骤 |
 | `pipeline_compare_asset` | 纯 JSON/ABC 资产对比，输出 compare_result |
+| `pipeline_service_status` | 查看 Redis、PID 和 Celery 队列心跳 |
 
 ### 操作类（修改场景）
 | Tool | 用途 |
@@ -71,6 +72,7 @@ description: 使用 CGI Pipeline MCP 对 Maya/Blender 场景进行自动化资�
 | `maya_fix_shape_names` | 修复 Shape/Orig 命名规范 |
 | `maya_validate_publish` | 发布前 QC 门禁（只读） |
 | `execute_skill` | 执行任意已注册技能（Maya/Blender 通用兜底） |
+| `pipeline_restart_worker` | 重启指定后台 Worker（maya/blender/workflow） |
 
 ### Blender 相关
 | Tool | 用途 |
@@ -185,8 +187,8 @@ DCC adapter 在每次技能执行后会检查当前场景路径：
 
 | 错误 | 原因 | 恢复 |
 |---|---|---|
-| `SUBMIT_FAILED` | Redis/Celery 未运行 | 提醒用户启动服务 |
-| `NOT_FOUND` | 任务尚未开始或队列路由不匹配 | 等待 5 秒重试。持续 NOT_FOUND 则检查 Worker 是否在对应队列监听 |
+| `SUBMIT_FAILED` | Redis/Celery 未运行或 Worker 心跳失败 | 调用 `pipeline_service_status` 查看服务状态 |
+| `NOT_FOUND` | 任务尚未开始或队列路由不匹配 | 等待 5 秒重试。持续 NOT_FOUND 则检查 Worker 队列心跳 |
 | `TIMEOUT` | 旧状态或外部包装超时 | 检查文件是否损坏、Worker 是否存活 |
 | `未找到 cache 组` | Blender 场景中没有名为 cache 的顶层 Empty | 用 exec_code 检查场景层级，确认组名 |
 | `WinError 2` | Worker 启动找不到 celery | Celery 安装在 conda env `cgi_pipeline` 中，不在系统 PATH |
@@ -199,7 +201,8 @@ Celery 安装在 **conda 环境 `cgi_pipeline`** 中，不是系统 Python：
 
 ```bash
 # 正确启动方式
-conda run -n cgi_pipeline python -m celery -A core.tasks worker -Q dcc_queue --pool=solo -c 1 -l info
+conda run -n cgi_pipeline python -m celery -A core.tasks worker -Q dcc_queue --pool=solo -c 1 -l info --hostname=cgi_maya@%h
+conda run -n cgi_pipeline python -m celery -A core.tasks worker -Q workflow_queue --pool=solo -c 1 -l info --hostname=cgi_workflow@%h
 
 # 错误方式（会 WinError 2）
 celery -A tasks worker  # ← 系统PATH没有celery，模块名也错
@@ -216,6 +219,8 @@ celery -A tasks worker  # ← 系统PATH没有celery，模块名也错
 | `pipeline` | `dcc_queue` | 复用 Maya Worker 进程（PipelineWorker 在内部自行创建 DCC 子进程） |
 
 MCP 会自动拉起对应 Worker。pipeline 类型（如 `pipeline_export_abc_auto`）共用 maya 的 `dcc_queue`。
+
+健康检查分两层：PID 文件只证明进程存在；Celery `active_queues` 必须能看到对应队列消费者，默认探测窗口为 5 秒。PID 存活但心跳丢失时，服务管理器会杀掉旧进程树并重启 Worker。这个心跳只判断服务是否可用，不给大型 DCC 任务设置硬超时。
 
 ### exec_code 注意
 

@@ -20,9 +20,53 @@ LOGS_DIR = PROJECT_ROOT / 'logs'
 
 # DCC Worker 队列映射
 _DCC_QUEUE_MAP = {'maya': 'dcc_queue', 'blender': 'blender_queue', 'workflow': 'workflow_queue'}
+_WORKER_DCCS = ('maya', 'blender', 'workflow')
+DEFAULT_HEARTBEAT_TIMEOUT_SEC = 5.0
 
 # ── 管理的子进程 ──
 _managed_procs = []
+
+
+def _normalize_dcc(dcc: str) -> str:
+    """pipeline 类技能复用 Maya 队列，服务管理层统一映射到 maya worker。"""
+    dcc = str(dcc or 'maya').lower()
+    return 'maya' if dcc == 'pipeline' else dcc
+
+
+def _queue_for_dcc(dcc: str) -> str:
+    return _DCC_QUEUE_MAP.get(_normalize_dcc(dcc), 'dcc_queue')
+
+
+def _worker_hostname(dcc: str) -> str:
+    """为不同队列 worker 固定唯一 Celery 节点名，避免 inspect 混淆。"""
+    return f'cgi_{_normalize_dcc(dcc)}@%h'
+
+
+def _active_queues_include(active_queues: dict | None, queue: str) -> tuple[bool, list[str]]:
+    """检查 Celery inspect.active_queues() 结果里是否有 worker 消费指定队列。"""
+    if not isinstance(active_queues, dict):
+        return False, []
+    nodes = []
+    for worker_name, queues in active_queues.items():
+        if not isinstance(queues, list):
+            continue
+        queue_names = [
+            q.get('name') for q in queues
+            if isinstance(q, dict) and q.get('name')
+        ]
+        if queue in queue_names:
+            nodes.append(worker_name)
+    return bool(nodes), nodes
+
+
+def _inspect_active_queues(timeout_sec: float = DEFAULT_HEARTBEAT_TIMEOUT_SEC) -> tuple[dict, str]:
+    """通过 Celery inspect 获取 worker 心跳。只用于服务健康检查，不限制 DCC 任务耗时。"""
+    try:
+        celery_app = get_celery_app()
+        inspector = celery_app.control.inspect(timeout=timeout_sec)
+        return inspector.active_queues() or {}, ''
+    except Exception as e:
+        return {}, f'{type(e).__name__}: {e}'
 
 
 def _is_pid_alive(pid: int, expected_name: str = 'python') -> bool:
@@ -177,8 +221,7 @@ def start_redis() -> bool:
 
 def is_worker_alive(dcc: str = 'maya') -> tuple[bool, int | None]:
     """检查指定 DCC Worker 是否存活。返回 (alive, pid)。"""
-    if dcc == 'pipeline':
-        dcc = 'maya'
+    dcc = _normalize_dcc(dcc)
 
     pidfile = RUNTIME_DIR / f'worker_{dcc}.pid'
     if not pidfile.exists():
@@ -196,18 +239,126 @@ def is_worker_alive(dcc: str = 'maya') -> tuple[bool, int | None]:
         return False, None
 
 
+def get_worker_health(dcc: str = 'maya', heartbeat_timeout_sec: float = DEFAULT_HEARTBEAT_TIMEOUT_SEC) -> dict:
+    """返回 worker 的 PID 与 Celery 队列心跳状态。"""
+    dcc = _normalize_dcc(dcc)
+    queue = _queue_for_dcc(dcc)
+    if dcc not in _WORKER_DCCS:
+        return {
+            'dcc': dcc,
+            'queue': queue,
+            'state': 'UNSUPPORTED',
+            'pid_alive': False,
+            'pid': None,
+            'celery_alive': False,
+            'workers': [],
+            'error': f'暂不支持的 worker 类型: {dcc}',
+        }
+
+    pid_alive, pid = is_worker_alive(dcc)
+    health = {
+        'dcc': dcc,
+        'queue': queue,
+        'state': 'DEAD',
+        'pid_alive': pid_alive,
+        'pid': pid,
+        'celery_alive': False,
+        'workers': [],
+    }
+    if not pid_alive:
+        return health
+    if not is_redis_alive():
+        health.update({
+            'state': 'NO_REDIS',
+            'error': 'Redis 未运行，无法进行 Celery 心跳检查。',
+        })
+        return health
+
+    active_queues, error = _inspect_active_queues(heartbeat_timeout_sec)
+    queue_alive, workers = _active_queues_include(active_queues, queue)
+    health.update({
+        'celery_alive': queue_alive,
+        'workers': workers,
+    })
+    if error:
+        health['inspect_error'] = error
+        health['state'] = 'INSPECT_ERROR'
+    elif queue_alive:
+        health['state'] = 'HEALTHY'
+    else:
+        health['state'] = 'NO_HEARTBEAT'
+        health['error'] = f'未检测到消费队列 {queue} 的 Celery worker。'
+    return health
+
+
+def restart_worker(dcc: str = 'maya', wait_sec: float = 1.0) -> bool:
+    """杀掉指定 worker 进程树并重新启动。"""
+    dcc = _normalize_dcc(dcc)
+    if dcc not in _WORKER_DCCS:
+        return False
+
+    pidfile = RUNTIME_DIR / f'worker_{dcc}.pid'
+    if pidfile.exists():
+        try:
+            pid = int(pidfile.read_text().strip())
+            if _is_pid_alive(pid):
+                _kill_process_tree(pid)
+        except Exception:
+            pass
+        finally:
+            pidfile.unlink(missing_ok=True)
+
+    started = start_worker(dcc)
+    if started and wait_sec > 0:
+        import time
+        time.sleep(wait_sec)
+    return started
+
+
+def ensure_worker_healthy(
+    dcc: str = 'maya',
+    heartbeat_timeout_sec: float = DEFAULT_HEARTBEAT_TIMEOUT_SEC,
+    restart_on_stale: bool = True,
+) -> tuple[bool, str]:
+    """确保 Redis 与指定 worker 可用；PID 存活但心跳异常时自动重启。"""
+    dcc = _normalize_dcc(dcc)
+    if dcc not in _WORKER_DCCS:
+        return False, f'暂不支持的 worker 类型: {dcc}'
+
+    if not start_redis():
+        return False, 'Redis 未运行且启动失败'
+
+    pid_alive, _ = is_worker_alive(dcc)
+    if not pid_alive:
+        ok = start_worker(dcc)
+        return ok, (f'{dcc} Worker 已启动' if ok else f'{dcc} Worker 启动失败')
+
+    health = get_worker_health(dcc, heartbeat_timeout_sec)
+    if health.get('state') == 'HEALTHY':
+        return True, f'{dcc} Worker 健康 (PID={health.get("pid")})'
+
+    stale_states = {'NO_HEARTBEAT', 'INSPECT_ERROR'}
+    if restart_on_stale and health.get('state') in stale_states:
+        ok = restart_worker(dcc)
+        return ok, (
+            f'{dcc} Worker 心跳异常，已自动重启'
+            if ok else f'{dcc} Worker 心跳异常且重启失败'
+        )
+
+    return False, health.get('error') or f'{dcc} Worker 状态异常: {health.get("state")}'
+
+
 def start_worker(dcc: str = 'maya') -> bool:
     """启动指定 DCC 的 Celery Worker（幂等，已运行则跳过）"""
-    if dcc == 'pipeline':
-        dcc = 'maya'
-    if dcc not in ('maya', 'blender', 'workflow'):
+    dcc = _normalize_dcc(dcc)
+    if dcc not in _WORKER_DCCS:
         return False
 
     alive, _ = is_worker_alive(dcc)
     if alive:
         return True
 
-    queue = _DCC_QUEUE_MAP.get(dcc, 'dcc_queue')
+    queue = _queue_for_dcc(dcc)
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
     pidfile = RUNTIME_DIR / f'worker_{dcc}.pid'
@@ -232,6 +383,7 @@ def start_worker(dcc: str = 'maya') -> bool:
         sys.executable, "-m", "celery",
         "-A", "core.tasks", "worker",
         "-Q", queue, "--pool=solo", "-c", "1", "-l", "info",
+        f"--hostname={_worker_hostname(dcc)}",
         f"--pidfile={pidfile}",
         f"--logfile={logfile}",
     ]
@@ -255,18 +407,33 @@ def start_worker(dcc: str = 'maya') -> bool:
 # 全局状态查询
 # ═══════════════════════════════════════════════════
 
-def get_service_status() -> dict:
+def get_service_status(include_heartbeat: bool = False) -> dict:
     """返回所有服务的运行状态"""
     redis_ok = is_redis_alive()
     maya_alive, maya_pid = is_worker_alive('maya')
     blender_alive, blender_pid = is_worker_alive('blender')
+    workflow_alive, workflow_pid = is_worker_alive('workflow')
 
-    return {
+    status = {
         'redis': {'alive': redis_ok, 'host': '127.0.0.1', 'port': 6379},
         'worker_maya': {'alive': maya_alive, 'pid': maya_pid},
         'worker_blender': {'alive': blender_alive, 'pid': blender_pid},
+        'worker_workflow': {'alive': workflow_alive, 'pid': workflow_pid},
         'dashboard': {'alive': True},
     }
+    if include_heartbeat:
+        for key, dcc in (
+            ('worker_maya', 'maya'),
+            ('worker_blender', 'blender'),
+            ('worker_workflow', 'workflow'),
+        ):
+            health = get_worker_health(dcc, DEFAULT_HEARTBEAT_TIMEOUT_SEC)
+            status[key].update({
+                'alive': health.get('state') == 'HEALTHY',
+                'pid': health.get('pid', status[key]['pid']),
+                'health': health,
+            })
+    return status
 
 
 def ensure_ready(dcc: str = 'maya') -> tuple[bool, str]:
@@ -279,11 +446,10 @@ def ensure_ready(dcc: str = 'maya') -> tuple[bool, str]:
         if not start_redis():
             return False, 'Redis 未运行且启动失败'
 
-    # 2. Worker
-    alive, _ = is_worker_alive(dcc)
-    if not alive:
-        start_worker(dcc)
-        # Worker 启动需要几秒，这里不阻塞等待
+    # 2. Worker：PID 存活但 Celery 心跳丢失时会自动重启
+    ok, err = ensure_worker_healthy(dcc)
+    if not ok:
+        return False, err
 
     # 3. 顺便清理过期审计日志（非阻塞，异常不影响主流程）
     try:

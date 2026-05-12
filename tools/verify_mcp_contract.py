@@ -175,6 +175,7 @@ def check_text_patterns(errors: list[str]) -> None:
         *list((ROOT / "core").glob("*.py")),
         *list((ROOT / "dccs").glob("*/*.py")),
         *list((ROOT / "mcp_server").glob("*.py")),
+        *list((ROOT / "dashboard").glob("*.py")),
         *list((ROOT / "skills").glob("*/*.py")),
         *list((ROOT / "skills").glob("*/*.md")),
         *list((ROOT / "workflows").glob("*.json")),
@@ -188,6 +189,9 @@ def check_text_patterns(errors: list[str]) -> None:
     hard_timeout = re.compile(r"\b(time_limit|soft_time_limit)\s*=|_poll_timeout\s*=|IPC_TIMEOUT_SEC=1800")
     forbidden = {
         "from skills.compare_asset": "旧 compare_asset 导入",
+        "skills/compare_asset.py": "旧 compare_asset 文件名注释",
+        "suggest_ai_publish_path": "旧 Ai_pub 路径建议 API",
+        "SKILLS_REGISTRY": "旧 registry.json 文件注册入口",
         "suggested_actions": "后台人工 suggested_actions 语义",
         "Ai_pub": "旧 Ai_pub 文档语义",
         "needs_attention_holds_scene\": true": "旧 hold manifest 开关",

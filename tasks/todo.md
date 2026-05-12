@@ -55,7 +55,7 @@
 - [x] 2026-05-12 文档同步：README、AGENTS、运行时契约、对比/拼装专项文档已对齐场景内 compare + compare_result 驱动 sync
 - [ ] 实现 `publish_asset` 技能（标准化发布流程：版本递增 + 拷贝到 pub 目录 + 元数据写入）
 - [ ] 巡航测试覆盖更多资产（当前仅 mihouwang + ciweiguai）
-- [ ] Worker 健康检查机制（心跳超时自动重启）
+- [x] 2026-05-13 Worker 健康检查机制：提交前检查 PID + Celery 队列心跳，默认 5 秒探测窗口，心跳丢失自动重启 Worker，并暴露 `pipeline_service_status` / `pipeline_restart_worker`
 - [x] 2026-05-11 skill 契约修复：40 个运行时 skill 全注册，frontmatter 类型、回执路径 key、workflow skill 引用、DCC undo 块基础问题已修复
 - [x] 2026-05-11 异常处理小修：只读查询、UDIM 材质、UV 精简、任务报告的小型吞异常点改为显式降级或 warning
 - [x] 2026-05-11 后台 workflow 契约修复：移除人工 hold 主路径，统一 `AUDIT_FAILED` 失败态，取消 DCC IPC 硬超时
@@ -79,4 +79,7 @@
 - [x] 2026-05-13 workflow 入口节点化：新增 `resolve_asset_files`，`tex_to_rig_verify*` 支持只传资产名自动解析 tex/rig 或显式路径透传。
 - [x] 2026-05-13 skill SOP 输出契约：所有 receipt.outputs 顶层统一为 `output_path/report_path/result`，特殊参数走 `outputs.result.xxx`，并加入静态门禁。
 - [x] 2026-05-13 ABC reader 测试契约修复：`test_abc_reader` / `create_test_abc` 改按当前 `u_array`、`v_array`、`uv_indices` 验证。
+- [x] 2026-05-13 测试入口整理：旧 `registry.json`、`compare_asset`、`runs/assets` 手工脚本移入 `tests/archive/legacy_manual/`，新增 `tests/README.md`
+- [x] 2026-05-13 旧 API 残留修复：Dashboard 技能列表改动态 registry，`rename_asset` 移除 `suggest_ai_publish_path` 依赖
 - [x] 2026-05-13 workflow 多占位符修复：同一字符串内多个 `{{config...}}` 正确解析，ciweiguai/maYouB 资产名入口 workflow PASS。
+- [x] 2026-05-13 运行时报告聚合修复：跨 DCC segment 文件流转与打开场景不再互相覆盖，对比摘要改为用户视角问题数。

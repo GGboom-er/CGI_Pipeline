@@ -4,7 +4,7 @@
 # 金字塔配置层级：
 #   Layer 0: pipeline_manifest.json → core/manifest.py
 #   Layer 1: {project}_config.json → 此文件
-#   Layer 2: skills/registry.json → core/skill_registry.py
+#   Layer 2: skills/*/SKILL.md → core/skill_registry.py
 #   Layer 3: .env → 环境变量
 
 import json

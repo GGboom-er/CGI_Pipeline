@@ -137,7 +137,7 @@ def read_abc_as_info(abc_path: str, lightweight: bool = False) -> dict:
     参数:
         abc_path: ABC 文件绝对路径
         lightweight: 轻量模式（仅提取顶点数+坐标，跳过 UV/拓扑/FaceSet/winding）。
-                     用于 compare_asset 对比场景，速度约快 2x。
+                     用于 pipeline_compare_asset 对比场景，速度约快 2x。
 
     返回:
         asset_info dict（与 JSON 格式一致）:

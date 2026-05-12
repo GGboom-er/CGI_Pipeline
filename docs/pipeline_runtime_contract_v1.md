@@ -1,6 +1,6 @@
 # CGI Pipeline 运行时总规范 v1
 
-更新时间: 2026-05-12
+更新时间: 2026-05-13
 
 本文档定义 CGI Pipeline 中 AI 调用、CLI 调用、Dashboard 调用和自动任务调用共同遵守的运行时契约。后续所有 skill、workflow、MCP Tool 和报告系统都以本文档为准。
 
@@ -321,7 +321,33 @@ sandbox/
     post_compare_result.json
 ```
 
-## 11. 完成标准
+## 11. Worker 健康检查
+
+后台提交任务前必须确认 Redis 与目标 Worker 可用。
+
+检查分两层：
+
+- PID 文件只证明进程仍存在。
+- Celery `active_queues` 心跳必须能看到目标队列消费者，默认探测窗口为 5 秒。
+
+队列映射：
+
+| DCC | 队列 | Worker 节点名 |
+|---|---|---|
+| maya / pipeline | `dcc_queue` | `cgi_maya@%h` |
+| blender | `blender_queue` | `cgi_blender@%h` |
+| workflow | `workflow_queue` | `cgi_workflow@%h` |
+
+若 PID 存活但队列心跳丢失，服务管理器应杀掉旧进程树并重新拉起对应 Worker。
+
+可观测入口：
+
+- `pipeline_service_status`: 查看 Redis、PID 和队列心跳。
+- `pipeline_restart_worker`: 手动重启指定 Worker。
+
+心跳检查只用于服务可用性判断，不给 DCC 任务本身设置硬超时。
+
+## 12. 完成标准
 
 一个 pipeline 任务只有满足以下条件才算完成：
 

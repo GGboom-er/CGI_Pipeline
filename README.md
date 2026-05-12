@@ -98,12 +98,14 @@ python -m dashboard.app
 # 或手动分别启动：
 # Redis（自动内嵌，通常无需手动）
 # Maya Worker
-python -m celery -A core.tasks worker -Q dcc_queue --pool=solo -c 1 -l info
+python -m celery -A core.tasks worker -Q dcc_queue --pool=solo -c 1 -l info --hostname=cgi_maya@%h
 # Blender Worker
-python -m celery -A core.tasks worker -Q blender_queue --pool=solo -c 1 -l info
+python -m celery -A core.tasks worker -Q blender_queue --pool=solo -c 1 -l info --hostname=cgi_blender@%h
+# Workflow Worker
+python -m celery -A core.tasks worker -Q workflow_queue --pool=solo -c 1 -l info --hostname=cgi_workflow@%h
 ```
 
-服务管理器 (`core/service_manager.py`) 会自动检测并拉起 Redis 和 Worker。
+服务管理器 (`core/service_manager.py`) 会自动检测并拉起 Redis 和 Worker。提交任务前会同时检查 PID 和 Celery 队列心跳；心跳窗口默认 5 秒，PID 存活但心跳丢失时会自动重启对应 Worker。MCP 侧可用 `pipeline_service_status` 查看心跳，用 `pipeline_restart_worker` 手动重启。
 
 ## CLI 工作流
 
