@@ -79,3 +79,4 @@
 - [x] 2026-05-13 workflow 入口节点化：新增 `resolve_asset_files`，`tex_to_rig_verify*` 支持只传资产名自动解析 tex/rig 或显式路径透传。
 - [x] 2026-05-13 skill SOP 输出契约：所有 receipt.outputs 顶层统一为 `output_path/report_path/result`，特殊参数走 `outputs.result.xxx`，并加入静态门禁。
 - [x] 2026-05-13 ABC reader 测试契约修复：`test_abc_reader` / `create_test_abc` 改按当前 `u_array`、`v_array`、`uv_indices` 验证。
+- [x] 2026-05-13 workflow 多占位符修复：同一字符串内多个 `{{config...}}` 正确解析，ciweiguai/maYouB 资产名入口 workflow PASS。
