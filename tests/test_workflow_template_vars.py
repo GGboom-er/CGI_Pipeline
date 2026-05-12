@@ -44,8 +44,32 @@ def test_nested_outputs():
     return ok
 
 
+def test_multiple_config_placeholders():
+    print("\n=== Test: 多个 config 占位符同字符串解析 ===")
+    resolved = _resolve_template_vars(
+        {
+            "cache_group": "{{config.stages.rig.geom_roots.0}};{{config.stages.rig.geom_roots.1}}",
+            "mixed": "roots={{config.stages.tex.geom_roots.0}};{{config.stages.tex.geom_roots.1}}",
+        },
+        {},
+        {},
+        {
+            "stages": {
+                "rig": {"geom_roots": ["|Group|Geometry|cache", "|*|geo"]},
+                "tex": {"geom_roots": ["|Group|cache", "|*|geo"]},
+            }
+        },
+    )
+    ok = True
+    ok &= _check("完整字符串含多个 config 占位符", resolved["cache_group"] == "|Group|Geometry|cache;|*|geo", resolved)
+    ok &= _check("混合字符串含多个 config 占位符", resolved["mixed"] == "roots=|Group|cache;|*|geo", resolved)
+    return ok
+
+
 if __name__ == "__main__":
     print("=== workflow template var tests ===")
     if not test_nested_outputs():
+        raise SystemExit(1)
+    if not test_multiple_config_placeholders():
         raise SystemExit(1)
     print("\n✅ all pass")

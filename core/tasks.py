@@ -1306,7 +1306,7 @@ def _resolve_template_vars(params: dict, outputs: dict, extra_params: dict, conf
     import re
 
     config = config or {}
-    placeholder_re = re.compile(r'\{\{\s*(.+?)\s*\}\}')
+    placeholder_re = re.compile(r'\{\{\s*([^{}]+?)\s*\}\}')
     # expr 内部语法：
     #   base = outputs.<step>.<field> | input.<name> | config.<dot.path>
     #   tail = ( \s*\|\s* replace\(\s*'X'\s*,\s*'Y'\s*\) )*

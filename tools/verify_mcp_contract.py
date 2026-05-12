@@ -42,7 +42,7 @@ def _resolve_template_vars(params: dict, outputs: dict, extra_params: dict, conf
     """与 core.tasks._resolve_template_vars 保持一致的轻量副本，避免导入 Celery。"""
 
     config = config or {}
-    placeholder_re = re.compile(r"\{\{\s*(.+?)\s*\}\}")
+    placeholder_re = re.compile(r"\{\{\s*([^{}]+?)\s*\}\}")
     base_re = re.compile(
         r"^(?P<kind>outputs|input|config)\.(?P<path>[\w\.]+?)"
         r"(?P<tail>(?:\s*\|\s*[^|]+)*)$"
