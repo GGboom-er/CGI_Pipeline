@@ -48,7 +48,7 @@ def execute(payload: dict) -> dict:
             status='SUCCESS',
             start_time=t0,
             summary_action=f"创建 {prim_type}",
-            outputs={'nodes': result},
+            outputs={'result': {'nodes': result}},
             items=[{'name': '创建的节点', 'detail': str(result)}]
         )
 

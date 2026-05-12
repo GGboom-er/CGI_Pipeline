@@ -239,7 +239,7 @@ def register_readonly_tools(mcp):
         """扫描本地端口（7001-7010），列出当前所有可用的 Maya 前台会话。
         
         如果用户打开了多个 Maya 实例并分别开启了 commandPort，
-        可以通过此工具自动发现它们的端口号。
+        必须先用此工具确认端口号，再在 foreground 调用中显式传 foreground_port。
         """
         import socket
         active_ports = []
@@ -256,5 +256,7 @@ def register_readonly_tools(mcp):
         return {
             'status': 'SUCCESS',
             'active_ports': active_ports,
-            'message': f'共发现 {len(active_ports)} 个存活的 Maya CommandPort 会话。'
+            'message': f'共发现 {len(active_ports)} 个存活的 Maya CommandPort 会话。',
+            'usage': '下一步调用 maya_exec_code/具名 maya_ Tool 时传 execution_mode="foreground" 并显式传 foreground_port。',
+            'open_port_hint': 'Maya 端推荐：cmds.commandPort(name=":7009", sourceType="python", echoOutput=True)',
         }

@@ -65,7 +65,7 @@ category: "inspect"          # 必填，见下方 category 枚举
 
 ### category 枚举
 
-用于 `registry.json`/Dashboard 分类，决定节点标题色：
+用于动态注册表和 Dashboard 分类，决定节点标题色：
 
 | category | 含义 | 典型技能 | 标题色 |
 |---|---|---|---|
@@ -127,7 +127,7 @@ def execute(payload: dict) -> dict:
 | `project` | str | 项目代号（如 'ysj'） |
 | `asset_name` | str | 资产名 |
 | `execution_mode` | str | 执行模式 (`"background"` / `"foreground"`)。由 MCP/CLI 注入，后台验证时会被白名单剥离，前台执行直连。 |
-| `foreground_port` | int | 仅前台模式有效，指定目标 Maya/Blender 的 CommandPort 端口。由系统自动嗅探或由用户指定。 |
+| `foreground_port` | int | 仅前台模式有效，必须由调用方显式指定目标 Maya commandPort。Schema 中的默认值只为兼容旧客户端，不代表允许自动连接。 |
 | `parameters` | dict | SKILL.md frontmatter 声明的业务参数 |
 
 ---
@@ -140,15 +140,18 @@ def execute(payload: dict) -> dict:
 |---|---|---|---|
 | `output_path` | `str` | 技能产出了文件 | 主要产出文件的绝对路径，**唯一路径 key** |
 | `report_path` | `str` | 技能生成了报告 | MD 报告路径 |
-| `result` | `dict` | `exec_code` 类技能 | 代码执行结果（非文件） |
+| `result` | `dict` | 结构化非文件产物 | 代码执行结果或 SOP 节点输出字典（如路径解析结果） |
 
 ### 规则
 
 1. **产出文件路径只用 `output_path`**，不得自创 `abc_path`、`saved_path` 等
 2. **报告路径只用 `report_path`**
 3. `report_content` 是 `make_receipt()` 的顶层参数，不放入 `outputs`
-4. `outputs` 只允许 `output_path` / `report_path` / `result`；统计、分类数量和执行摘要写 `summary` / `items` / `report_content`
-5. 无文件产出的技能可以不设 `output_path`，但必须有 `outputs={}`
+4. `report_sections` 是可选顶层参数，用于结构化详细章节；不放入 `outputs`
+5. `outputs` 只允许 `output_path` / `report_path` / `result`；纯展示统计和执行摘要优先写 `summary` / `items` / `report_content` / `report_sections`，需要被下游节点连接的结构化数据才放入 `result`
+6. 如果同一回执存在 `report_sections`，统一报告只渲染结构化章节，不再重复渲染旧 `report_content`
+7. 无文件产出的技能可以不设 `output_path`，但必须有 `outputs={}`
+8. SOP 入口类节点需要输出多个路径时，统一放入 `outputs.result`，下游通过 `{{outputs.step_id.result.xxx}}` 连接，不自创顶层路径 key
 
 ### items 字段（受影响对象清单）
 
@@ -162,7 +165,7 @@ items=[
 ]
 ```
 
-`items` 会被 write_task_report 渲染成"受影响对象"表。缺失 items 会导致报告信息不足（"动了什么"不可回溯）。
+`items` 会被统一报告系统渲染成"受影响对象"表。缺失 items 会导致报告信息不足（"动了什么"不可回溯）。
 
 ### summary 字段
 
@@ -189,8 +192,8 @@ items=[
 
 1. **同一 chain 内所有 skill 必须同属一个 dcc**（maya/blender/pipeline），chain 引擎会校验
 2. **pipeline 类 skill 在主进程内直接执行**，不走 Worker/IPC
-3. **报告生成只由 `write_task_report` skill 负责**，业务 skill 不得直接写 md 到磁盘
-4. **所有产出文件必须落在沙盒内**（`projects/{project}/{YYYYMMDD_HHMMSS}_{asset}_{task_id}/`），chain 引擎会自动拷贝 skill 参数里的 `.ma/.mb/.blend/.json/.abc` 到沙盒
+3. **运行时报告生成只由调度层 `core/task_report_writer.py` 负责**，业务 skill 不得直接写 md 到磁盘；`write_task_report` 仅用于从 audit 重建或修复报告
+4. **所有产出文件必须落在沙盒内**（`projects/{project}/{YYYYMMDD_HHMMSS}_{asset}/`，同秒冲突追加 `_01`），chain 引擎会自动拷贝 skill 参数里的 `.ma/.mb/.blend/.json/.abc` 到沙盒
 5. **不得在 skill 内写 audit**，`_write_audit` 是 chain/workflow 引擎内部行为
 6. **后台任务不做人工暂停**，数据契约或 QC 不通过时返回 `AUDIT_FAILED`，由报告描述失败原因和修复建议
 

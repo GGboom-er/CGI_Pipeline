@@ -15,7 +15,7 @@ parameters:
 io:
   inputs: []
   outputs:
-    - name: "hierarchy"
+    - name: "result"
       type: "json"
       label: "层级结构数据"
 ---
@@ -33,3 +33,6 @@ io:
 ### 🟡 参数规则 (PARAMETERS)
 - `node` (string): 选填 | 节点名称，为空则返回顶层。
 - `full_path` (boolean): 选填 | 默认 true。
+
+### 🟣 输出字段 (OUTPUTS)
+- `outputs.result.hierarchy` (list): 查询得到的 DAG 层级列表。

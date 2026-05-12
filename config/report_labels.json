@@ -1,0 +1,22 @@
+{
+  "cruise_report": {
+    "metrics": {
+      "paired": "完成配对",
+      "identical": "通过配对",
+      "matched_different": "几何差异",
+      "only_source": "源侧独有",
+      "only_target": "目标独有",
+      "blocking": "阻断差异",
+      "MODIFIED": "修改差异",
+      "MERGE": "合并关系",
+      "SPLIT": "拆分关系"
+    },
+    "sync_actions": {
+      "IDENTICAL": "原样搬运",
+      "ORIG_INJECT": "坐标注入",
+      "PAIRED": "配对重建",
+      "UNPAIRED": "新增构建",
+      "target_only": "绑定独有"
+    }
+  }
+}

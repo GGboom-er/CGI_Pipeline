@@ -30,6 +30,7 @@ from core.run_archive import (
     create_run_dir, get_run_report_path, write_manifest,
     copy_to_run_dir, cleanup_old_runs,
 )
+from core import task_report_writer as _report_writer
 
 app = Celery('cgi_pipeline')
 app.config_from_object('config.celeryconfig')
@@ -172,11 +173,22 @@ def execute_skill_chain(self, payload: dict):
     info_dir = run_dir / '.info'
     info_dir.mkdir(parents=True, exist_ok=True)
 
-    # ── 报告路径（向后兼容字段，实际由 write_task_report 决定最终落点）──
+    # ── 运行时唯一报告 ──
     report_path = '' if suppress_report else (
-        payload.get('report_path') or str(run_dir / f'{asset_name}_{task_id}.md')
+        payload.get('report_path') or _report_writer.get_report_path(run_dir)
     )
+    report_context = {
+        'task_id': workflow_id if is_subchain else task_id,
+        'asset_name': asset_name,
+        'project': project,
+        'source_path': source_path,
+        'run_dir': str(run_dir),
+        'workflow_id': workflow_id if is_subchain else payload.get('workflow_id', ''),
+    }
+    if report_path and (not is_subchain or not Path(report_path).exists()):
+        _report_writer.init_report(report_path, report_context)
     _t_chain_start = time.time()
+    staged_records = []
 
     def _write_audit(status, detail='', step_idx=-1, skill_id=''):
         entry = {
@@ -198,6 +210,22 @@ def execute_skill_chain(self, payload: dict):
             return f"[节点丢失] 场景中找不到指定的节点，可能被篡改或删除。原生报错: {detail[:200]}"
         return detail
 
+    def _record_file_staged(record: dict):
+        staged_records.append(record)
+        _write_audit('FILE_STAGED', json.dumps(record, ensure_ascii=False))
+        if report_path:
+            _report_writer.upsert_file_staged(report_path, staged_records)
+
+    def _finalize_runtime_report(status: str, error: str = '', tb: str = ''):
+        if report_path:
+            elapsed_min = (time.time() - _t_chain_start) / 60
+            ctx = dict(report_context)
+            ctx['source_path'] = source_path
+            _report_writer.finalize_report(
+                report_path, ctx, status, elapsed_min=elapsed_min,
+                error=error, traceback_text=tb,
+            )
+
     worker = None
     try:
         _write_audit('CHAIN_STARTED', f'{len(skill_chain)} skills')
@@ -214,12 +242,9 @@ def execute_skill_chain(self, payload: dict):
             get_skill_dcc(s['skill_id']) for s in skill_chain
         )
         if len(dcc_types_in_chain) > 1:
-            _write_audit('CHAIN_ABORTED',
-                         f'链中混合了多个 DCC 类型: {dcc_types_in_chain}')
-            if not is_subchain and not suppress_report:
-                report_path = _call_write_report_for_chain(
-                    task_id, asset_name, project, source_path,
-                    run_dir, audit_path, mode='normal') or report_path
+            err_msg = f'链中混合了多个 DCC 类型: {dcc_types_in_chain}'
+            _write_audit('CHAIN_ABORTED', err_msg)
+            _finalize_runtime_report('CHAIN_ABORTED', error=err_msg)
             return {
                 'task_id': task_id, 'status': 'CHAIN_ABORTED',
                 'error': f'链中所有技能必须属于同一个 DCC，当前包含: {dcc_types_in_chain}',
@@ -243,16 +268,23 @@ def execute_skill_chain(self, payload: dict):
             # 已经在本次 run_dir 内的文件无需重复拷贝
             try:
                 src_path.resolve().relative_to(run_dir.resolve())
+                _record_file_staged({
+                    'role': role, 'origin': str(src_path), 'sandbox': str(src_path),
+                    'skipped': True, 'reason': 'already_in_sandbox', 'elapsed_sec': 0.0,
+                })
                 return src
             except ValueError:
                 pass
             dst_path = run_dir / src_path.name
+            _t_copy = time.time()
+            reused = dst_path.exists()
             if not dst_path.exists():
                 shutil.copy2(str(src_path), str(dst_path))
                 logger.info(f'[{task_id}] 沙盒化: {src_path.name} → {dst_path}')
-                _write_audit('FILE_STAGED', json.dumps({
-                    'role': role, 'origin': str(src_path), 'sandbox': str(dst_path),
-                }))
+            _record_file_staged({
+                'role': role, 'origin': str(src_path), 'sandbox': str(dst_path),
+                'reused': reused, 'elapsed_sec': time.time() - _t_copy,
+            })
             return str(dst_path)
 
         # 扫描并沙盒化 skill_chain 中的所有文件参数
@@ -272,17 +304,20 @@ def execute_skill_chain(self, payload: dict):
                 try:
                     local_path = str(run_dir / os.path.basename(source_path))
                     reused = os.path.exists(local_path)
+                    _t_copy = time.time()
                     if not reused:
                         shutil.copy2(source_path, local_path)
                     logger.info(f'[{task_id}] 沙盒化主场景: {source_path} → {local_path}')
-                    _write_audit('FILE_STAGED', json.dumps({
+                    _record_file_staged({
                         'role': 'source_path', 'origin': source_path, 'sandbox': local_path,
-                        'reused': reused,
-                    }))
+                        'reused': reused, 'elapsed_sec': time.time() - _t_copy,
+                    })
                     source_path = local_path
                 except Exception as e:
                     logger.warning(f'[{task_id}] 沙盒化主场景失败，使用原路径: {e}')
             _write_audit('CHAIN_OPEN_FILE', source_path, -1, 'open_file')
+            if report_path:
+                _report_writer.upsert_open_scene(report_path, source_path, 'RUNNING')
             _update_progress(self, 'OPENING_FILE', f'正在打开源文件: {source_path}')
             _t_open = time.time()
             ok, err = _open_source_file(worker, task_id, source_path, dcc_type)
@@ -290,16 +325,22 @@ def execute_skill_chain(self, payload: dict):
             if not ok:
                 meaningful_err = _translate_error(err, "open_file")
                 _write_audit('CHAIN_ABORTED', f'打开文件失败: {meaningful_err}')
-                if not is_subchain and not suppress_report:
-                    report_path = _call_write_report_for_chain(
-                        task_id, asset_name, project, source_path,
-                        run_dir, audit_path, mode='normal') or report_path
+                if report_path:
+                    _report_writer.upsert_open_scene(
+                        report_path, source_path, 'ERROR',
+                        elapsed_sec=open_elapsed_sec, error=meaningful_err,
+                    )
+                _finalize_runtime_report('CHAIN_ABORTED', error=meaningful_err)
                 return {
                     'task_id': task_id, 'status': 'CHAIN_ABORTED',
                     'failed_step': -1, 'error': f'打开文件失败: {source_path}',
                     'chain_results': [], 'report_path': report_path,
                 }
             _write_audit('CHAIN_FILE_OPENED', source_path, -1, 'open_file')
+            if report_path:
+                _report_writer.upsert_open_scene(
+                    report_path, source_path, 'SUCCESS', elapsed_sec=open_elapsed_sec
+                )
         elif not source_path and dcc_type in ('maya', 'blender'):
             # 对于 Warm Pool，如果没有源文件，必须强制清空场景防止污染
             _open_source_file(worker, task_id, "", dcc_type)
@@ -346,6 +387,16 @@ def execute_skill_chain(self, payload: dict):
             }
 
             _write_audit('STEP_START', f'step {i}: {step_skill_id}', i, step_skill_id)
+            step_report_context = {
+                'step_index': i,
+                'step_total': len(skill_chain),
+                'skill_id': step_skill_id,
+                'parameters': step_params,
+                'source_path': source_path,
+                'segment': _seg_idx,
+            }
+            if report_path:
+                _report_writer.upsert_step_started(report_path, step_report_context)
             _update_progress(self, 'EXECUTING_SKILL', f'正在执行技能: {step_skill_id}', f'{i+1}/{len(skill_chain)}')
 
             # 进度推送：步骤开始
@@ -361,15 +412,26 @@ def execute_skill_chain(self, payload: dict):
                 })
             result = worker.run_skill(step_payload)
             step_status = result.get('status', 'UNKNOWN')
-            
+
+            raw_detail = result.get('detail', '')
+            if not raw_detail and isinstance(result, dict) and (
+                'summary' in result or 'outputs' in result or 'skill_id' in result
+            ):
+                raw_detail = json.dumps(result, ensure_ascii=False, default=str)
+
             if step_status == 'ERROR':
-                translated_err = _translate_error(result.get('detail', ''), step_skill_id)
+                translated_err = _translate_error(str(raw_detail), step_skill_id)
+                raw_detail = translated_err
                 result['detail'] = translated_err
+
+            receipt = _report_writer.extract_receipt(raw_detail or result, step_skill_id, step_status)
+            if step_status != 'SUCCESS' and receipt.get('status') == 'SUCCESS':
+                receipt['status'] = step_status
 
             mem_gb = worker.get_memory_gb() if hasattr(worker, 'get_memory_gb') else -1
             step_result = {
                 'step': i, 'skill_id': step_skill_id,
-                'status': step_status, 'detail': result.get('detail', ''),
+                'status': step_status, 'detail': raw_detail,
                 'memory_gb': round(mem_gb, 2),
             }
             chain_results.append(step_result)
@@ -377,9 +439,18 @@ def execute_skill_chain(self, payload: dict):
             # 截断会破坏 receipt JSON 结构导致 write_task_report 渲染 fallback。
             _write_audit(
                 f'STEP_{step_status}',
-                result.get('detail', '') + f' [mem={mem_gb:.2f}GB]',
+                str(raw_detail) + f' [mem={mem_gb:.2f}GB]',
                 i, step_skill_id,
             )
+            if report_path:
+                _report_writer.upsert_step_finished(
+                    report_path,
+                    step_report_context,
+                    receipt,
+                    worker_status=step_status,
+                    memory_gb=round(mem_gb, 2),
+                    raw_detail=str(raw_detail),
+                )
 
             # 进度推送：步骤完成
             if _wf_id:
@@ -395,31 +466,10 @@ def execute_skill_chain(self, payload: dict):
                     'memory_gb': round(mem_gb, 2),
                 })
 
-            # ── 步骤 receipt 已进 audit，渲染延迟到 chain 收尾 ──
-
             # 从 detail 中提取技能级状态
-            _inner_status = ''
-            _inner_outputs = {}
-            detail_str = result.get('detail', '')
-            if isinstance(detail_str, dict):
-                _inner_status = detail_str.get('status', '')
-                _inner_outputs = detail_str.get('outputs', {}) or {}
-                detail_str = json.dumps(detail_str, ensure_ascii=False)
-            elif '"status":' in str(detail_str) or "'status':" in str(detail_str):
-                try:
-                    inner = json.loads(detail_str)
-                    if isinstance(inner, dict):
-                        _inner_status = inner.get('status', '')
-                        _inner_outputs = inner.get('outputs', {}) or {}
-                except (json.JSONDecodeError, ValueError):
-                    try:
-                        import ast
-                        inner = ast.literal_eval(detail_str)
-                        if isinstance(inner, dict):
-                            _inner_status = inner.get('status', '')
-                            _inner_outputs = inner.get('outputs', {}) or {}
-                    except Exception:
-                        pass
+            _inner_status = receipt.get('status', '')
+            _inner_outputs = receipt.get('outputs', {}) or {}
+            detail_str = str(raw_detail)
 
             # 灌本步 outputs 到 _chain_outputs 供后续步模板引用
             _step_key = step.get('step_id') or step_skill_id
@@ -434,10 +484,7 @@ def execute_skill_chain(self, payload: dict):
                     i,
                     step_skill_id,
                 )
-                if not is_subchain and not suppress_report:
-                    report_path = _call_write_report_for_chain(
-                        task_id, asset_name, project, source_path,
-                        run_dir, audit_path, mode='normal') or report_path
+                _finalize_runtime_report('CHAIN_AUDIT_FAILED', error=f'step {i} ({step_skill_id}) 审计未通过: {effective_status}')
                 return {
                     'task_id': task_id, 'status': 'CHAIN_AUDIT_FAILED',
                     'failed_step': i, 'failed_skill': step_skill_id,
@@ -449,10 +496,7 @@ def execute_skill_chain(self, payload: dict):
 
             if _inner_status == 'BLOCKED':
                 _write_audit('CHAIN_BLOCKED', f'step {i} blocked: {step_skill_id}')
-                if not is_subchain and not suppress_report:
-                    report_path = _call_write_report_for_chain(
-                        task_id, asset_name, project, source_path,
-                        run_dir, audit_path, mode='normal') or report_path
+                _finalize_runtime_report('CHAIN_BLOCKED', error=f'step {i} blocked: {step_skill_id}')
                 return {
                     'task_id': task_id, 'status': 'CHAIN_BLOCKED',
                     'failed_step': i, 'detail': detail_str,
@@ -462,10 +506,7 @@ def execute_skill_chain(self, payload: dict):
 
             if step_status != 'SUCCESS':
                 _write_audit('CHAIN_ABORTED', f'step {i} failed: {step_skill_id}')
-                if not is_subchain and not suppress_report:
-                    report_path = _call_write_report_for_chain(
-                        task_id, asset_name, project, source_path,
-                        run_dir, audit_path, mode='normal') or report_path
+                _finalize_runtime_report('CHAIN_ABORTED', error=f'step {i} failed: {step_skill_id}')
                 return {
                     'task_id': task_id, 'status': 'CHAIN_ABORTED',
                     'failed_step': i, 'chain_results': chain_results,
@@ -474,12 +515,10 @@ def execute_skill_chain(self, payload: dict):
 
         _write_audit('CHAIN_SUCCESS', f'{len(chain_results)} steps completed')
 
-        # ── 任务汇总报告 ──
+        # ── 运行时报告收尾 ──
         total_elapsed_min = (time.time() - _t_chain_start) / 60
-        if not is_subchain and not suppress_report:
-            report_path = _call_write_report_for_chain(
-                task_id, asset_name, project, source_path,
-                run_dir, audit_path, mode='normal') or report_path
+        if not is_subchain:
+            _finalize_runtime_report('SUCCESS')
 
         result = {
             'task_id': task_id, 'status': 'SUCCESS',
@@ -489,13 +528,16 @@ def execute_skill_chain(self, payload: dict):
         return result
 
     except TimeoutError:
-        _write_audit('TIMEOUT', traceback.format_exc())
+        tb = traceback.format_exc()
+        _write_audit('TIMEOUT', tb)
+        _finalize_runtime_report('TIMEOUT', error='任务超时', tb=tb)
         raise
 
     except Exception as exc:
         from celery.exceptions import SoftTimeLimitExceeded
         if isinstance(exc, SoftTimeLimitExceeded):
             _write_audit('TIMEOUT', 'Soft time limit exceeded (9 minutes). Terminating worker.')
+            _finalize_runtime_report('TIMEOUT', error='Soft time limit exceeded (9 minutes). Terminating worker.')
             if worker and hasattr(worker, 'shutdown'):
                 try:
                     worker.shutdown()
@@ -503,7 +545,9 @@ def execute_skill_chain(self, payload: dict):
                     pass
             raise
 
-        _write_audit('CHAIN_ERROR', traceback.format_exc())
+        tb = traceback.format_exc()
+        _write_audit('CHAIN_ERROR', tb)
+        _finalize_runtime_report('CHAIN_ERROR', error=f'{type(exc).__name__}: {exc}', tb=tb)
         raise self.retry(exc=exc)
 
     finally:
@@ -574,7 +618,30 @@ def execute_dcc_skill(self, payload: dict):
     run_dir = create_run_dir(task_id, project, asset_name, payload.get('submitted_at'))
     info_dir = run_dir / '.info'
     info_dir.mkdir(parents=True, exist_ok=True)
-    report_path = str(run_dir / f'{asset_name}_{task_id}.md')
+    report_path = _report_writer.get_report_path(run_dir)
+    report_context = {
+        'task_id': task_id,
+        'asset_name': asset_name,
+        'project': project,
+        'source_path': payload.get('source_path', ''),
+        'run_dir': str(run_dir),
+    }
+    _report_writer.init_report(report_path, report_context)
+    staged_records = []
+
+    def _record_file_staged(record: dict):
+        staged_records.append(record)
+        _write_audit('FILE_STAGED', json.dumps(record, ensure_ascii=False))
+        _report_writer.upsert_file_staged(report_path, staged_records)
+
+    def _finalize_runtime_report(status: str, error: str = '', tb: str = ''):
+        elapsed_min = (time.time() - _t_start) / 60
+        ctx = dict(report_context)
+        ctx['source_path'] = payload.get('source_path', '') or ctx.get('source_path', '')
+        _report_writer.finalize_report(
+            report_path, ctx, status, elapsed_min=elapsed_min,
+            error=error, traceback_text=tb,
+        )
     def _translate_error(detail: str, skill_id: str) -> str:
         """对底层原生报错进行业务级脱水转译"""
         if "No such file or directory" in detail or "FileNotFoundError" in detail or "文件不存在或为空" in detail:
@@ -595,6 +662,7 @@ def execute_dcc_skill(self, payload: dict):
         # 自动定位源文件
         source_path = payload.get('source_path', '')
         if not source_path and skill_id not in _SKIP_AUDIT_SKILLS:
+            _t_resolve = time.time()
             try:
                 resolver = _get_resolver(project)
                 # 尝试按阶段优先级定位
@@ -602,8 +670,32 @@ def execute_dcc_skill(self, payload: dict):
                 if resolved and resolved.get('path'):
                     source_path = resolved['path']
                     logger.info(f'[{task_id}] AssetResolver 定位到: {source_path}')
-            except Exception:
-                pass
+                    _record_file_staged({
+                        'node': '资产路径解析',
+                        'param': 'asset_name',
+                        'input': asset_name,
+                        'output': source_path,
+                        'status': 'SUCCESS',
+                        'elapsed_sec': time.time() - _t_resolve,
+                    })
+                else:
+                    _record_file_staged({
+                        'node': '资产路径解析',
+                        'param': 'asset_name',
+                        'input': asset_name,
+                        'output': '',
+                        'status': '未找到',
+                        'elapsed_sec': time.time() - _t_resolve,
+                    })
+            except Exception as e:
+                _record_file_staged({
+                    'node': '资产路径解析',
+                    'param': 'asset_name',
+                    'input': asset_name,
+                    'output': '',
+                    'error': str(e),
+                    'elapsed_sec': time.time() - _t_resolve,
+                })
 
         _update_progress(self, 'STARTING_WORKER', f'正在启动 {dcc_type.capitalize()} 后台进程')
         worker = _create_worker(dcc_type, source_path)
@@ -617,13 +709,24 @@ def execute_dcc_skill(self, payload: dict):
             except ValueError:
                 try:
                     local_path = str(run_dir / src_p.name)
-                    if not os.path.exists(local_path):
+                    reused = os.path.exists(local_path)
+                    _t_copy = time.time()
+                    if not reused:
                         _shutil.copy2(source_path, local_path)
                     logger.info(f'[{task_id}] 沙盒化: {source_path} → {local_path}')
+                    _record_file_staged({
+                        'role': 'source_path',
+                        'origin': source_path,
+                        'sandbox': local_path,
+                        'reused': reused,
+                        'elapsed_sec': time.time() - _t_copy,
+                    })
                     source_path = local_path
                 except Exception as e:
                     logger.warning(f'[{task_id}] 沙盒化失败，使用原路径: {e}')
+            payload['source_path'] = source_path
             _write_audit('CHAIN_OPEN_FILE', source_path)
+            _report_writer.upsert_open_scene(report_path, source_path, 'RUNNING')
             _update_progress(self, 'OPENING_FILE', f'正在打开源文件: {source_path}')
             _t_open = time.time()
             ok, err = _open_source_file(worker, task_id, source_path, dcc_type)
@@ -631,14 +734,16 @@ def execute_dcc_skill(self, payload: dict):
             if not ok:
                 meaningful_err = _translate_error(err, "open_file")
                 _write_audit('OPEN_FILE_FAILED', meaningful_err)
-                _call_write_report_for_chain(
-                    task_id, asset_name, project, source_path,
-                    run_dir, audit_path, mode='normal',
+                _report_writer.upsert_open_scene(
+                    report_path, source_path, 'ERROR',
+                    elapsed_sec=open_elapsed, error=meaningful_err,
                 )
+                _finalize_runtime_report('SKILL_ERROR', error=meaningful_err)
                 return {'task_id': task_id, 'status': 'SKILL_ERROR',
                         'detail': f'打开文件失败: {source_path} — {meaningful_err}',
                         'report_path': report_path}
             _write_audit('CHAIN_FILE_OPENED', source_path)
+            _report_writer.upsert_open_scene(report_path, source_path, 'SUCCESS', elapsed_sec=open_elapsed)
         elif not source_path and dcc_type in ('maya', 'blender'):
             _open_source_file(worker, task_id, "", dcc_type)
 
@@ -651,33 +756,54 @@ def execute_dcc_skill(self, payload: dict):
         payload['extra_params'].setdefault('info_dir', str(info_dir))
         _update_progress(self, 'EXECUTING_SKILL', f'正在执行技能: {skill_id}', '1/1')
         _write_audit('STEP_START', f'step 0: {skill_id}')
+        step_report_context = {
+            'step_index': 0,
+            'step_total': 1,
+            'skill_id': skill_id,
+            'parameters': payload.get('parameters', {}),
+            'source_path': source_path,
+        }
+        _report_writer.upsert_step_started(report_path, step_report_context)
         result = worker.run_skill(payload)
         logger.info(f'[{task_id}] 技能执行完成: status={result["status"]}')
 
+        raw_detail = result.get('detail', '')
+        if not raw_detail and isinstance(result, dict) and (
+            'summary' in result or 'outputs' in result or 'skill_id' in result
+        ):
+            raw_detail = json.dumps(result, ensure_ascii=False, default=str)
+
         if result['status'] != 'SUCCESS':
             raw_status = result.get('status', 'ERROR') or 'ERROR'
-            raw_detail = result.get('detail', '')
-            translated_err = _translate_error(raw_detail, skill_id) if raw_status == 'ERROR' else raw_detail
+            translated_err = _translate_error(str(raw_detail), skill_id) if raw_status == 'ERROR' else raw_detail
+            raw_detail = translated_err
             result['detail'] = translated_err
+            receipt = _report_writer.extract_receipt(raw_detail or result, skill_id, raw_status)
+            if receipt.get('status') == 'SUCCESS':
+                receipt['status'] = raw_status
+            _report_writer.upsert_step_finished(
+                report_path, step_report_context, receipt,
+                worker_status=raw_status, raw_detail=str(raw_detail),
+            )
             audit_status = f'STEP_{raw_status}' if raw_status in (
                 'BLOCKED', 'AUDIT_FAILED', 'NEEDS_ATTENTION'
             ) else 'STEP_ERROR'
             _write_audit(audit_status, translated_err)
-            _call_write_report_for_chain(
-                task_id, asset_name, project, source_path,
-                run_dir, audit_path, mode='normal',
-            )
+            _finalize_runtime_report(raw_status if raw_status != 'ERROR' else 'SKILL_ERROR',
+                                     error=str(translated_err))
             return {'task_id': task_id, 'status': raw_status if raw_status != 'ERROR' else 'SKILL_ERROR',
                     'detail': translated_err,
                     'report_path': report_path}
 
-        _write_audit('STEP_SUCCESS', result.get('detail', ''))
+        receipt = _report_writer.extract_receipt(raw_detail or result, skill_id, 'SUCCESS')
+        _report_writer.upsert_step_finished(
+            report_path, step_report_context, receipt,
+            worker_status='SUCCESS', raw_detail=str(raw_detail),
+        )
+        _write_audit('STEP_SUCCESS', str(raw_detail))
         _write_audit('CHAIN_SUCCESS', '1 step completed')
 
-        _call_write_report_for_chain(
-            task_id, asset_name, project, source_path,
-            run_dir, audit_path, mode='normal',
-        )
+        _finalize_runtime_report('SUCCESS')
 
         ret = {'task_id': task_id, 'status': 'SUCCESS',
                'detail': result.get('detail', ''),
@@ -685,13 +811,16 @@ def execute_dcc_skill(self, payload: dict):
         return ret
 
     except TimeoutError:
-        _write_audit('TIMEOUT', traceback.format_exc())
+        tb = traceback.format_exc()
+        _write_audit('TIMEOUT', tb)
+        _finalize_runtime_report('TIMEOUT', error='任务超时', tb=tb)
         raise
 
     except Exception as exc:
         from celery.exceptions import SoftTimeLimitExceeded
         if isinstance(exc, SoftTimeLimitExceeded):
             _write_audit('TIMEOUT', 'Soft time limit exceeded (9 minutes). Terminating worker.')
+            _finalize_runtime_report('TIMEOUT', error='Soft time limit exceeded (9 minutes). Terminating worker.')
             if worker and hasattr(worker, 'shutdown'):
                 try:
                     worker.shutdown()
@@ -699,7 +828,9 @@ def execute_dcc_skill(self, payload: dict):
                     pass
             raise
 
-        _write_audit('RETRY', traceback.format_exc())
+        tb = traceback.format_exc()
+        _write_audit('RETRY', tb)
+        _finalize_runtime_report('ERROR', error=f'{type(exc).__name__}: {exc}', tb=tb)
         raise self.retry(exc=exc)
 
     finally:
@@ -770,6 +901,32 @@ def execute_workflow(self, payload: dict):
 
         # ── 创建运行目录(沙盒) + 统一报告 ──
         run_dir = create_run_dir(task_id, project, asset_name, payload.get('submitted_at'))
+        master_report_path = _report_writer.get_report_path(run_dir)
+        _t_workflow_start = time.time()
+        report_context = {
+            'task_id': task_id,
+            'asset_name': asset_name,
+            'project': project,
+            'workflow_id': workflow_id,
+            'source_path': source_path,
+            'run_dir': str(run_dir),
+        }
+        _report_writer.init_report(master_report_path, report_context)
+        staged_records = []
+
+        def _record_file_staged(record: dict):
+            staged_records.append(record)
+            _write_audit('FILE_STAGED', json.dumps(record, ensure_ascii=False))
+            _report_writer.upsert_file_staged(master_report_path, staged_records)
+
+        def _finalize_runtime_report(status: str, error: str = '', tb: str = ''):
+            elapsed_min = (time.time() - _t_workflow_start) / 60
+            ctx = dict(report_context)
+            ctx['source_path'] = source_path
+            _report_writer.finalize_report(
+                master_report_path, ctx, status,
+                elapsed_min=elapsed_min, error=error, traceback_text=tb,
+            )
         
         # 将原始 source_path 和相关文件隔离到沙盒中
         def _stage_to_sandbox(src: str, role: str = 'source_path') -> str:
@@ -778,37 +935,39 @@ def execute_workflow(self, payload: dict):
             # 已经在本次 run_dir 内的文件无需重复拷贝
             try:
                 src_path.resolve().relative_to(run_dir.resolve())
-                _write_audit('FILE_STAGED', json.dumps({
+                _record_file_staged({
                     'role': role, 'origin': str(src_path), 'sandbox': str(src_path),
-                    'skipped': True, 'reason': 'already_in_sandbox',
-                }))
+                    'skipped': True, 'reason': 'already_in_sandbox', 'elapsed_sec': 0.0,
+                })
                 return src
             except ValueError:
                 pass
             if not src_path.exists():
                 err_msg = f"源文件不存在: {src}"
                 logger.error(f"[{task_id}] {err_msg}")
-                _write_audit('FILE_STAGE_FAILED', json.dumps({
+                _record_file_staged({
                     'role': role, 'origin': str(src_path), 'error': err_msg,
-                }))
+                    'elapsed_sec': 0.0,
+                })
                 raise FileNotFoundError(err_msg)
             dst_path = run_dir / src_path.name
             reused = False
+            _t_copy = time.time()
             if not dst_path.exists() or not resume_mode:
                 import shutil
                 shutil.copy2(str(src_path), str(dst_path))
                 logger.info(f"[{task_id}] 文件隔离到沙盒: {src_path.name}")
             else:
                 reused = True
-            _write_audit('FILE_STAGED', json.dumps({
+            _record_file_staged({
                 'role': role, 'origin': str(src_path), 'sandbox': str(dst_path),
-                'reused': reused,
-            }))
+                'reused': reused, 'elapsed_sec': time.time() - _t_copy,
+            })
             return str(dst_path)
 
         source_path = _stage_to_sandbox(source_path, role='source_path')
         for k, v in extra_params.items():
-            if isinstance(v, str) and (v.endswith('.ma') or v.endswith('.mb') or v.endswith('.blend') or v.endswith('.json')):
+            if isinstance(v, str) and (v.endswith('.ma') or v.endswith('.mb') or v.endswith('.blend') or v.endswith('.json') or v.endswith('.abc')):
                 extra_params[k] = _stage_to_sandbox(v, role=f'input.{k}')
 
         info_dir = run_dir / '.info'
@@ -821,9 +980,6 @@ def execute_workflow(self, payload: dict):
         payload['source_path'] = source_path
         payload['extra_params'] = extra_params
 
-        # master 报告路径：沙盒内 {asset_name}_{task_id}.md。实际内容由 write_task_report skill 渲染。
-        master_report_path = str(run_dir / f'{asset_name}_{task_id}.md')
-        _t_workflow_start = time.time()
         try:
             cleanup_old_runs(max_age_days=7)
         except Exception:
@@ -893,6 +1049,15 @@ def execute_workflow(self, payload: dict):
             seg_task_id = f'{task_id}_seg{seg_idx}'
             _write_audit('SEGMENT_START',
                           f'seg {seg_idx}: {seg_dcc}, {len(resolved_steps)} steps')
+            _report_writer.upsert_segment(
+                master_report_path,
+                {
+                    'segment_index': seg_idx,
+                    'dcc': seg_dcc,
+                    'step_count': len(resolved_steps),
+                },
+                'RUNNING',
+            )
             publish_event(task_id, {
                 'event_type': 'segment.start',
                 'segment': seg_idx,
@@ -923,6 +1088,7 @@ def execute_workflow(self, payload: dict):
                 'workflow_id': task_id,              # 注入 wf_id 供子链发布进度事件
                 'segment_index': seg_idx,            # 注入段索引
                 'run_dir': str(run_dir),             # 共用 workflow 沙盒，不要再造
+                'report_path': master_report_path,   # 子链写同一个 REPORT.md
                 '_chain_outputs_in': dict(all_outputs),  # 跨段 outputs，chain 补解析时合并
                 'extra_params': dict(extra_params),      # 支持 {{input.xxx}}
                 '_chain_config': project_config,         # 支持 {{config.x.y.z}}
@@ -985,6 +1151,17 @@ def execute_workflow(self, payload: dict):
                 seg_detail['error'] = str(seg_result.get('error'))[:500]
             _write_audit(f'SEGMENT_{seg_status}',
                           json.dumps(seg_detail, default=str, ensure_ascii=False))
+            _report_writer.upsert_segment(
+                master_report_path,
+                {
+                    'segment_index': seg_idx,
+                    'dcc': seg_dcc,
+                    'step_count': len(seg_chain_results),
+                },
+                seg_status,
+                elapsed_min=round(_seg_ts_min, 2),
+                error=seg_detail.get('error', ''),
+            )
 
             publish_event(task_id, {
                 'event_type': 'segment.done',
@@ -1022,10 +1199,7 @@ def execute_workflow(self, payload: dict):
                     else 'WORKFLOW_ABORTED'
                 )
                 _write_audit(workflow_fail_status, f'segment {seg_idx} failed: {seg_status}')
-                _call_write_report_for_chain(
-                    task_id, asset_name, project, source_path,
-                    run_dir, audit_path, mode='workflow',
-                )
+                _finalize_runtime_report(workflow_fail_status, error=f'segment {seg_idx} failed: {seg_status}')
                 publish_event(task_id, {
                     'event_type': 'workflow.error',
                     'failed_segment': seg_idx,
@@ -1049,10 +1223,7 @@ def execute_workflow(self, payload: dict):
         # ── 工作流成功完成 ──
         total_elapsed_min = (time.time() - _t_workflow_start) / 60
         _write_audit('WORKFLOW_SUCCESS', f'{len(segments)} segments completed')
-        _call_write_report_for_chain(
-            task_id, asset_name, project, source_path,
-            run_dir, audit_path, mode='workflow',
-        )
+        _finalize_runtime_report('SUCCESS')
 
     # (审计日志已直接写入沙盒，无需手动复制)
 
@@ -1099,7 +1270,8 @@ def execute_workflow(self, payload: dict):
         }
 
     except Exception as exc:
-        _write_audit('WORKFLOW_ERROR', traceback.format_exc())
+        tb = traceback.format_exc()
+        _write_audit('WORKFLOW_ERROR', tb)
         publish_event(task_id, {
             'event_type': 'workflow.error',
             'status': 'WORKFLOW_ERROR',
@@ -1107,10 +1279,10 @@ def execute_workflow(self, payload: dict):
             'message': f'工作流异常: {type(exc).__name__}',
         })
         if 'master_report_path' in locals() and 'run_dir' in locals():
-            _call_write_report_for_chain(
-                task_id, asset_name, project, source_path,
-                run_dir, audit_path, mode='workflow',
-            )
+            try:
+                _finalize_runtime_report('WORKFLOW_ERROR', error=f'{type(exc).__name__}: {exc}', tb=tb)
+            except Exception:
+                pass
         return {
             'task_id': task_id,
             'status': 'WORKFLOW_ERROR',
@@ -1157,14 +1329,23 @@ def _resolve_template_vars(params: dict, outputs: dict, extra_params: dict, conf
     def _resolve_base(kind: str, path: str):
         keys = path.split('.')
         if kind == 'outputs':
-            # outputs.<step>.<field>
+            # outputs.<step>.<field>，支持 outputs.step.result.path 这样的嵌套字段。
             if len(keys) < 2:
                 return None, False
-            step_id, field = keys[0], '.'.join(keys[1:])
+            step_id = keys[0]
             step_outputs = outputs.get(step_id, {})
-            if field in step_outputs:
+            field = '.'.join(keys[1:])
+            if isinstance(step_outputs, dict) and field in step_outputs:
                 return step_outputs[field], True
-            return None, False
+            curr = step_outputs
+            for key in keys[1:]:
+                if isinstance(curr, dict) and key in curr:
+                    curr = curr[key]
+                elif isinstance(curr, list) and key.isdigit() and int(key) < len(curr):
+                    curr = curr[int(key)]
+                else:
+                    return None, False
+            return curr, True
         if kind == 'input':
             if keys[0] in extra_params:
                 curr = extra_params[keys[0]]

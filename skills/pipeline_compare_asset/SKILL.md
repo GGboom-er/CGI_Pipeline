@@ -50,7 +50,7 @@ category: "inspect"
 - **向后兼容**: 旧键名 `input_a / input_b / label_a / label_b` 仍被接受，但新 workflow/调用一律用 `*_source / *_target`。
 
 ### 🟢 核心逻辑 (CORE LOGIC)
-- 加载两份 `_info.json` 或 ABC → 三步漏斗：S1 规范化路径匹配、S2 严格等点数候选竞争、S3 空间深度分析（KDTree + 偏差）→ 每条配对打出算法层标签（IDENTICAL / ORIG_INJECT / MODIFIED / MERGE / SPLIT），未配对的 source 侧记 NEW、target 侧记 DELETE → 聚合成 4 种事实去向 → 输出 MD 内容 + `compare_result.json`。
+- 加载两份 `_info.json` 或 ABC → 三步漏斗：S1 规范化路径匹配、S2 严格等点数候选竞争、S3 空间深度分析（KDTree + 偏差）→ 每条配对打出算法层标签（IDENTICAL / ORIG_INJECT / MODIFIED / MERGE / SPLIT），未配对的 source 侧记 NEW、target 侧记 DELETE → 聚合成 4 种事实去向 → 返回结构化报告章节 + 写出 `compare_result.json`。
 
 ### 🔵 核心代码与扩展 (IMPLEMENTATION & EXTENSION)
 - **算法层**: `core/asset_info_schema.py::compare()`。7 个 actionability 标签保留所有拓扑关系（MERGE/SPLIT 给报告和后续拼装逻辑使用）。
@@ -80,4 +80,6 @@ receipt.outputs:
 - `inputs`: source/target 输入路径与标签
 - `compare`: `core.asset_info_schema.compare()` 完整返回，包含 `pairing_groups` 和 `target_only_dags`
 
-receipt.summary 记录差异总数；receipt.report_content 是 MD 格式对比报告，由统一任务报告插入最终 Markdown。
+receipt.summary 记录差异总数；receipt.report_sections 返回结构化折叠章节（对比来源、对比概览、通过配对、几何差异、源侧独有、目标独有），由统一任务报告插入最终 Markdown。
+
+receipt.report_content 保留旧 Markdown 摘要用于兼容，不作为新的结构化消费入口。

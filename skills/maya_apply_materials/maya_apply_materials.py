@@ -208,6 +208,9 @@ def execute(payload: dict) -> dict:
     params = payload.get("parameters", {})
     materials_path = params.get("materials_path", "")
     target_group = params.get("target_group", "")
+    if target_group:
+        from dccs.maya.asset_info_collector import resolve_cache_group
+        target_group = resolve_cache_group(target_group) or target_group
 
     if not materials_path:
         return make_receipt("maya_apply_materials", "ERROR", t0,

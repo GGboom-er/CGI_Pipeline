@@ -67,6 +67,13 @@ def test_compare_result_output_contract():
         _ok("pairing_groups" in report, "包含 pairing_groups")
         _ok("target_only_dags" in report, "包含 target_only_dags")
         _ok(set(receipt["outputs"].keys()) == {"output_path"}, "receipt.outputs 只包含 output_path")
+        sections = receipt.get("report_sections") or []
+        section_titles = [section.get("title") for section in sections]
+        overview = next((section for section in sections if section.get("title") == "对比概览"), {})
+        _ok(bool(sections), "receipt 包含 report_sections")
+        _ok("完成配对" in str(overview.get("summary", "")), "对比概览使用中文配置标签")
+        for title in ("通过配对", "几何差异", "源侧独有", "目标独有"):
+            _ok(title in section_titles, f"包含结构化章节: {title}")
 
 
 def test_compare_result_defaults_to_info_dir():

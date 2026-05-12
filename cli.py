@@ -8,6 +8,7 @@
 #   python cli.py run-skill clean_skinweights --project ysj --asset xiaotianquan --source-path xxx.ma
 #   python cli.py run-skill master_cleanup --project ysj --asset xiaotianquan --source-path xxx.ma --param mode=check
 #   python cli.py run-chain --project ysj --asset xiaotianquan --source-path xxx.ma --steps clean_skinweights,fix_shape_names,save_scene --param save_path=yyy.ma
+#   python cli.py run-workflow tex_to_rig_verify_and_sync --project ysj --asset ciweiguai
 
 import argparse
 import json
@@ -194,6 +195,37 @@ def cmd_run_chain(args):
         print(f'[{task_id}] Worker 已关闭')
 
 
+def cmd_run_workflow(args):
+    from mcp_server.internals import _read_audit, _submit_workflow
+
+    extra_params = _parse_params(args.param)
+    if args.rig_path:
+        extra_params['rig_path'] = args.rig_path
+    if args.category:
+        extra_params['category'] = args.category
+
+    payload = {
+        'workflow_id': args.workflow_id,
+        'source_path': args.source_path or '',
+        'project': args.project,
+        'asset_name': args.asset,
+        'extra_params': extra_params,
+    }
+    result = _submit_workflow(payload)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+
+    if not args.wait or result.get('status') != 'SUBMITTED':
+        return
+
+    task_id = result.get('task_id')
+    while True:
+        time.sleep(args.interval)
+        state = _read_audit(task_id)
+        print(json.dumps(state, ensure_ascii=False))
+        if state.get('status') not in ('PROGRESS', 'PENDING', 'STARTED', 'NOT_FOUND'):
+            break
+
+
 def main():
     parser = argparse.ArgumentParser(
         description='CGI Pipeline CLI — 脱离 AI 直接运行技能和工作流',
@@ -231,6 +263,18 @@ def main():
     p_rc.add_argument('--source-path', default='')
     p_rc.add_argument('--param', action='append', help='传给最后一步的参数 key=value')
 
+    # run-workflow
+    p_rw = sub.add_parser('run-workflow', help='提交预定义工作流')
+    p_rw.add_argument('workflow_id', help='工作流 ID')
+    p_rw.add_argument('--project', default='default')
+    p_rw.add_argument('--asset', default='untitled')
+    p_rw.add_argument('--category', default='chr')
+    p_rw.add_argument('--source-path', default='', help='可选 source 文件路径；为空时由 workflow 解析节点按资产名查找')
+    p_rw.add_argument('--rig-path', default='', help='可选 rig 文件路径；为空时由 workflow 解析节点按资产名查找')
+    p_rw.add_argument('--param', action='append', help='额外 input 参数 key=value，可多次使用')
+    p_rw.add_argument('--wait', action='store_true', help='提交后轮询任务状态')
+    p_rw.add_argument('--interval', type=float, default=5.0, help='--wait 轮询间隔秒数')
+
     args = parser.parse_args()
 
     if args.command == 'list-skills':
@@ -243,6 +287,8 @@ def main():
         cmd_run_skill(args)
     elif args.command == 'run-chain':
         cmd_run_chain(args)
+    elif args.command == 'run-workflow':
+        cmd_run_workflow(args)
     else:
         parser.print_help()
 

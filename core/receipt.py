@@ -5,6 +5,7 @@ from pathlib import Path
 from core.bootstrap import cfg as _cfg
 
 MAX_ITEMS = 20
+ALLOWED_OUTPUT_KEYS = {'output_path', 'report_path', 'result'}
 
 PROJECT_ROOT = Path(_cfg.PROJECT_ROOT)
 REPORTS_DIR = PROJECT_ROOT / 'reports'
@@ -35,7 +36,18 @@ def make_receipt(
     error: str = '',
     recovery_hint: str = '',
     report_content: str = '',
+    report_sections: list = None,
 ) -> dict:
+    outputs = outputs or {}
+    if not isinstance(outputs, dict):
+        raise TypeError('receipt.outputs 必须是 dict')
+    extra_output_keys = sorted(set(outputs) - ALLOWED_OUTPUT_KEYS)
+    if extra_output_keys:
+        raise ValueError(
+            'receipt.outputs 只能包含 output_path/report_path/result，'
+            f'非法字段: {extra_output_keys}'
+        )
+
     elapsed_min = _sec_to_min(time.time() - start_time)
     receipt = {
         'status': status,
@@ -48,7 +60,7 @@ def make_receipt(
             'output_label': summary_label,
         },
         'items': (items or [])[:MAX_ITEMS],
-        'outputs': outputs or {},
+        'outputs': outputs,
     }
     if error:
         receipt['error'] = error
@@ -56,6 +68,8 @@ def make_receipt(
         receipt['recovery_hint'] = recovery_hint
     if report_content:
         receipt['report_content'] = report_content
+    if report_sections:
+        receipt['report_sections'] = report_sections
     return receipt
 
 
@@ -88,7 +102,7 @@ def _format_elapsed(elapsed_min: float) -> str:
 
 def get_report_path(asset_name: str, task_id: str) -> str:
     """兜底路径：全局 reports/ 目录。正常路径应使用 write_task_report skill
-    落沙盒（{run_dir}/{asset_name}_{task_id}.md）。保留此函数仅供诊断和 manifest 回填。
+    落沙盒（{run_dir}/REPORT.md）。保留此函数仅供诊断和 manifest 回填。
     """
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
     safe_asset = asset_name or 'untitled'

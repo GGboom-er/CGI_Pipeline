@@ -8,10 +8,7 @@
 AI (Claude/Gemini)
   ├──► cgi-pipeline MCP (FastMCP 工业管线调度)
   │      ├─ execution_mode: "background" ─► Celery 队列 ─► DCC Worker (无头后台)
-  │      └─ execution_mode: "foreground" ─► Socket 直连 ─► DCC 当前活跃前台实例
-  │
-  └──► maya-live MCP (CommandPort 实时后门)
-         └─► 直连 Maya 前台 REPL 执行纯代码问答与交互
+  │      └─ execution_mode: "foreground" + foreground_port ─► 当前指定 Maya 前台实例
 ```
 
 > **注意：** `cgi-pipeline` 的执行结果统一流经 Redis 并在本地落盘审计日志（`audit/`），全程支持基于 `task_id` 的异步追踪。
@@ -21,11 +18,38 @@ AI (Claude/Gemini)
 | 模式 | 路由参数 `execution_mode` | 行为说明 |
 |------|---------------------------|----------|
 | 自动化后台批处理 | `"background"` (默认) | 将任务发给 Celery 调度，拉起 `mayapy` 或无头 Blender 进行静默处理。全程不阻塞用户当前界面。 |
-| 当前前台实例处理 | `"foreground"` | 自动嗅探本地 7001-7010 端口，直接把任务 Payload 塞给活着的 Maya/Blender 实例执行。响应极快。 |
+| 当前前台实例处理 | `"foreground"` | 必须显式传 `foreground_port`，直接把任务 Payload 发给指定 Maya commandPort。省略端口会返回 `NEEDS_ATTENTION`，避免多 Maya 会话误连。 |
+
+### 当前 Maya 场景访问 SOP
+
+当用户要求查看或修改已经打开的 Maya 场景时，AI 必须优先使用 `cgi-pipeline` MCP 的 `maya_exec_code` 或具名 `maya_` Tool，并显式传入：
+
+```json
+{
+  "execution_mode": "foreground",
+  "foreground_port": 7009,
+  "sync": true
+}
+```
+
+如果通过原始 Python MCP Client 调用 FastMCP，`maya_exec_code` 这类工具的入参外层是 `{"params": {...}}`，不要把 `code/execution_mode/foreground_port` 直接平铺到 `call_tool` 顶层。
+
+禁止依赖旧的 `maya-live`、默认端口或省略 `foreground_port`。如果不知道端口，先调用 `maya_list_foreground_sessions` 查看 7001-7010 的活动端口，或询问用户当前打开的是哪个端口。
+
+Maya 端推荐开启方式：
+
+```python
+import maya.cmds as cmds
+
+if cmds.commandPort(":7009", q=True):
+    cmds.commandPort(name=":7009", close=True)
+
+cmds.commandPort(name=":7009", sourceType="python", echoOutput=True)
+```
 
 工作流引擎 (`execute_chain` / `execute_workflow`) 按 skill 的 `dcc` 属性自动分段：
 - 同 DCC 的连续步骤合并为一段（共享 DCC 会话）
-- 段间通过 `{{outputs.step_id.field}}` 模板变量传递数据
+- 段间通过 `{{outputs.step_id.output_path}}` 或 `{{outputs.step_id.result.xxx}}` 模板变量传递数据
 - 支持断点恢复（Redis 持久化已完成段 + outputs）
 
 ## 快速开始
@@ -81,6 +105,16 @@ python -m celery -A core.tasks worker -Q blender_queue --pool=solo -c 1 -l info
 
 服务管理器 (`core/service_manager.py`) 会自动检测并拉起 Redis 和 Worker。
 
+## CLI 工作流
+
+```powershell
+# 只传资产名：workflow 内部解析最新 tex/rig 文件
+python cli.py run-workflow tex_to_rig_verify_and_sync --project ysj --asset ciweiguai
+
+# 显式指定文件：解析节点只校验并透传这两个路径
+python cli.py run-workflow tex_to_rig_verify_and_sync --project ysj --asset ciweiguai --source-path X:/Project/ysj/pub/assets/chr/ciweiguai/tex/texMaster/xxx.blend --rig-path X:/Project/ysj/pub/assets/chr/ciweiguai/rig/rigMaster/xxx.ma
+```
+
 ## 新项目接入
 
 换项目只需 2 步，**零代码修改**：
@@ -88,7 +122,7 @@ python -m celery -A core.tasks worker -Q blender_queue --pool=solo -c 1 -l info
 1. 复制 `config/ysj_config.json` → `config/{新项目名}_config.json`
 2. 修改 `asset_root`、`categories`、`stages` 规则
 
-路径解析全由 `config/path_templates.json` 模板 + 项目配置驱动。
+路径解析由 `core/asset_resolver.py` + 项目配置驱动。
 
 ## 项目结构
 
@@ -159,6 +193,7 @@ CGI_Pipeline/
 ### Pipeline 技能（纯计算，不需要 DCC）
 | skill_id | 功能 |
 |----------|------|
+| `resolve_asset_files` | 解析资产 tex/rig 最新文件，或校验并透传显式路径 |
 | `pipeline_compare_asset` | 纯 JSON/ABC 资产对比，输出 compare_result |
 | `pipeline_export_abc_auto` | 自动路由 ABC 导出 |
 
@@ -175,8 +210,8 @@ CGI_Pipeline/
 | workflow_id | 说明 | 跨 DCC |
 |-------------|------|--------|
 | `blender_to_maya_full_build` | Blender 导出 → Maya 构建 + 材质 + 保存 | Blender→Maya |
-| `tex_to_rig_verify_and_sync` | Blender 导 ABC/材质 → Maya 场景内对比 → compare_result 驱动同步 → 后置验证 → 升版本保存 | Blender→Maya |
-| `tex_to_rig_verify` | Blender 导 ABC → Maya 场景内采集 target → 写 compare_result | Blender→Maya |
+| `tex_to_rig_verify_and_sync` | 资产名/显式路径解析 → Blender 导 ABC/材质 → Maya 场景内对比 → compare_result 驱动同步 → 后置验证 → 升版本保存 | Pipeline→Blender→Maya |
+| `tex_to_rig_verify` | 资产名/显式路径解析 → Blender 导 ABC → Maya 场景内采集 target → 写 compare_result | Pipeline→Blender→Maya |
 | `blender_tex_export` | Blender 导出 ABC + 材质 + info | Blender |
 | `abc_import_with_materials` | PyAlembic 构建 + 材质赋予 | Maya |
 | `full_cleanup_and_save` | 全清理 + Shape 修复 + 法线 + 保存 | Maya |

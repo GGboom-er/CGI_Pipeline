@@ -131,7 +131,7 @@ def execute(payload: dict) -> dict:
             summary_input=scene_name,
             summary_action='保存被拦截 — 受保护路径',
             error=f'路径 "{blocked_target}" 位于受保护区域。后台任务只允许写入任务沙盒。',
-            outputs={'blocked_target': blocked_target},
+            outputs={'result': {'blocked_target': blocked_target}},
         )
 
     if not _is_under_project_sandbox(current_scene_norm):
@@ -140,7 +140,7 @@ def execute(payload: dict) -> dict:
             summary_input=scene_name,
             summary_action='保存被拦截 — 当前场景不在任务沙盒',
             error=f'当前场景 "{current_scene}" 不在项目任务沙盒内。后台 pipeline 禁止保存沙盒外场景。',
-            outputs={'blocked_target': current_scene},
+            outputs={'result': {'blocked_target': current_scene}},
         )
 
     if not _is_under_project_sandbox(save_path):
@@ -149,7 +149,7 @@ def execute(payload: dict) -> dict:
             summary_input=scene_name,
             summary_action='保存被拦截 — 目标不在任务沙盒',
             error=f'目标路径 "{save_path}" 不在项目任务沙盒内。后台 pipeline 只允许写入任务沙盒。',
-            outputs={'blocked_target': save_path},
+            outputs={'result': {'blocked_target': save_path}},
         )
 
     try:
@@ -173,7 +173,7 @@ def execute(payload: dict) -> dict:
                     summary_input=scene_name,
                     summary_action='保存被拦截 — 版本递增后仍在受保护区域',
                     error=reason,
-                    outputs={'blocked_target': final_save_path},
+                    outputs={'result': {'blocked_target': final_save_path}},
                 )
 
             # 4. 决定保存类型 .ma 或 .mb

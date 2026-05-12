@@ -98,7 +98,7 @@ def execute(payload: dict) -> dict:
 
 状态码：`SUCCESS / ERROR / BLOCKED / TIMEOUT / CHAIN_ABORTED / AUDIT_FAILED / CHAIN_AUDIT_FAILED / WORKFLOW_AUDIT_FAILED`。后台 pipeline 不等待人工决策；质检或契约不通过时返回 `AUDIT_FAILED` 并生成报告。
 
-三个合法的输出 key：`output_path`（单个产出文件）、`report_path`（MD 报告）、`result`（只给 `exec_code` 类用）。**不要自创 `abc_path` / `saved_path` 之类的 key** —— `receipt.py` 只认这两个路径 key。
+三个合法的输出 key：`output_path`（单个产出文件）、`report_path`（MD 报告）、`result`（结构化机器输出）。**不要自创 `abc_path` / `saved_path` / `top_nodes` 之类的顶层 key** —— 多字段或特殊参数统一走 `outputs.result.xxx`。
 
 ### 节点化参数命名规范（SOP）
 
@@ -152,6 +152,7 @@ Maya 场景内几何采集放在 `dccs/maya/asset_info_collector.py`，不要放
 推荐工作流不再“导出 Maya JSON 再开 Maya 拼装”。主线是：
 
 ```text
+resolve_asset_files -> 只传 asset_name 时查服务器最新 tex/rig；显式传 source_path/rig_path 时直接透传
 Blender source -> blender_export_abc + blender_extract_materials
 Maya target rig -> maya_compare_asset_in_scene 采集当前场景并写 pre compare_result
 pre compare_result + source_abc -> maya_sync_rig_incremental 执行拼装
@@ -159,7 +160,7 @@ maya_compare_asset_in_scene -> post compare_result
 save_scene -> 沙盒内按版本递增保存
 ```
 
-`pipeline_compare_asset` 保留为纯数据入口：只有当 source/target 都已经是 `_info.json` 或 ABC 时使用。`maya_sync_rig_incremental` 是执行器，必须消费前置 `compare_result`，不再独立重算对比。
+`pipeline_compare_asset` 保留为纯数据入口：只有当 source/target 都已经是 `_info.json` 或 ABC 时使用。`maya_sync_rig_incremental` 是执行器，必须消费前置 `compare_result`，不再独立重算对比。主 workflow 的文件入口必须节点化：路径查找属于 `resolve_asset_files`，文件隔离属于调度层，DCC skill 只消费解析后的路径。
 
 ### 配置金字塔（四层）
 
@@ -196,7 +197,10 @@ save_scene -> 沙盒内按版本递增保存
 
 ## 在本仓库里工作的约定
 
-- "看/改当前场景"类请求优先用 foreground 模式（`execution_mode: "foreground"`）—— 会接到用户当前活跃的 Maya/Blender 端口（7001-7010）。background 模式留给批处理。
+- "看/改当前场景"类请求必须走 `cgi-pipeline` MCP 的 `maya_exec_code` 或具名 `maya_` Tool，参数必须包含 `execution_mode: "foreground"` 和用户指定的 `foreground_port`。background 模式只用于批处理。
+- 禁止使用旧 `maya-live`、默认 commandPort 或省略 `foreground_port` 去连 Maya。多 Maya 会话同时存在时，省略端口会被 MCP 返回 `NEEDS_ATTENTION` 拦截；端口未知时先调用 `maya_list_foreground_sessions` 或询问用户。
+- 通过原始 Python MCP Client 手动 `call_tool` 时，FastMCP 入参需要外层 `{"params": {...}}`；不要把 `code/execution_mode/foreground_port` 平铺到顶层。
+- Maya 端口推荐开启命令：`cmds.commandPort(name=":7009", sourceType="python", echoOutput=True)`；调试/长任务必须保留 `echoOutput=True`，不要关输出。
 - 用户说"写一个新技能"时**不要直接写代码**。打开 `skills/build_pipeline_skill/SKILL.md` 走构建协议（意图捕获 → 蓝图 → 脚手架 → 注册）。
 - 技能代码放在各自文件夹里（`skills/{id}/{id}.py`），不能放 `skills/` 根目录。`__init__.py` 负责 re-export `execute`。
 - `exec_code` / `blender_exec_code` 传了 `source_path` 时，Celery 会**自动打开文件**再跑代码 —— 别在代码片段里再调 `cmds.file(open=...)`。

@@ -110,7 +110,14 @@ def execute(payload: dict) -> dict:
                 'rename_asset', 'SUCCESS', t0,
                 summary_input=asset_name,
                 summary_action='文件名已符合规范，无需重命名',
-                outputs={'output_path': output_path, 'renamed': False},
+                outputs={
+                    'output_path': output_path,
+                    'result': {
+                        'original_name': current_basename,
+                        'standard_name': standard_name,
+                        'renamed': False,
+                    },
+                },
             )
 
         # ── 执行重命名（另存为） ──
@@ -126,9 +133,11 @@ def execute(payload: dict) -> dict:
             summary_action=f'已重命名为 {standard_name}',
             outputs={
                 'output_path': output_path,
-                'original_name': current_basename,
-                'standard_name': standard_name,
-                'renamed': True,
+                'result': {
+                    'original_name': current_basename,
+                    'standard_name': standard_name,
+                    'renamed': True,
+                },
             },
         )
         return receipt

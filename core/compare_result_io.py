@@ -31,6 +31,148 @@ def dag_short(dag):
     return parts[-1].split(":")[-1] if parts else dag
 
 
+def _report_label(group: str, key: str) -> str:
+    try:
+        from core.report_labels import label
+        return label(group, key)
+    except Exception:
+        return key
+
+
+def _pair_section_item(pair: dict) -> dict:
+    return {
+        "source": pair.get("name_a") or dag_short(pair.get("dag_a", "")),
+        "target": pair.get("name_b") or dag_short(pair.get("dag_b", "")),
+        "action": pair.get("actionability", ""),
+        "vertices": f"{pair.get('vtx_a', 0)} / {pair.get('vtx_b', 0)}",
+        "match": pair.get("match_pct_loose", "-"),
+        "offset": pair.get("max_offset", 0),
+    }
+
+
+def _single_section_item(entry: dict) -> dict:
+    dag = entry.get("dag", "")
+    return {
+        "mesh": entry.get("name") or dag_short(dag),
+        "dag": dag,
+        "vertices": entry.get("vtx", 0),
+    }
+
+
+def build_compare_report_sections(report, info_source_path, info_target_path,
+                                  label_source, label_target,
+                                  source_file, target_file) -> list:
+    """把 compare 结果转成统一报告可渲染的结构化折叠段。
+
+    这里不写文件，也不改变 compare_result 机器契约；只服务 receipt.report_sections。
+    """
+    paired = report.get("paired", []) or []
+    only_source = report.get("only_a", []) or []
+    only_target = report.get("only_b", []) or []
+
+    identical_items = [
+        _pair_section_item(p)
+        for p in paired
+        if p.get("actionability") in ("IDENTICAL", "ORIG_INJECT")
+    ]
+    matched_different_items = [
+        _pair_section_item(p)
+        for p in paired
+        if p.get("actionability") in ("MODIFIED", "MERGE", "SPLIT")
+    ]
+    only_source_items = [_single_section_item(x) for x in only_source]
+    only_target_items = [_single_section_item(x) for x in only_target]
+
+    n_identical = len(identical_items)
+    n_matched = len(matched_different_items)
+    n_only_source = len(only_source_items)
+    n_only_target = len(only_target_items)
+    n_paired = len(paired)
+
+    action_counts = {}
+    for p in paired:
+        action = p.get("actionability", "")
+        if action:
+            action_counts[action] = action_counts.get(action, 0) + 1
+    action_counts["NEW"] = n_only_source
+    action_counts["DELETE"] = n_only_target
+
+    source_label = label_source or "source"
+    target_label = label_target or "target"
+
+    overview = [
+        "| 项目 | 数量 |",
+        "|---|---|",
+        f"| {_report_label('metrics', 'paired')} | {n_paired} |",
+        f"| {_report_label('metrics', 'identical')} | {n_identical} |",
+        f"| {_report_label('metrics', 'matched_different')} | {n_matched} |",
+        f"| {_report_label('metrics', 'only_source')} | {n_only_source} |",
+        f"| {_report_label('metrics', 'only_target')} | {n_only_target} |",
+    ]
+    for key in ("MODIFIED", "MERGE", "SPLIT"):
+        if action_counts.get(key):
+            overview.append(f"| {_report_label('metrics', key)} | {action_counts[key]} |")
+
+    source_lines = [
+        f"- **{source_label} 源文件**: `{source_file or '-'}`",
+        f"- **{source_label} 数据**: `{info_source_path or '-'}`",
+        f"- **{target_label} 源文件**: `{target_file or '-'}`",
+        f"- **{target_label} 数据**: `{info_target_path or '-'}`",
+    ]
+
+    sections = [
+        {
+            "title": "对比来源",
+            "summary": f"{source_label} vs {target_label}",
+            "content": "\n".join(source_lines),
+        },
+        {
+            "title": "对比概览",
+            "summary": (
+                f"{_report_label('metrics', 'paired')}={n_paired} "
+                f"{_report_label('metrics', 'identical')}={n_identical} "
+                f"{_report_label('metrics', 'matched_different')}={n_matched} "
+                f"{_report_label('metrics', 'only_source')}={n_only_source} "
+                f"{_report_label('metrics', 'only_target')}={n_only_target}"
+            ),
+            "content": "\n".join(overview),
+        },
+        {
+            "title": _report_label("metrics", "identical"),
+            "summary": f"{n_identical} 项",
+            "items": identical_items,
+        },
+        {
+            "title": _report_label("metrics", "matched_different"),
+            "summary": f"{n_matched} 项",
+            "items": matched_different_items,
+        },
+        {
+            "title": _report_label("metrics", "only_source"),
+            "summary": f"{n_only_source} 项",
+            "items": only_source_items,
+        },
+        {
+            "title": _report_label("metrics", "only_target"),
+            "summary": f"{n_only_target} 项",
+            "items": only_target_items,
+        },
+    ]
+
+    hierarchy = report.get("hierarchy") or {}
+    if hierarchy:
+        sections.append({
+            "title": "层级匹配",
+            "summary": f"名称一致 {hierarchy.get('matched', 0)} 项",
+            "content": "\n".join([
+                f"- **名称一致**: {hierarchy.get('matched', 0)}",
+                f"- **仅 {source_label}**: {len(hierarchy.get('only_a', []) or [])}",
+                f"- **仅 {target_label}**: {len(hierarchy.get('only_b', []) or [])}",
+            ]),
+        })
+    return sections
+
+
 def resolve_compare_result_path(payload, params, input_source, input_target):
     """推导 compare_result 输出路径，优先使用沙盒 `.info`。"""
     output_path = (params.get('output_path') or '').strip()

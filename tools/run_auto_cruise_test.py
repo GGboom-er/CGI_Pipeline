@@ -25,6 +25,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from core.task_status import SUCCESS_STATUSES, TERMINAL_STATUSES
 from core.config_loader import load_project_config
+from core.report_labels import label as report_label
 from mcp_server.internals import _read_audit, _submit_chain
 
 
@@ -44,9 +45,19 @@ POLL_TIMEOUT_PER_MB = 5
 
 
 def _geom_root(stage: str) -> str:
+    roots = _geom_roots(stage)
+    return roots[0] if roots else "cache"
+
+
+def _geom_roots(stage: str) -> list[str]:
     cfg = load_project_config(PROJECT)
     roots = cfg.get("stages", {}).get(stage, {}).get("geom_roots", [])
-    return roots[0] if roots else "cache"
+    return [str(root).strip() for root in roots if str(root).strip()]
+
+
+def _maya_geom_group_param(stage: str) -> str:
+    roots = _geom_roots(stage)
+    return ";".join(roots) if roots else "cache"
 
 
 def compute_poll_timeout(file_path: str, factor: float = 1.0) -> int:
@@ -218,6 +229,156 @@ def _chain_step_outputs(task_result: dict, skill_id: str) -> dict:
     return {}
 
 
+def _parse_receipt_detail(detail) -> dict:
+    if isinstance(detail, str) and " [mem=" in detail:
+        detail = detail.rsplit(" [mem=", 1)[0]
+    if isinstance(detail, dict):
+        return detail
+    if isinstance(detail, str) and detail.strip():
+        try:
+            parsed = json.loads(detail)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _format_duration(seconds: float) -> str:
+    if seconds is None:
+        return "?"
+    try:
+        seconds = float(seconds)
+    except Exception:
+        return "?"
+    if seconds < 1:
+        return f"{seconds:.2f}s"
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    minutes = int(seconds // 60)
+    remain = int(seconds % 60)
+    return f"{minutes}m{remain:02d}s"
+
+
+def _skill_description(skill_id: str) -> str:
+    skill_dir = PROJECT_ROOT / "skills" / skill_id
+    skill_md = skill_dir / "SKILL.md"
+    if not skill_md.exists():
+        return ""
+    for line in skill_md.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("description:"):
+            continue
+        value = stripped.split(":", 1)[1].strip().strip('"').strip("'")
+        return value
+    return ""
+
+
+def _short_path(path: str, sandbox: Path) -> str:
+    if not path:
+        return ""
+    try:
+        return str(Path(path).resolve().relative_to(sandbox.resolve())).replace("\\", "/")
+    except Exception:
+        return str(path)
+
+
+def _step_detail(receipt: dict, sandbox: Path) -> str:
+    summary = receipt.get("summary", {}) if isinstance(receipt, dict) else {}
+    parts = []
+    if summary.get("input"):
+        parts.append(f"输入: {summary.get('input')}")
+    if summary.get("action"):
+        parts.append(f"动作: {summary.get('action')}")
+    output_count = summary.get("output_count")
+    output_label = summary.get("output_label") or "项"
+    if output_count not in (None, "", 0):
+        parts.append(f"数量: {output_count} {output_label}".strip())
+
+    outputs = receipt.get("outputs", {}) if isinstance(receipt, dict) else {}
+    output_paths = []
+    for key in ("output_path", "report_path"):
+        if outputs.get(key):
+            output_paths.append(f"{key}: `{_short_path(outputs[key], sandbox)}`")
+    if output_paths:
+        parts.append("输出: " + "；".join(output_paths))
+
+    items = receipt.get("items", []) if isinstance(receipt, dict) else []
+    if items:
+        shown = []
+        for item in items[:5]:
+            shown.append(f"{item.get('name', '')}: {item.get('detail', '')}")
+        if len(items) > 5:
+            shown.append(f"其他 {len(items) - 5} 条")
+        parts.append("明细: " + "；".join(shown))
+
+    return "<br>".join(str(part).replace("|", "\\|") for part in parts if part) or "-"
+
+
+def _chain_step_details(task_result: dict, phase_name: str, sandbox: Path) -> list[dict]:
+    entries = task_result.get("entries", []) or []
+    starts = {}
+    rows = []
+    for entry in entries:
+        status = entry.get("status")
+        skill_id = entry.get("skill_id", "")
+        step = entry.get("step")
+        if status == "STEP_START":
+            starts[(step, skill_id)] = entry
+            continue
+        if status not in ("STEP_SUCCESS", "STEP_ERROR", "STEP_FAILED"):
+            continue
+
+        receipt = _parse_receipt_detail(entry.get("detail", ""))
+        start_entry = starts.get((step, skill_id), {})
+        if not start_entry and step is None:
+            for (candidate_step, candidate_skill), candidate_entry in starts.items():
+                if candidate_skill == skill_id:
+                    start_entry = candidate_entry
+                    step = candidate_step
+                    break
+        start_ts = start_entry.get("ts")
+        end_ts = entry.get("ts")
+        duration = None
+        if start_ts and end_ts:
+            duration = max(0.0, float(end_ts) - float(start_ts))
+        elif receipt.get("elapsed_min") is not None:
+            duration = float(receipt.get("elapsed_min") or 0) * 60
+
+        rows.append({
+            "phase": phase_name,
+            "step": step if step is not None else len(rows),
+            "skill_id": skill_id,
+            "logic": _skill_description(skill_id),
+            "status": receipt.get("status") or status.replace("STEP_", ""),
+            "duration": _format_duration(duration),
+            "detail": _step_detail(receipt, sandbox),
+        })
+    return rows
+
+
+def _render_step_details(phase_results: list[tuple[str, dict]], sandbox: Path) -> list[str]:
+    rows = []
+    for phase_name, task_result in phase_results:
+        rows.extend(_chain_step_details(task_result, phase_name, sandbox))
+    if not rows:
+        return []
+
+    lines = [
+        "## 技能执行明细",
+        "",
+        "| 阶段 | Step | Skill | 技能逻辑 | 状态 | 耗时 | 执行信息 |",
+        "|---|---:|---|---|---|---:|---|",
+    ]
+    for row in rows:
+        lines.append(
+            f"| {row['phase']} | {row['step']} | `{row['skill_id']}` | "
+            f"{str(row['logic']).replace('|', '\\|') or '-'} | {row['status']} | "
+            f"{row['duration']} | {row['detail']} |"
+        )
+    lines.append("")
+    return lines
+
+
 def _sync_summary(sync_outputs: dict, pre_compare_path: str) -> dict:
     keys = ("IDENTICAL", "ORIG_INJECT", "PAIRED", "UNPAIRED", "target_only")
     if any(k in sync_outputs for k in keys):
@@ -250,6 +411,7 @@ def write_final_report(
     pre_outputs: dict,
     post_outputs: dict,
     sync_outputs: dict,
+    phase_results: list[tuple[str, dict]],
     passed: bool,
 ) -> str:
     report_path = sandbox / f"{ASSET}_cruise_report.md"
@@ -267,6 +429,14 @@ def write_final_report(
     pre_compare = _compare_summary(compare_result_path)
     post_compare = _compare_summary(post_compare_path)
     sync = _sync_summary(sync_outputs, compare_result_path)
+    metric = lambda key: report_label("metrics", key)
+    sync_label = lambda key: report_label("sync_actions", key)
+
+    def metric_counts(data, keys):
+        return "，".join(f"{metric(key)}={data.get(key, '?')}" for key in keys)
+
+    def sync_counts(data, keys):
+        return "，".join(f"{sync_label(key)}={data.get(key, '?')}" for key in keys)
 
     root_files = sorted({p.name for p in sandbox.iterdir() if p.is_file()} | {report_path.name})
     info_files = sorted(p.name for p in info_dir.iterdir() if p.is_file())
@@ -296,22 +466,23 @@ def write_final_report(
         "| 阶段 | 结果 |",
         "|---|---|",
         f"| Blender 导出 | ABC `{rel(local_abc)}`，材质 {materials.get('material_count', '?')} 个，面赋予记录 {materials.get('face_assignments', '?')} 条 |",
-        f"| 同步前对比 | paired={pre_compare.get('paired', '?')}，matched_different={pre_compare.get('matched_different', '?')}，only_source={pre_compare.get('only_source', '?')}，only_target={pre_compare.get('only_target', '?')} |",
-        f"| 同步拼装 | IDENTICAL={sync.get('IDENTICAL', '?')}，ORIG_INJECT={sync.get('ORIG_INJECT', '?')}，PAIRED={sync.get('PAIRED', '?')}，UNPAIRED={sync.get('UNPAIRED', '?')}，target_only={sync.get('target_only', '?')} |",
-        f"| 最终验证 | paired={post_compare.get('paired', '?')}，阻断差异={post_compare.get('blocking', '?')} |",
+        f"| 同步前对比 | {metric_counts(pre_compare, ('paired', 'matched_different', 'only_source', 'only_target'))} |",
+        f"| 同步拼装 | {sync_counts(sync, ('IDENTICAL', 'ORIG_INJECT', 'PAIRED', 'UNPAIRED', 'target_only'))} |",
+        f"| 最终验证 | {metric_counts(post_compare, ('paired', 'blocking'))} |",
         "",
         "## 最终对比",
         "",
         "| 指标 | 数量 |",
         "|---|---:|",
-        f"| identical | {post_compare.get('identical', '?')} |",
-        f"| matched_different | {post_compare.get('matched_different', '?')} |",
-        f"| only_source | {post_compare.get('only_source', '?')} |",
-        f"| only_target | {post_compare.get('only_target', '?')} |",
-        f"| MODIFIED | {post_compare.get('actions', {}).get('MODIFIED', '?')} |",
-        f"| MERGE | {post_compare.get('actions', {}).get('MERGE', '?')} |",
-        f"| SPLIT | {post_compare.get('actions', {}).get('SPLIT', '?')} |",
+        f"| {metric('identical')} | {post_compare.get('identical', '?')} |",
+        f"| {metric('matched_different')} | {post_compare.get('matched_different', '?')} |",
+        f"| {metric('only_source')} | {post_compare.get('only_source', '?')} |",
+        f"| {metric('only_target')} | {post_compare.get('only_target', '?')} |",
+        f"| {metric('MODIFIED')} | {post_compare.get('actions', {}).get('MODIFIED', '?')} |",
+        f"| {metric('MERGE')} | {post_compare.get('actions', {}).get('MERGE', '?')} |",
+        f"| {metric('SPLIT')} | {post_compare.get('actions', {}).get('SPLIT', '?')} |",
         "",
+        *_render_step_details(phase_results, sandbox),
         "## 文件结构",
         "",
         f"- 根目录只保留对外文件：`{root_files}`",
@@ -343,7 +514,7 @@ def run_test():
     local_blend = stage_file_to_sandbox(X_BLEND, sandbox)
     rig_stem = Path(X_RIG).stem
     tex_group = _geom_root("tex")
-    rig_group = _geom_root("rig")
+    rig_group = _maya_geom_group_param("rig")
 
     logger.info("\nPhase 1: Blender 导出 ABC + 材质信息")
     local_abc = str(info_dir / f"{Path(X_BLEND).stem}.abc")
@@ -355,9 +526,9 @@ def run_test():
     if "task_id" not in res:
         logger.error(f"  Blender 提交失败: {res}")
         return False
-    result = poll_task(res["task_id"], timeout=compute_poll_timeout(local_blend))
-    if result.get("status") not in SUCCESS_STATUSES:
-        logger.error(f"  Phase 1 失败: {result}")
+    phase1_result = poll_task(res["task_id"], timeout=compute_poll_timeout(local_blend))
+    if phase1_result.get("status") not in SUCCESS_STATUSES:
+        logger.error(f"  Phase 1 失败: {phase1_result}")
         return False
     archive_audit(res["task_id"], info_dir)
 
@@ -427,7 +598,8 @@ def run_test():
     report_path = write_final_report(
         sandbox, info_dir, local_rig, local_blend, save_path, local_abc,
         materials_path, rig_info_pre_path, compare_result_path,
-        rig_info_post_path, post_compare_path, pre_outputs, post_outputs, sync_outputs, passed,
+        rig_info_post_path, post_compare_path, pre_outputs, post_outputs, sync_outputs,
+        [("Blender", phase1_result), ("Maya", phase2_result)], passed,
     )
 
     logger.info("\n" + "=" * 60)

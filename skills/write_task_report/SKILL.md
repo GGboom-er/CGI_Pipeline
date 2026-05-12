@@ -3,7 +3,7 @@ skill_id: "write_task_report"
 name: "任务汇总报告"
 dcc: "pipeline"
 skip_audit: true
-description: "读 audit JSONL，按 skill 链路渲染结构化汇总报告到沙盒目录。pipeline 类 skill，不开 DCC，主进程内直接执行。"
+description: "从 audit JSONL 重建/修复统一 REPORT.md。pipeline 类 skill，不开 DCC，主进程内直接执行。运行中报告由 core/task_report_writer.py 负责。"
 parameters:
   task_id:
     type: "string"
@@ -55,14 +55,15 @@ category: "output"
 
 ### 🔴 核心限制 (CRITICAL CONSTRAINTS)
 - **只读 audit**：只消费 `audit/{task_id}.json`，不执行业务逻辑，不访问 DCC。
-- **输出唯一落沙盒**：报告路径强制 `{run_dir}/{asset_name}_{task_id}.md`，不走全局 `reports/`。
+- **输出唯一落沙盒**：报告路径强制 `{run_dir}/REPORT.md`，不走全局 `reports/`。
+- **非运行时 writer**：本 skill 只用于 audit 重建/灾后恢复；正常任务执行中由 `core/task_report_writer.py` 实时写报告。
 - **防递归**：自己不产生 audit（`skip_audit: true`）。
 - **后台无暂停**：新任务只渲染完成、失败、拦截和审计失败；不会要求人工选择后继续。
 
 ### 🟢 核心逻辑 (CORE LOGIC)
 1. 读 audit JSONL，按行 parse 成 entries 列表
 2. **normal 模式**：提取所有 `STEP_*` entry 的 `detail`（是 receipt JSON），按 skill 的 `category` + `skill_id` 前缀分派渲染器
-3. **workflow 模式**：提取所有 `SEGMENT_*` entry，按 segment 维度渲染多段概览，每段指向子 chain 的 md
+3. **workflow 模式**：提取所有 `SEGMENT_*` entry，按 segment 维度渲染多段概览，并展开段内 step 明细
 4. 头部总览表 + 主体 + 结尾签名
 5. 写入沙盒目录
 
@@ -83,8 +84,8 @@ category: "output"
 - `hold_*` (多个): 选填 | 空 | 仅用于渲染旧版暂停审计
 
 ### 🟣 输出字段 (OUTPUTS)
-- `output_path` (str): 沙盒内汇总 md 的绝对路径
-- `entries_count` (int): audit 中的总 entry 数
-- `units_rendered` (int): 渲染到报告里的单位数（normal 模式是 step，workflow 模式是 segment）
-- `mode` (str): 回显所用模式
-- `final_status` (str): 从 audit 末尾推断的任务状态
+- `output_path` (str): 沙盒内 `REPORT.md` 的绝对路径
+- `result.entries_count` (int): audit 中的总 entry 数
+- `result.units_rendered` (int): 渲染到报告里的单位数（normal 模式是 step，workflow 模式是 segment）
+- `result.mode` (str): 回显所用模式
+- `result.final_status` (str): 从 audit 末尾推断的任务状态

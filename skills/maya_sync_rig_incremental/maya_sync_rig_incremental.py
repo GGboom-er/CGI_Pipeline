@@ -26,6 +26,7 @@ from core.receipt import make_receipt, make_item
 from skills.maya_sync_rig_incremental.sync_contract import (
     SKILL_ID,
     SyncContractError,
+    build_sync_report_sections,
     format_action_summary,
     load_compare_result_file,
     parse_sync_inputs,
@@ -59,7 +60,7 @@ def _load_compare_result(compare_result_path):
 
 def _sync_receipt(status, start_time, phase, error="", items=None,
                   summary_action="", recovery_hint="", report_content="",
-                  summary_count=0, summary_label="资产同步", outputs=None):
+                  report_sections=None, summary_count=0, summary_label="资产同步"):
     if error and phase:
         error = f"[{phase}] {error}"
     return make_receipt(
@@ -68,10 +69,11 @@ def _sync_receipt(status, start_time, phase, error="", items=None,
         summary_count=summary_count,
         summary_label=summary_label,
         items=items or [],
-        outputs=outputs or {},
+        outputs={},
         error=error,
         recovery_hint=recovery_hint,
         report_content=report_content,
+        report_sections=report_sections or [],
     )
 
 
@@ -1255,6 +1257,7 @@ def execute(payload: dict) -> dict:
     items = []
     external_report = None
     sync_md_content = ""
+    sync_report_sections = []
     all_new_nodes = []
     action_counts = {}
 
@@ -1356,6 +1359,14 @@ def execute(payload: dict) -> dict:
         pairing_groups = report["pairing_groups"]
         target_only_dags = report["target_only_dags"]
         action_counts = summarize_sync_actions(report)
+        sync_report_sections = build_sync_report_sections(
+            report,
+            action_counts,
+            compare_result_path=compare_result_path,
+            source_abc=abc_path,
+            source_info=tex_json,
+            cache_group=cache_group,
+        )
 
         # ── 对比摘要写入 receipt/report_content，不额外落散文件 ──
         items.append(make_item(
@@ -2123,6 +2134,7 @@ def execute(payload: dict) -> dict:
             items=items,
             recovery_hint="查看统一任务报告中的 sync items 和 worker 日志，优先定位最后一个 Phase 日志。",
             report_content=sync_md_content,
+            report_sections=sync_report_sections,
         )
 
     cmds.undoInfo(closeChunk=True)
@@ -2136,4 +2148,5 @@ def execute(payload: dict) -> dict:
         items=items,
         outputs={},
         report_content=sync_md_content,
+        report_sections=sync_report_sections,
     )

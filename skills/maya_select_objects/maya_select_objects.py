@@ -32,7 +32,7 @@ def execute(payload: dict) -> dict:
                 status='SUCCESS',
                 start_time=t0,
                 summary_action="清空选择",
-                outputs={'selected': []},
+                outputs={'result': {'selected': [], 'count': 0}},
                 items=[{'name': '选择', 'detail': '已清空'}],
             )
         
@@ -76,7 +76,11 @@ def execute(payload: dict) -> dict:
                 status='SUCCESS',
                 start_time=t0,
                 summary_action="未找到匹配对象",
-                outputs={'selected': [], 'not_found': not_found if 'not_found' in dir() else []},
+                outputs={'result': {
+                    'selected': [],
+                    'count': 0,
+                    'not_found': not_found if 'not_found' in dir() else [],
+                }},
                 items=[{'name': '选择', 'detail': '无匹配对象'}],
             )
         
@@ -107,7 +111,7 @@ def execute(payload: dict) -> dict:
             status='SUCCESS',
             start_time=t0,
             summary_action=f"选择了 {len(final_selection)} 个对象",
-            outputs=result,
+            outputs={'result': result},
             items=[{'name': '选择结果', 'detail': f"{len(final_selection)} 个对象已选择"}],
             report_content=f"已选择: {', '.join(final_selection[:10])}" + 
                           (f" ...等共 {len(final_selection)} 个" if len(final_selection) > 10 else "")

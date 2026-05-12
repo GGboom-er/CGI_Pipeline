@@ -149,7 +149,7 @@ def execute(payload: dict) -> dict:
             status='SUCCESS',
             start_time=t0,
             summary_action="采集场景信息",
-            outputs=scene_info,
+            outputs={'result': scene_info},
             items=items,
             report_content='\n'.join(summary_lines)
         )

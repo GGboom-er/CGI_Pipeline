@@ -195,7 +195,7 @@ core.receipt.make_receipt(...)
 outputs={"output_path": "..."}
 ```
 
-`outputs` 只允许稳定机器契约字段：`output_path`、`report_path`、`result`。统计、分类数量和执行摘要写入 `summary`、`items` 或 `report_content`。
+`outputs` 只允许稳定机器契约字段：`output_path`、`report_path`、`result`。纯展示统计、分类数量和执行摘要写入 `summary`、`items` 或 `report_content`；需要被下游节点连接的结构化字段放入 `outputs.result.xxx`。
 
 ### 7.3 状态
 
@@ -231,12 +231,17 @@ Workflow 用 JSON 声明步骤：
 
 ```json
 {
+  "step_id": "resolve_files",
+  "skill_id": "resolve_asset_files",
+  "parameters": {}
+},
+{
   "step_id": "compare_pre",
   "skill_id": "maya_compare_asset_in_scene",
-  "source_path": "{{input.rig_path}}",
+  "source_path": "{{outputs.resolve_files.result.rig_path}}",
   "parameters": {
     "input_source": "{{outputs.export_abc.output_path}}",
-    "output_path": "{{input.info_dir}}/{{input.rig_path | stem}}_pre_compare_result.json",
+    "output_path": "{{input.info_dir}}/{{outputs.resolve_files.result.rig_stem}}_pre_compare_result.json",
     "cache_group": "{{config.stages.rig.geom_roots.0}}",
     "label_source": "tex",
     "label_target": "rig"
@@ -252,6 +257,8 @@ Workflow 用 JSON 声明步骤：
 - DCC 根节点、项目路径、组名等项目差异使用 `{{config...}}`。
 - 中间产物路径使用 `{{input.info_dir}}`。
 - 上游产物通过 `{{outputs.step_id.output_path}}` 传递。
+- 多字段结构化输出通过 `outputs.result` 传递，例如 `{{outputs.resolve_files.result.source_path}}`。
+- 主对比/拼装 workflow 必须先执行 `resolve_asset_files`，只传资产名时由该节点查服务器最新 tex/rig；显式传 `source_path` / `extra_params.rig_path` 时由该节点校验后透传。
 - 未显式传中间产物输出路径时，skill 只能从任务沙盒 `.info` 推导；不能回退输入文件同目录。
 
 ## 9. 参数命名规范
@@ -304,7 +311,7 @@ sandbox/
   source scene copy
   target scene copy
   final version-up scene
-  task report.md
+  REPORT.md
   manifest.json
   .info/
     source_info.json

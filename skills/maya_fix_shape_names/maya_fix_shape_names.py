@@ -21,6 +21,9 @@ def execute(payload: dict) -> dict:
     t0 = time.time()
     params = payload.get('parameters', {})
     target_grp = params.get('target_group', "")
+    if target_grp:
+        from dccs.maya.asset_info_collector import resolve_cache_group
+        target_grp = resolve_cache_group(target_grp) or target_grp
     
     source_path = payload.get('source_path', '')
     current_scene = cmds.file(query=True, sceneName=True) or ''

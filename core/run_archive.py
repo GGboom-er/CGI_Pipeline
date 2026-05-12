@@ -9,6 +9,7 @@ import json
 import time
 import shutil
 import logging
+import re
 from pathlib import Path
 
 from core.bootstrap import cfg as _cfg
@@ -19,11 +20,55 @@ PROJECT_ROOT = Path(_cfg.PROJECT_ROOT)
 RUNS_DIR = PROJECT_ROOT / 'runs'
 PROJECTS_DIR = PROJECT_ROOT / 'projects'
 
+
+def _safe_segment(value: str, fallback: str = 'untitled') -> str:
+    text = str(value or fallback).strip() or fallback
+    text = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', text)
+    text = re.sub(r'\s+', '_', text)
+    return text[:80] or fallback
+
+
+def _find_existing_run_dir(wf_id: str, project: str = None) -> Path | None:
+    """Redis 不可用时，通过 .info/run_state.json 找回同一 task 的沙盒。"""
+    if not wf_id or not project:
+        return None
+    project_dir = PROJECT_ROOT / 'projects' / project
+    if not project_dir.exists():
+        return None
+    for state_path in project_dir.glob('*/.info/run_state.json'):
+        try:
+            data = json.loads(state_path.read_text(encoding='utf-8'))
+        except Exception:
+            continue
+        if data.get('wf_id') == wf_id:
+            return state_path.parent.parent
+    return None
+
+
+def _write_run_state(run_dir: Path, wf_id: str, project: str = None, asset_name: str = None) -> None:
+    try:
+        info_dir = run_dir / '.info'
+        info_dir.mkdir(parents=True, exist_ok=True)
+        state_path = info_dir / 'run_state.json'
+        if not state_path.exists():
+            state_path.write_text(
+                json.dumps({
+                    'wf_id': wf_id,
+                    'project': project or '',
+                    'asset_name': asset_name or '',
+                    'created_at': time.strftime('%Y-%m-%d %H:%M:%S'),
+                }, ensure_ascii=False, indent=2),
+                encoding='utf-8',
+            )
+    except Exception:
+        pass
+
 def create_run_dir(wf_id: str, project: str = None, asset_name: str = None, submitted_at: float = None) -> Path:
     """
     创建任务沙盒(Task Sandbox)目录。
     为了保证稳定，如果多次调用同一 wf_id，应返回相同的目录。
-    格式: projects/{project}/tasks/{datetime}_{asset_name}_{wf_id}
+    格式: projects/{project}/{datetime}_{asset_name}
+    task_id/wf_id 只写入 .info/run_state.json 和 manifest，不进入用户主要识别目录名。
     """
     import datetime
 
@@ -37,18 +82,39 @@ def create_run_dir(wf_id: str, project: str = None, asset_name: str = None, subm
             if cached_dir:
                 run_dir = Path(cached_dir)
                 run_dir.mkdir(parents=True, exist_ok=True)
+                _write_run_state(run_dir, wf_id, project, asset_name)
                 return run_dir
     except Exception:
         pass
 
+    existing = _find_existing_run_dir(wf_id, project)
+    if existing:
+        existing.mkdir(parents=True, exist_ok=True)
+        return existing
+
     if project and asset_name:
         dt = datetime.datetime.fromtimestamp(submitted_at) if submitted_at else datetime.datetime.now()
         date_str = dt.strftime('%Y%m%d_%H%M%S')
-        run_dir = PROJECT_ROOT / 'projects' / project / f'{date_str}_{asset_name}_{wf_id}'
+        safe_project = _safe_segment(project, 'default')
+        safe_asset = _safe_segment(asset_name, 'untitled')
+        base = PROJECT_ROOT / 'projects' / safe_project / f'{date_str}_{safe_asset}'
+        run_dir = base
+        suffix = 1
+        while run_dir.exists():
+            state_path = run_dir / '.info' / 'run_state.json'
+            try:
+                data = json.loads(state_path.read_text(encoding='utf-8'))
+                if data.get('wf_id') == wf_id:
+                    break
+            except Exception:
+                pass
+            run_dir = base.with_name(f'{base.name}_{suffix:02d}')
+            suffix += 1
     else:
         run_dir = PROJECT_ROOT / 'runs' / wf_id
 
     run_dir.mkdir(parents=True, exist_ok=True)
+    _write_run_state(run_dir, wf_id, project, asset_name)
 
     # 保存回 Redis 供后续节点获取
     try:
@@ -79,7 +145,7 @@ def get_run_dir(wf_id: str) -> Path:
 def get_run_report_path(wf_id: str, asset_name: str, project: str = None) -> str:
     """获取工作流统一报告路径"""
     run_dir = create_run_dir(wf_id, project, asset_name)
-    return str(run_dir / f'{asset_name}_{wf_id}.md')
+    return str(run_dir / 'REPORT.md')
 
 
 def write_manifest(

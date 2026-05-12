@@ -686,8 +686,8 @@ def execute(payload: dict) -> dict:
     lines.append(f'*CGI Pipeline · {_now_str()}*')
     lines.append('')
 
-    # 写沙盒
-    out_path = run_dir / f'{asset_name}_{task_id}.md'
+    # 写沙盒。运行时唯一报告固定为 REPORT.md；本 skill 作为 audit 重建工具时也覆盖同一文件。
+    out_path = run_dir / 'REPORT.md'
     out_path.write_text('\n'.join(lines), encoding='utf-8')
 
     return make_receipt(
@@ -700,9 +700,11 @@ def execute(payload: dict) -> dict:
         summary_label='段' if mode == 'workflow' else '步骤',
         outputs={
             'output_path': str(out_path),
-            'entries_count': len(entries),
-            'units_rendered': units_rendered,
-            'mode': mode,
-            'final_status': final_status,
+            'result': {
+                'entries_count': len(entries),
+                'units_rendered': units_rendered,
+                'mode': mode,
+                'final_status': final_status,
+            },
         },
     )

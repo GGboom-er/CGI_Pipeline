@@ -22,6 +22,8 @@
 
 - [Maya commandPort 阻塞与静默崩溃] → [在 echoOutput=False 模式下强行通过 socket 发送超长字符串脚本，极易导致端口句柄卡死且无法捕获异常] → [放弃原生 socket 强压，改为使用 commandPort 仅发送单行 Base64 引导脚本，从而拉起独立的 RPyC (Remote Python Call) 服务端接管后续通信] → [必须利用 RPyC 代理机制结合 executeInMainThreadWithResult，彻底解决跨进程大对象回传与多线程安全问题]
 - [多Maya误连] → [foreground省略端口会落到默认或首个端口] → [强制显式foreground_port] → [多端口场景禁隐式选择]
+- [AI误用Maya直连] → [入口文档仍写自动嗅探/旧maya-live] → [同步MCP说明和skill] → [当前场景必显式端口]
+- [原始MCP调用报参错] → [漏FastMCP params外壳] → [文档写明wrapper] → [手测禁平铺]
 - [新技能 CHAIN_ABORTED "混合多个DCC类型"] → [长驻 Worker 进程的 skill_registry 快照过期，新技能 get_skill_dcc 返回默认值 'maya'] → [在 tasks.py 三处关键位置注入 _reload_skill_registry()：链DCC校验前、单技能执行前、工作流分段前] → [任何依赖注册表的判断逻辑前，必须先热重载，因为 Worker 可能运行数天]
 - [shutdown_all() 无法杀旧Worker] → [只遍历 _managed_procs（空列表，因为 Worker 由其他进程启动）] → [增加 PID 文件扫描逻辑，根据 pidfile 内容 os.kill] → [进程管理不能只依赖内存中的句柄，必须有持久化的 PID 文件作为兜底]
 - [DCC启动延迟] → [冷启动耗时5-8s] → [实现WarmWorkerProxy常驻池] → [高频任务用常驻池，50次自动重启]
@@ -44,15 +46,26 @@
 - [Maya采集复用] → [core禁DCC] → [放dccs/maya] → [DCC API不进core]
 - [新建mesh空几何] → [无历史不产Orig] → [sync补标准Orig] → [采集器不兜底]
 - [sync难单测] → [Maya执行和契约混写] → [纯Python契约层] → [DCC大函数外置可测边界]
+- [根组漏配] → [只传首根] → [候选根解析] → [geom_roots全传]
+- [Orig误判] → [按名称判断] → [official+tweak+连接] → [图关系优先]
+- [报告难读] → [英文枚举外露] → [配置映射] → [人读中文]
+- [报告过薄] → [只写验收摘要] → [audit渲染明细] → [唯一MD含步骤]
+- [运行中报告缺失] → [只在收尾读audit重建] → [调度层实时upsert REPORT.md] → [报告生命周期必须挂在step事件上]
+- [复杂报告不可折叠] → [长Markdown混成一块] → [receipt.report_sections分章] → [复杂skill优先返回结构化事实]
+- [报告块外露] → [HTML和旧marker在查看器显示] → [普通Markdown+隐藏引用marker] → [报告渲染不依赖HTML折叠]
+- [报告重复] → [sections与旧content同时渲染] → [结构化优先屏蔽旧内容] → [同一事实只出现一次]
+- [入口硬编码] → [巡航脚本写死tex/rig路径] → [resolve_asset_files节点化解析] → [workflow只连outputs不写路径]
 
 ## 技能开发
 
+- [巡航入口启动失败] → [Start-Process截断python -c] → [补tools包装脚本] → [长任务入口用脚本文件]
 - [技能文件夹自包含] → [分发部署需打包文件夹，.py散落根目录不便管理] → [adapter改为skills.{id}.{id}加载+__init__.py兼容外部import] → [每个技能=一个文件夹({id}.py+SKILL.md+__init__.py)，可独立打包]
 - [自动巡航测试参数透传失效] → [调用 blender_export_abc 时错将参数名设为 export_path，导致内部降级使用 source_path 推导] → [检查并对齐工作流载荷与原子技能的 parameters 键名] → [组装自动化执行链时，必须严格校验上下游节点约定的输入/输出字段名，避免静默降级]
 - [工作流引用不存在的skill_id] → [旧工作流JSON用短名(master_cleanup)而非全名(maya_master_cleanup)] → [全量审计修复为正确的skill_id] → [工作流JSON中的skill_id必须与SKILL.md中声明的skill_id完全一致，不能省略前缀]
 - [技能审计失配] → [回执仍用旧短名和自定义路径key] → [统一skill_id与output_path/report_path] → [改skill输出前必须同步workflow模板]
 - [技能契约漂移] → [frontmatter旧类型] → [统一枚举] → [交付前跑扫描]
 - [模板未解析] → [replace回归成非法路径] → [加扫描] → [跨段模板进门禁]
+- [节点输出漂移] → [业务字段塞outputs顶层] → [只准三键] → [特殊参数走outputs.result]
 
 ## 编码规范
 
@@ -63,3 +76,4 @@
 
 - [文档权威漂移] → [历史方案与现契约并存] → [先分权威/专项/历史/归档] → [整理前必须定唯一真相源]
 - [专项文档过期] → [重构后旧链路残留] → [重写权威段落] → [bak归档不当现行规范]
+- [归档误用] → [历史文档混在主目录] → [移入archive并写索引] → [主docs只放现行契约]

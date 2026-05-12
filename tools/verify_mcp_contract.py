@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import ast
 import pathlib
 import re
 import sys
@@ -14,6 +15,7 @@ import yaml
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+ALLOWED_RECEIPT_OUTPUT_KEYS = {"output_path", "report_path", "result"}
 
 
 def _read_text(path: pathlib.Path) -> str:
@@ -64,7 +66,17 @@ def _resolve_template_vars(params: dict, outputs: dict, extra_params: dict, conf
                 return None, False
             step_outputs = outputs.get(keys[0], {})
             field = ".".join(keys[1:])
-            return (step_outputs[field], True) if field in step_outputs else (None, False)
+            if isinstance(step_outputs, dict) and field in step_outputs:
+                return step_outputs[field], True
+            curr = step_outputs
+            for key in keys[1:]:
+                if isinstance(curr, dict) and key in curr:
+                    curr = curr[key]
+                elif isinstance(curr, list) and key.isdigit() and int(key) < len(curr):
+                    curr = curr[int(key)]
+                else:
+                    return None, False
+            return curr, True
         if kind == "input":
             curr = extra_params
         else:
@@ -136,10 +148,14 @@ def check_template_replace(errors: list[str]) -> None:
         "scene": "{{outputs.export_abc.output_path | replace('.abc', '.ma')}}",
         "mixed": "out={{outputs.export_abc.output_path | replace(\".abc\", \".json\")}}",
         "stem": "{{input.source_path | stem}}",
+        "nested": "{{outputs.resolve_files.result.rig_path | stem}}",
     }
     resolved = _resolve_template_vars(
         params,
-        {"export_abc": {"output_path": "Y:/run/test.abc"}},
+        {
+            "export_abc": {"output_path": "Y:/run/test.abc"},
+            "resolve_files": {"result": {"rig_path": "Y:/run/rig_scene.ma"}},
+        },
         {"source_path": "Y:/run/asset.blend"},
         {},
     )
@@ -148,6 +164,7 @@ def check_template_replace(errors: list[str]) -> None:
         "scene": "Y:/run/test.ma",
         "mixed": "out=Y:/run/test.json",
         "stem": "asset",
+        "nested": "rig_scene",
     }
     if resolved != expected:
         errors.append(f"模板 replace 解析失败: {resolved!r}")
@@ -231,6 +248,13 @@ def check_workflow_internal_outputs(errors: list[str]) -> None:
         wf_path = ROOT / "workflows" / wf_name
         workflow = json.loads(_read_text(wf_path))
         steps = {step.get("step_id"): step for step in workflow.get("steps", [])}
+        if wf_name in ("tex_to_rig_verify.json", "tex_to_rig_verify_and_sync.json"):
+            first = (workflow.get("steps") or [{}])[0]
+            if first.get("skill_id") != "resolve_asset_files":
+                errors.append(f"{wf_name}: 主入口第一步必须是 resolve_asset_files")
+            wf_text = json.dumps(workflow, ensure_ascii=False)
+            if "{{input.rig_path" in wf_text:
+                errors.append(f"{wf_name}: 不应直接依赖 input.rig_path，必须走 resolve_files 输出")
         for step_id, (param_name, suffix) in required.items():
             step = steps.get(step_id)
             if not step:
@@ -301,6 +325,49 @@ def check_default_output_fallbacks(errors: list[str]) -> None:
                 errors.append(f"{skill_id}: 默认输出仍可能回退源目录/发布目录: {needle}")
 
 
+def _call_name(node: ast.AST) -> str:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    return ""
+
+
+def check_receipt_output_contract(errors: list[str]) -> None:
+    """所有 skill receipt.outputs 顶层只能是 output_path/report_path/result。"""
+    for path in sorted((ROOT / "skills").glob("*/*.py")):
+        try:
+            tree = ast.parse(_read_text(path))
+        except SyntaxError as exc:
+            errors.append(f"{path.relative_to(ROOT)}: Python 解析失败: {exc}")
+            continue
+
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or _call_name(node.func) != "make_receipt":
+                continue
+            output_kw = next((kw for kw in node.keywords if kw.arg == "outputs"), None)
+            if output_kw is None:
+                continue
+            rel = path.relative_to(ROOT)
+            value = output_kw.value
+            if not isinstance(value, ast.Dict):
+                errors.append(
+                    f"{rel}:{node.lineno}: outputs 必须是字面量 dict，"
+                    "特殊结构化数据放入 {'result': {...}}"
+                )
+                continue
+
+            for key in value.keys:
+                if not isinstance(key, ast.Constant) or not isinstance(key.value, str):
+                    errors.append(f"{rel}:{node.lineno}: outputs 存在动态 key")
+                    continue
+                if key.value not in ALLOWED_RECEIPT_OUTPUT_KEYS:
+                    errors.append(
+                        f"{rel}:{node.lineno}: 非法 outputs 顶层字段 {key.value!r}，"
+                        "只允许 output_path/report_path/result"
+                    )
+
+
 def main() -> int:
     errors: list[str] = []
     check_workflow_params(errors)
@@ -309,6 +376,7 @@ def main() -> int:
     check_workflow_resume_order(errors)
     check_workflow_internal_outputs(errors)
     check_default_output_fallbacks(errors)
+    check_receipt_output_contract(errors)
     if errors:
         print("[FAIL] MCP 契约扫描发现问题:")
         for item in errors:

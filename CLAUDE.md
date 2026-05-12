@@ -169,7 +169,10 @@ def execute(payload: dict) -> dict:
 
 ## 在本仓库里工作的约定
 
-- "看/改当前场景"类请求优先用 foreground 模式（`execution_mode: "foreground"`）—— 会接到用户当前活跃的 Maya/Blender 端口（7001-7010）。background 模式留给批处理。
+- "看/改当前场景"类请求必须走 `cgi-pipeline` MCP 的 `maya_exec_code` 或具名 `maya_` Tool，参数必须包含 `execution_mode: "foreground"` 和用户指定的 `foreground_port`。background 模式只用于批处理。
+- 禁止使用旧 `maya-live`、默认 commandPort 或省略 `foreground_port` 去连 Maya。多 Maya 会话同时存在时，省略端口会被 MCP 返回 `NEEDS_ATTENTION` 拦截；端口未知时先调用 `maya_list_foreground_sessions` 或询问用户。
+- 通过原始 Python MCP Client 手动 `call_tool` 时，FastMCP 入参需要外层 `{"params": {...}}`；不要把 `code/execution_mode/foreground_port` 平铺到顶层。
+- Maya 端口推荐开启命令：`cmds.commandPort(name=":7009", sourceType="python", echoOutput=True)`；调试/长任务必须保留 `echoOutput=True`，不要关输出。
 - 用户说"写一个新技能"时**不要直接写代码**。打开 `skills/build_pipeline_skill/SKILL.md` 走构建协议（意图捕获 → 蓝图 → 脚手架 → 注册）。
 - 技能代码放在各自文件夹里（`skills/{id}/{id}.py`），不能放 `skills/` 根目录。`__init__.py` 负责 re-export `execute`。
 - `exec_code` / `blender_exec_code` 传了 `source_path` 时，Celery 会**自动打开文件**再跑代码 —— 别在代码片段里再调 `cmds.file(open=...)`。

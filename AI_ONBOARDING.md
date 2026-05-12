@@ -32,21 +32,32 @@
 
 ## 🗺️ 系统架构速览 (Architecture Overview)
 
-- **双 MCP 调度层 (MCP Servers)**：位于 `mcp_server/`。这是你目前连接的地方。系统暴露了两个 MCP 服务：
-  - **`cgi-pipeline` (管线调度)**：实现了**全自动技能发现机制**。所有 `skills/` 下的合规技能，会在运行时自动生成强类型的 Pydantic Input Model 并作为独立的 MCP Tool 暴露。不论是后台还是前台任务均经由它分发并落盘审计（Audit）。
-  - **`maya-live` (实时交互)**：提供纯代码直连，通过 `CommandPort` 暴露极速 REPL 能力，用于临时测试代码或获取场景状态。
+- **MCP 调度层 (MCP Server)**：位于 `mcp_server/`。系统通过 **`cgi-pipeline`** 实现全自动技能发现。所有 `skills/` 下的合规技能，会在运行时自动生成强类型的 Pydantic Input Model 并作为独立的 MCP Tool 暴露。不论是后台还是前台任务均经由它分发并落盘审计（Audit）。
 - **业务层 (Skills)**：位于 `skills/`。它是管线的核心资产库。所有的业务逻辑被彻底拆解成单个功能的文件夹（如 `maya_clean_skinweights`）。
 - **执行层 (Workers)**：后台的 Maya 和 Blender 以后台常驻进程（Warm Workers）形式通过 Celery 管理。前台执行则通过 Socket 直连。
 - **配置层 (Config & Registry)**：位于 `config/` 和 `core/skill_registry.py`。项目相关的路径全靠 `load_project_config(project)` 解析，切勿硬编码。
 
 ---
 
-## 🎮 前台无感连接优先原则 (Foreground-First Strategy)
+## 🎮 前台显式端口优先原则 (Foreground-First Strategy)
 
 当用户要求你“诊断场景”、“查看状态”、“修改当前文件”或“执行一段测试代码”时：
-**请默认在 MCP 工具的参数中使用 `execution_mode: "foreground"`。**
-- 本项目内置了“零配置 (Zero-Config)”无感通信通道，底层会自动嗅探并连接活跃的 Maya/Blender 前台端口（如 7001-7010），你**不需要**关心底层通信和端口配置。
+**请默认使用 `cgi-pipeline` MCP 的 `maya_exec_code` 或具名 `maya_` Tool，并在参数中同时传 `execution_mode: "foreground"` 和用户指定的 `foreground_port`。**
+- 禁止使用旧 `maya-live`、默认 commandPort 或省略端口去连 Maya。多 Maya 会话同时存在时，省略端口会误连或卡住，MCP 会返回 `NEEDS_ATTENTION` 并列出活动端口。
+- 如果端口未知，先调用 `maya_list_foreground_sessions` 查看 7001-7010 的活动端口，或询问用户当前目标端口。
+- 通过原始 Python MCP Client 手动 `call_tool` 时，FastMCP 入参需要外层 `{"params": {...}}`；不要把 `code/execution_mode/foreground_port` 平铺到顶层。
 - 除非用户明确要求“跑大批量处理任务”或指定使用 `background`，否则请优先使用前台模式。这不但响应极快，还能让用户在自己的软件界面里直观地看到你做的任何修改。
+
+Maya 端推荐开启方式：
+
+```python
+import maya.cmds as cmds
+
+if cmds.commandPort(":7009", q=True):
+    cmds.commandPort(name=":7009", close=True)
+
+cmds.commandPort(name=":7009", sourceType="python", echoOutput=True)
+```
 
 ---
 

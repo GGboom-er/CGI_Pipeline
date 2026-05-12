@@ -13,6 +13,7 @@ from core.receipt import make_receipt
 from core.asset_info_schema import compare
 from core.compare_result_io import (
     auto_label,
+    build_compare_report_sections,
     generate_report,
     load_info_from_path,
     resolve_compare_result_path,
@@ -97,6 +98,9 @@ def execute(payload: dict) -> dict:
     md = generate_report(
         report, input_a, input_b, label_a, label_b, source_a, source_b
     )
+    report_sections = build_compare_report_sections(
+        report, input_a, input_b, label_a, label_b, source_a, source_b
+    )
 
     sub_steps.append({'name': '生成报告', 'elapsed_sec': round(time.time() - t_rpt, 3)})
 
@@ -131,6 +135,7 @@ def execute(payload: dict) -> dict:
             'output_path': output_path,
         },
         report_content=md,
+        report_sections=report_sections,
     )
     return receipt
 

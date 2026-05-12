@@ -32,6 +32,12 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _candidate_text(value: Any) -> str:
+    if isinstance(value, list):
+        return ";".join(str(item).strip() for item in value if str(item).strip())
+    return _text(value)
+
+
 def parse_sync_inputs(payload: dict) -> SyncInputs:
     params = payload.get("parameters") or {}
     if not isinstance(params, dict):
@@ -40,7 +46,7 @@ def parse_sync_inputs(payload: dict) -> SyncInputs:
         compare_result_path=_text(params.get("compare_result")),
         source_abc=_text(params.get("source_abc") or params.get("abc_path")),
         source_info=_text(params.get("source_info") or params.get("tex_json")),
-        cache_group=_text(params.get("cache_group")) or "cache",
+        cache_group=_candidate_text(params.get("cache_group")) or "cache",
         rig_path=_text(payload.get("source_path")),
         project=_text(payload.get("project") or params.get("project")),
     )
@@ -166,3 +172,87 @@ def format_action_summary(counts: dict[str, int]) -> str:
         f"UNPAIRED: {counts.get('UNPAIRED', 0)} | "
         f"target_only: {counts.get('target_only', 0)}"
     )
+
+
+def _action_label(action: str) -> str:
+    try:
+        from core.report_labels import label
+        return label("sync_actions", action)
+    except Exception:
+        return action
+
+
+def _short_dag(dag: str) -> str:
+    text = str(dag or "")
+    parts = text.strip("|").split("|")
+    return parts[-1] if parts else text
+
+
+def _group_item(group: dict) -> dict:
+    abc_dags = group.get("abc_dags") or []
+    rig_dags = group.get("rig_dags") or []
+    return {
+        "group": group.get("group_id", ""),
+        "source": ", ".join(_short_dag(x) for x in abc_dags[:3]),
+        "target": ", ".join(_short_dag(x) for x in rig_dags[:3]),
+        "layer": group.get("layer_name", ""),
+        "reason": group.get("reason", ""),
+    }
+
+
+def build_sync_report_sections(report: dict, counts: dict[str, int],
+                               compare_result_path: str = "",
+                               source_abc: str = "",
+                               source_info: str = "",
+                               cache_group: str = "") -> list[dict]:
+    """把 sync 执行指令转成统一报告可渲染的结构化折叠段。"""
+    groups = report.get("pairing_groups") or []
+    target_only = report.get("target_only_dags") or []
+    groups_by_action = {action: [] for action in VALID_GROUP_ACTIONS}
+    for group in groups:
+        action = group.get("action")
+        if action in groups_by_action:
+            groups_by_action[action].append(group)
+
+    overview = [
+        "| 动作 | 数量 |",
+        "|---|---|",
+    ]
+    for action in VALID_GROUP_ACTIONS:
+        overview.append(f"| {_action_label(action)} | {counts.get(action, 0)} |")
+    overview.append(f"| {_action_label('target_only')} | {counts.get('target_only', 0)} |")
+
+    source_lines = [
+        f"- **compare_result**: `{compare_result_path or '-'}`",
+        f"- **source_abc**: `{source_abc or '-'}`",
+        f"- **source_info**: `{source_info or '-'}`",
+        f"- **cache_group**: `{cache_group or '-'}`",
+    ]
+
+    sections = [
+        {
+            "title": "同步来源",
+            "summary": f"groups={counts.get('groups', len(groups))} target_only={counts.get('target_only', 0)}",
+            "content": "\n".join(source_lines),
+        },
+        {
+            "title": "同步动作概览",
+            "summary": format_action_summary(counts),
+            "content": "\n".join(overview),
+        },
+    ]
+
+    for action in VALID_GROUP_ACTIONS:
+        action_groups = groups_by_action.get(action, [])
+        sections.append({
+            "title": _action_label(action),
+            "summary": f"{len(action_groups)} 组",
+            "items": [_group_item(group) for group in action_groups],
+        })
+
+    sections.append({
+        "title": _action_label("target_only"),
+        "summary": f"{len(target_only)} 项",
+        "items": [{"target": _short_dag(dag), "dag": dag, "action": "原位保留"} for dag in target_only],
+    })
+    return sections

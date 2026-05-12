@@ -12,7 +12,7 @@ import maya.cmds as cmds
 from core.receipt import make_receipt
 from core.path_guard import is_protected_path
 from core.run_archive import create_run_dir
-from dccs.maya.asset_info_collector import collect_scene_info
+from dccs.maya.asset_info_collector import collect_scene_info, normalize_cache_group_param
 
 
 def _resolve_info_path(payload, params):
@@ -51,7 +51,7 @@ def execute(payload: dict) -> dict:
     t0 = time.time()
     params = payload.get('parameters', {})
     info_path = _resolve_info_path(payload, params)
-    cache_group = (params.get('cache_group') or '').strip()
+    cache_group = normalize_cache_group_param(params.get('cache_group'))
 
     if not info_path:
         return make_receipt('maya_build_asset_info', 'ERROR', t0,

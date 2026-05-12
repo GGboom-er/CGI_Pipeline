@@ -8,31 +8,23 @@ import maya.cmds as cmds
 from core.asset_info_schema import make_empty_info, make_mesh_entry
 
 
+def normalize_cache_group_param(cache_group):
+    """把配置候选根统一成分号分隔字符串。"""
+    if isinstance(cache_group, (list, tuple)):
+        return ";".join(str(item).strip() for item in cache_group if str(item).strip())
+    return str(cache_group or "").strip()
+
+
 def _as_long_mesh_shape(node_or_plug):
     """将节点或 plug 解析为唯一的 long mesh shape；解析不到唯一值时返回 None。"""
-    node = str(node_or_plug).split('.', 1)[0]
+    text = str(node_or_plug or "").strip()
+    if not text:
+        return None
+    node = text.split('.', 1)[0]
+    if not node:
+        return None
     matches = cmds.ls(node, long=True, type='mesh') or []
     return matches[0] if len(matches) == 1 else None
-
-
-def _leaf(node_path):
-    return str(node_path).split('|')[-1]
-
-
-def _expected_shape_name(transform):
-    return _leaf(transform) + "Shape"
-
-
-def _expected_orig_name(transform):
-    return _leaf(transform) + "ShapeOrig"
-
-
-def _same_parent_shape(candidate, transform):
-    if not candidate or not cmds.objExists(candidate):
-        return False
-    candidate_long = (cmds.ls(candidate, long=True) or [candidate])[0]
-    parent = cmds.listRelatives(candidate_long, parent=True, fullPath=True) or []
-    return bool(parent and parent[0] == transform)
 
 
 def _child_mesh_shapes(transform):
@@ -59,88 +51,134 @@ def mesh_transforms_under(root):
     return sorted(result, key=lambda item: (item.count("|"), item))
 
 
-def _is_standard_mesh_shape(shape_full, transform):
-    shape_long = (cmds.ls(shape_full, long=True) or [shape_full])[0]
-    if not _same_parent_shape(shape_long, transform):
-        return False
-    if cmds.getAttr(shape_long + ".intermediateObject"):
-        return False
-    return _leaf(shape_long) == _expected_shape_name(transform)
+def _unique_mesh_from_plugs(plugs):
+    if not plugs:
+        return None
+    if isinstance(plugs, str):
+        plugs = [plugs]
+    candidates = []
+    for plug in plugs:
+        candidate = _as_long_mesh_shape(plug)
+        if candidate:
+            candidates.append(candidate)
+    candidates = sorted(set(candidates))
+    return candidates[0] if len(candidates) == 1 else None
 
 
-def _is_standard_orig(candidate, transform):
-    """只接受当前 transform 下命名规范的 ShapeOrig 候选。"""
-    if not _same_parent_shape(candidate, transform):
+def _is_intermediate_mesh(candidate):
+    if not candidate or not cmds.objExists(candidate):
         return False
-    candidate_long = (cmds.ls(candidate, long=True) or [candidate])[0]
+    candidate_long = (cmds.ls(candidate, long=True, type="mesh") or [None])[0]
+    if not candidate_long:
+        return False
     if not cmds.getAttr(candidate_long + ".intermediateObject"):
         return False
-    return _leaf(candidate_long) == _expected_orig_name(transform)
+    return True
 
 
-def get_shape_orig(shape_full, transform):
-    """返回 shape_full 对应且唯一有效的 Orig；找不到唯一值时返回 None。"""
-    all_shapes = _child_mesh_shapes(transform)
-    standard_shapes = [
-        s for s in all_shapes
-        if not cmds.getAttr(s + ".intermediateObject")
-    ]
-    if len(standard_shapes) != 1:
-        return None
-    shape_long = (cmds.ls(shape_full, long=True) or [shape_full])[0]
-    if (cmds.ls(standard_shapes[0], long=True) or [standard_shapes[0]])[0] != shape_long:
-        return None
-    if not _is_standard_mesh_shape(shape_long, transform):
-        return None
+def _has_orig_output(candidate):
+    if not candidate or not cmds.objExists(candidate):
+        return False
+    out_mesh = cmds.listConnections(
+        candidate + ".outMesh",
+        source=False,
+        destination=True,
+        skipConversionNodes=True,
+    ) or []
+    world_mesh = cmds.listConnections(
+        candidate + ".worldMesh",
+        source=False,
+        destination=True,
+        skipConversionNodes=True,
+    ) or []
+    return bool(out_mesh or world_mesh)
 
-    official = []
+
+def _orig_from_deformable_shape(shape_full):
     try:
         orig_plugs = cmds.deformableShape(shape_full, originalGeometry=True) or []
     except Exception:
-        orig_plugs = []
-    if isinstance(orig_plugs, str):
-        orig_plugs = [orig_plugs]
-    for plug in orig_plugs:
-        candidate = _as_long_mesh_shape(plug)
-        if _is_standard_orig(candidate, transform):
-            official.append(candidate)
-    official = sorted(set(official))
-    if len(official) == 1:
-        return official[0]
-    if len(official) > 1:
+        return None
+    return _unique_mesh_from_plugs(orig_plugs)
+
+
+def _orig_from_tweak_input(shape_full):
+    try:
+        tweaks = cmds.listConnections(f"{shape_full}.tweakLocation") or []
+    except Exception:
+        return None
+    if not tweaks:
         return None
 
-    intermediates = [
-        s for s in all_shapes
-        if _is_standard_orig(s, transform)
-    ]
-    candidates = [
-        s for s in intermediates
-        if cmds.listConnections(
-            s + ".outMesh",
-            source=False,
-            destination=True,
-            skipConversionNodes=True,
-        )
-    ]
+    orig_plugs = []
+    for tweak in tweaks:
+        try:
+            plugs = cmds.listConnections(
+                f"{tweak}.input[0].inputGeometry",
+                destination=False,
+                source=True,
+                plugs=True,
+            ) or []
+        except Exception:
+            continue
+        orig_plugs.extend(plugs)
+    return _unique_mesh_from_plugs(orig_plugs)
+
+
+def _orig_from_connected_intermediate(transform):
+    candidates = []
+    for shape in _child_mesh_shapes(transform):
+        shape_long = (cmds.ls(shape, long=True, type="mesh") or [shape])[0]
+        if _is_intermediate_mesh(shape_long) and _has_orig_output(shape_long):
+            candidates.append(shape_long)
+    candidates = sorted(set(candidates))
     return candidates[0] if len(candidates) == 1 else None
+
+
+def get_shape_orig(shape_full, transform):
+    """返回 shape_full 对应且唯一有效的 Orig；找不到唯一值时返回 None。
+
+    Orig 身份只来自 Maya 图关系，不根据 ShapeOrig 名称或数字后缀判断。
+    """
+    all_shapes = _child_mesh_shapes(transform)
+    not_intermediate_shapes = [
+        s for s in all_shapes
+        if not cmds.getAttr(s + ".intermediateObject")
+    ]
+    if len(not_intermediate_shapes) != 1:
+        return None
+    shape_long = (cmds.ls(shape_full, long=True) or [shape_full])[0]
+    if (cmds.ls(not_intermediate_shapes[0], long=True) or [not_intermediate_shapes[0]])[0] != shape_long:
+        return None
+
+    for finder in (
+        lambda: _orig_from_deformable_shape(shape_long),
+        lambda: _orig_from_tweak_input(shape_long),
+        lambda: _orig_from_connected_intermediate(transform),
+    ):
+        candidate = finder()
+        if candidate:
+            return candidate
+    return None
+
+
+def _cache_group_candidates(cache_group):
+    raw_text = normalize_cache_group_param(cache_group)
+    raw_items = [item.strip() for item in raw_text.split(";") if item.strip()]
+    for raw in raw_items:
+        yield raw
+        leaf = raw.strip('|').split('|')[-1]
+        if leaf and leaf != raw:
+            yield leaf
+        if leaf:
+            yield f"|Group|Geometry|{leaf}"
+            yield f"|Group|{leaf}"
 
 
 def resolve_cache_group(cache_group):
     """按项目配置传入的候选路径查找 Maya 场景中的几何根。"""
-    candidates = []
-    raw = (cache_group or '').strip()
-    if raw:
-        candidates.append(raw)
-        leaf = raw.strip('|').split('|')[-1]
-        if leaf and leaf != raw:
-            candidates.append(leaf)
-        if leaf:
-            candidates.append(f"|Group|Geometry|{leaf}")
-            candidates.append(f"|Group|{leaf}")
-
     seen = set()
-    for candidate in candidates:
+    for candidate in _cache_group_candidates(cache_group):
         if not candidate or candidate in seen:
             continue
         seen.add(candidate)

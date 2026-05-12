@@ -93,7 +93,7 @@ def execute(payload: dict) -> dict:
 
     return make_receipt(
         skill_id='my_skill',
-        status='SUCCESS',              # SUCCESS / ERROR / NEEDS_ATTENTION
+        status='SUCCESS',              # SUCCESS / ERROR / BLOCKED / AUDIT_FAILED
         start_time=t0,                 # 传入 t0，elapsed_min 自动计算
         summary_input='输入描述',       # 如文件名
         summary_action='操作描述',      # 如 "导入 ABC (缩放 100x)"
@@ -217,7 +217,7 @@ maya_execute_chain(source_path="Y:/.../test.ma", project="ysj", asset_name="test
     ])
 
 # 工作流测试
-execute_workflow(workflow_id="blender_to_maya_full_build",
+pipeline_execute_workflow(workflow_id="blender_to_maya_full_build",
     source_path="Y:/.../asset.blend", project="ysj", asset_name="test")
 
 # 查询结果

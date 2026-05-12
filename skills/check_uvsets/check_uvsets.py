@@ -128,8 +128,10 @@ def execute(payload):
         summary_label='mesh',
         items=items,
         outputs={
-            'total_meshes': total_meshes,
-            'need_cleanup': need_cleanup,
-            'problems': problems,
+            'result': {
+                'total_meshes': total_meshes,
+                'need_cleanup': need_cleanup,
+                'problems': problems,
+            },
         },
     )

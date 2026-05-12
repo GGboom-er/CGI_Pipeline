@@ -84,9 +84,11 @@ def execute(payload: dict) -> dict:
         items=copied + skipped,
         outputs={
             'output_path': destination,
-            'total_bytes': total_bytes,
-            'copied_count': len(copied),
-            'skipped_count': len(skipped),
+            'result': {
+                'total_bytes': total_bytes,
+                'copied_count': len(copied),
+                'skipped_count': len(skipped),
+            },
         },
     )
 

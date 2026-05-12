@@ -114,7 +114,7 @@ def execute(payload: dict) -> dict:
             summary_count=len(meshes),
             summary_label='mesh',
             items=items,
-            outputs={'output_path': abc_path, 'top_nodes': top_nodes},
+            outputs={'output_path': abc_path, 'result': {'top_nodes': top_nodes}},
         )
     finally:
         cmds.undoInfo(closeChunk=True)

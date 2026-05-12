@@ -224,7 +224,7 @@ def execute(payload: dict) -> dict:
             summary_count=len(built),
             summary_label='mesh',
             items=items,
-            outputs={'built_meshes': built},
+            outputs={'result': {'built_meshes': built}},
         )
 
     except Exception as e:

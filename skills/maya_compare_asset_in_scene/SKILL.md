@@ -57,7 +57,7 @@ category: "inspect"
 - 读取 `input_source/source_abc/source_info`。
 - 从当前 Maya 场景的 `cache_group` 采集 target rig ShapeOrig 几何。
 - 调用 `core.asset_info_schema.compare(source, target)`。
-- 写出标准 `compare_result.v1` JSON，并通过 `report_content` 返回 Markdown 摘要。
+- 写出标准 `compare_result.v1` JSON，并通过 `report_sections` 返回结构化折叠章节。
 
 ### 🔵 核心代码与扩展 (IMPLEMENTATION)
 - `execute()` 位于 `skills/maya_compare_asset_in_scene/maya_compare_asset_in_scene.py`。
@@ -78,5 +78,8 @@ category: "inspect"
 receipt.outputs:
 - `output_path` (str): `compare_result.json` 绝对路径。
 
+receipt.report_sections:
+- 当前对比的结构化折叠章节：对比来源、对比概览、通过配对、几何差异、源侧独有、目标独有。
+
 receipt.report_content:
-- 当前对比的 Markdown 摘要，由任务报告统一收纳。
+- 当前对比的旧 Markdown 摘要，保留用于兼容；新报告优先消费 `report_sections`。

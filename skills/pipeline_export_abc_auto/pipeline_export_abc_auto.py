@@ -131,6 +131,14 @@ def execute(payload: dict) -> dict:
 
         status = result.get('status', inner_result.get('status', 'SUCCESS'))
         inner_summary = inner_result.get('summary', {})
+        inner_outputs = inner_result.get('outputs', {}) or {}
+        routed_result = {
+            'dcc_type': dcc_type,
+            'routed_skill': skill_id,
+            'inner_status': inner_result.get('status', status),
+        }
+        if isinstance(inner_outputs.get('result'), dict):
+            routed_result['child_result'] = inner_outputs.get('result')
         return make_receipt(
             skill_id='pipeline_export_abc_auto',
             status=status,
@@ -139,14 +147,18 @@ def execute(payload: dict) -> dict:
             summary_action=f'自动路由 → {dcc_type} ABC 导出',
             summary_count=inner_summary.get('output_count', 0),
             summary_label=inner_summary.get('output_label', ''),
-            outputs=inner_result.get('outputs', {}),
+            outputs={
+                'output_path': inner_outputs.get('output_path'),
+                'report_path': inner_outputs.get('report_path'),
+                'result': routed_result,
+            },
         )
 
     except Exception as e:
         import traceback
         return make_receipt('pipeline_export_abc_auto', 'ERROR', t0,
                             error=f'{type(e).__name__}: {e}',
-                            outputs={'traceback': traceback.format_exc()})
+                            recovery_hint=traceback.format_exc())
     finally:
         if worker:
             try:

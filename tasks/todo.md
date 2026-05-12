@@ -49,7 +49,8 @@
 - [x] 2026-05-12 skill 拆解 04：完成 ABC 导出类默认输出收紧，`blender_export_abc` / `maya_export_abc` / `pipeline_export_abc_auto` 只写任务沙盒 `.info`
 - [x] 2026-05-12 skill 拆解 05：完成材质采集链路收紧，`blender_extract_materials` 只写任务沙盒 `.info`
 - [x] 2026-05-12 docs 文档治理审查：完成 `docs` 内容盘点、冲突分类和整理方案
-- [ ] docs 文档治理落地：归档备份/临时代码、合并权威规范、同步 operator/README/AGENTS
+- [x] 2026-05-13 docs 文档治理落地：已备份 `docs/` 到 `backups/docs_cleanup_20260513_010733`，归档历史方案/备份/临时代码，主 `docs/` 只保留权威规范、专项拆解和参考入口
+- [x] 2026-05-13 docs 治理验证：MCP 契约扫描、对比/同步契约、沙盒、报告、workflow 模板变量等轻量测试通过
 - [x] 同步 MCP Tool 描述、SKILL.md 与 `AGENTS.md` 中的 `.info` 路径规范
 - [x] 2026-05-12 文档同步：README、AGENTS、运行时契约、对比/拼装专项文档已对齐场景内 compare + compare_result 驱动 sync
 - [ ] 实现 `publish_asset` 技能（标准化发布流程：版本递增 + 拷贝到 pub 目录 + 元数据写入）
@@ -68,3 +69,12 @@
 - [x] 2026-05-12 对比/拼装真实 DCC 验证：Maya/Blender 巡航 PASS，post 阻断差异 0，沙盒升版本保存
 - [x] 对齐 `pipeline_manifest.json` 中 Ai_pub 表述与当前任务沙盒事实
 - [x] 2026-05-12 MCP 前台多端口安全门：foreground 调用必须显式传 `foreground_port`，省略端口时返回可用端口列表并阻止误连。
+- [x] 2026-05-12 MCP 前台入口文档固化：README、AGENTS、CLAUDE、AI_ONBOARDING、operator skill 与 schema 描述均声明当前 Maya 场景必须走 `maya_exec_code`/具名 Tool + 显式端口。
+- [x] 2026-05-12 ciweiguai + MaYouB 巡航兼容：报告四字中文映射、rig 几何根候选解析、Orig 图关系识别已验证。
+- [x] 2026-05-12 巡航最终报告补齐：唯一 MD 报告包含每步 skill 逻辑、状态、耗时、summary、输出路径与关键明细。
+- [x] 2026-05-12 运行时报告落地：调度层实时写 `REPORT.md`，step start/finish 通过 block upsert 更新同一报告。
+- [x] 2026-05-12 复杂技能报告结构化：对比/拼装返回 `receipt.report_sections`，统一报告按折叠章节展示明细。
+- [x] 2026-05-12 真实巡航复测：ciweiguai 与 maYouB 全链路 PASS，另用 maYouB 只读对比验证 `REPORT.md` 结构化折叠章节落地。
+- [x] 2026-05-13 运行时报告修正：移除 HTML 折叠展示与重复旧报告块，文件流转表补齐节点、参数、输入、输出、状态、耗时。
+- [x] 2026-05-13 workflow 入口节点化：新增 `resolve_asset_files`，`tex_to_rig_verify*` 支持只传资产名自动解析 tex/rig 或显式路径透传。
+- [x] 2026-05-13 skill SOP 输出契约：所有 receipt.outputs 顶层统一为 `output_path/report_path/result`，特殊参数走 `outputs.result.xxx`，并加入静态门禁。

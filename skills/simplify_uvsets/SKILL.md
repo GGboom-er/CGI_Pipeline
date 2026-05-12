@@ -11,15 +11,9 @@ parameters:
 io:
   inputs:
   outputs:
-    - name: "cleaned"
-      type: "int"
-      label: "已清理数"
-    - name: "skipped"
-      type: "int"
-      label: "跳过数"
-    - name: "errors"
+    - name: "result"
       type: "json"
-      label: "失败列表"
+      label: "UV 精简结构化结果"
 category: "process"
 ---
 
@@ -38,3 +32,9 @@ category: "process"
 
 ### 🟡 参数规则 (PARAMETERS)
 - `cache_group` (string): 选填 | `cache` | 需要执行化繁为简操作的目标对象组群名。
+
+### 🟣 输出字段 (OUTPUTS)
+- `outputs.result.cleaned` (int): 完成重度清理的 mesh 数。
+- `outputs.result.fast_passed` (int): 已符合规范并快速通过的 mesh 数。
+- `outputs.result.skipped` (int): 因无 shape、引用或锁定跳过的 mesh 数。
+- `outputs.result.errors` (list): 单 mesh 清理失败清单。

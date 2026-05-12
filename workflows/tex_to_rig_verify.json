@@ -1,24 +1,30 @@
 {
   "workflow_id": "tex_to_rig_verify",
   "name": "贴图资产 → 绑定校验",
-  "description": "Blender 导出 source ABC → Maya 打开 rig 一次并场景内采集 target 信息 → 写出 compare_result。",
+  "description": "解析资产 tex/rig 文件（支持只传资产名或显式路径）→ Blender 导出 source ABC → Maya 打开 rig 一次并场景内采集 target 信息 → 写出 compare_result。",
   "steps": [
+    {
+      "step_id": "resolve_files",
+      "skill_id": "resolve_asset_files",
+      "parameters": {}
+    },
     {
       "step_id": "export_abc",
       "skill_id": "blender_export_abc",
+      "source_path": "{{outputs.resolve_files.result.source_path}}",
       "parameters": {
-        "abc_path": "{{input.info_dir}}/{{input.source_path | stem}}.abc",
+        "abc_path": "{{input.info_dir}}/{{outputs.resolve_files.result.source_stem}}.abc",
         "cache_group": "{{config.stages.tex.geom_roots.0}}"
       }
     },
     {
       "step_id": "compare",
       "skill_id": "maya_compare_asset_in_scene",
-      "source_path": "{{input.rig_path}}",
+      "source_path": "{{outputs.resolve_files.result.rig_path}}",
       "parameters": {
         "input_source": "{{outputs.export_abc.output_path}}",
-        "output_path": "{{input.info_dir}}/{{input.source_path | stem}}_vs_{{input.rig_path | stem}}_compare_result.json",
-        "cache_group": "{{config.stages.rig.geom_roots.0}}",
+        "output_path": "{{input.info_dir}}/{{outputs.resolve_files.result.source_stem}}_vs_{{outputs.resolve_files.result.rig_stem}}_compare_result.json",
+        "cache_group": "{{config.stages.rig.geom_roots.0}};{{config.stages.rig.geom_roots.1}}",
         "label_source": "tex",
         "label_target": "rig"
       }

@@ -12,13 +12,14 @@ import maya.cmds as cmds
 from core.asset_info_schema import compare
 from core.compare_result_io import (
     auto_label,
+    build_compare_report_sections,
     generate_report,
     load_info_from_path,
     resolve_compare_result_path,
     write_compare_result,
 )
 from core.receipt import make_receipt
-from dccs.maya.asset_info_collector import collect_scene_info
+from dccs.maya.asset_info_collector import collect_scene_info, normalize_cache_group_param
 
 
 def _resolve_input_source(params):
@@ -36,7 +37,7 @@ def execute(payload: dict) -> dict:
     params = payload.get('parameters', {}) or {}
 
     input_source = _resolve_input_source(params)
-    cache_group = (params.get('cache_group') or '').strip()
+    cache_group = normalize_cache_group_param(params.get('cache_group'))
     label_source = (params.get('label_source') or '').strip()
     label_target = (params.get('label_target') or 'rig').strip()
 
@@ -115,6 +116,12 @@ def execute(payload: dict) -> dict:
         source_info.get('source_file', input_source),
         target_info.get('source_file', target_scene),
     )
+    report_sections = build_compare_report_sections(
+        report, input_source, target_scene,
+        label_source, label_target,
+        source_info.get('source_file', input_source),
+        target_info.get('source_file', target_scene),
+    )
 
     total = report.get('total_issues', 0)
     paired = len(report.get('paired', []))
@@ -133,4 +140,5 @@ def execute(payload: dict) -> dict:
         summary_label='差异',
         outputs={'output_path': output_path},
         report_content=md,
+        report_sections=report_sections,
     )

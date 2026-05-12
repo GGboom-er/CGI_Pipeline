@@ -54,7 +54,7 @@ category: "sync"
 
 ### 🟢 核心逻辑 (CORE LOGIC)
 - **Phase 1**: target `cache` 组全员加 `RIG_` 前缀，避免与新 mesh 命名冲突。
-- **Phase 2**: 读取 `compare_result.json` 作为同步指令；同步摘要通过 `receipt.report_content` 进入统一任务 MD，不额外落散报告。
+- **Phase 2**: 读取 `compare_result.json` 作为同步指令；同步摘要通过 `receipt.report_sections` 进入统一任务 MD，不额外落散报告。
 - **Phase 3**: 按 `pairing_groups[].action` 分发（见 `core.asset_info_schema.compare()` 契约）：
   - `IDENTICAL` → fast path：搬运 target rig mesh 到新 cache 对应层级，不改坐标
   - `ORIG_INJECT` → fast path：搬运后注入 source 坐标（点数/点序一致）
@@ -85,10 +85,11 @@ category: "sync"
 receipt.outputs:
 - `{}`：本技能不把统计塞进 outputs，避免下游把统计误当机器产物。
 
-receipt.summary / receipt.items / receipt.report_content:
+receipt.summary / receipt.items / receipt.report_sections / receipt.report_content:
 - `summary.action`: 记录 `IDENTICAL / ORIG_INJECT / PAIRED / UNPAIRED / target_only` 数量。
 - `items[]`: 记录主要执行动作、降级原因与异常引用提示，自动截断到统一上限。
-- `report_content`: 前置 compare_result 的同步摘要，由统一任务 MD 收纳；不额外落散报告。
+- `report_sections`: 同步来源、同步动作概览、原样搬运、坐标注入、配对重建、新增构建、绑定独有。
+- `report_content`: 旧 Markdown 同步摘要，保留用于兼容；新报告优先消费 `report_sections`。
 
 失败语义:
 - `input_contract` / `input_files` / `compare_result_contract` / `source_load`: 进入 Maya 改写前失败，返回 `ERROR`，不修改场景。

@@ -20,7 +20,7 @@
 
 ### 1.4 路径沙盒与保护 (Path Guard)
 - **绝对只读（第一性原则）**：原始生产环境（如 `X:/Project/ysj/pub/...`）默认被列为受保护路径，**绝对不允许在 X 盘上进行任何增删改操作（写入、覆盖、重命名、删除）**。X 盘路径只能用于**拷贝**和**读取**。
-- **强制沙盒流转**：管线在执行任何任务时，底层引擎 (`core.tasks.py`) 侦测到 X 盘来源后，会自动在项目本地的临时任务区（如 `projects/{project}/{date}_{asset}_{task_id}/`）创建专属沙盒目录，并将所有所需的源文件（`.ma`, `.blend`, `.json` 等）拷贝进去。
+- **强制沙盒流转**：管线在执行任何任务时，底层引擎 (`core.tasks.py`) 会自动在项目本地的临时任务区（如 `projects/{project}/{date}_{asset}/`）创建专属沙盒目录，并将所有所需的源文件（`.ma`, `.blend`, `.json` 等）拷贝进去。`task_id` 只写入审计、`manifest.json` 和 `.info/run_state.json`。
 - **沙盒内闭环计算**：所有的技能处理、生成的新文件、输出的报告全部落在本地任务沙盒目录内。绝对杜绝任何对生产环境的直接修改。直到人工确认后才通过发布流程回写到 X 盘。
 
 ---
@@ -66,9 +66,10 @@ return make_receipt(
 )
 ```
 
-### 3.2 详细信息注入 (`report_content`)
+### 3.2 详细信息注入 (`report_content` / `report_sections`)
 - **注入机制**：如果某技能进行了复杂的分析或大量清理（如 `compare_asset`, `master_cleanup`），该技能需将自带的详细 Markdown 内容传递给 `receipt['report_content']`。
-- **管线装配**：管线核心的 `append_step` 引擎会自动将该 `report_content` 原封不动地内嵌到主报告的 `<details><summary>📋 详细报告</summary>` 中，供用户核对（对账单式体验）。
+- **结构化优先**：新技能或复杂技能优先返回 `receipt['report_sections']`，每个 section 由标题、摘要、items 或 Markdown 内容组成，便于统一报告系统生成结构化详细章节。
+- **管线装配**：管线核心的 `core/task_report_writer.py` 会在 step 生命周期中实时 upsert 对应模块，并将 `report_content` / `report_sections` 收纳进主报告的普通 Markdown 小节中；当 `report_sections` 存在时不再重复渲染旧 `report_content`。
 
 ### 3.3 大数据量防爆机制 (Max Items Limit)
 - **输出截断**：由于场景中可能有几万个模型或垃圾节点，任何通过 MD 生成的数组或列表输出，**必须强制设定最多显示数量（目前定为 `MAX_DETAIL_ITEMS = 20`）**。

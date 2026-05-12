@@ -149,7 +149,7 @@ def execute(payload: dict) -> dict:
             status='SUCCESS',
             start_time=t0,
             summary_action=f"查询对象 {object_name}",
-            outputs=info,
+            outputs={'result': info},
             items=items,
             report_content=f"对象: {object_name}\n类型: {node_type}"
         )

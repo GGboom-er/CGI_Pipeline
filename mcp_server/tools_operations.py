@@ -4,6 +4,7 @@
 
 import sys
 import os
+import socket
 from pathlib import Path
 
 from mcp_server.models import (
@@ -30,6 +31,35 @@ from mcp_server.internals import (
 from core.skill_registry import get_all_skills, get_skill_map
 
 
+def _scan_foreground_ports():
+    """扫描本机活跃 Maya commandPort，供显式端口提示使用。"""
+    active_ports = []
+    for port in range(7001, 7011):
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(0.2)
+                if s.connect_ex(('127.0.0.1', port)) == 0:
+                    active_ports.append(port)
+        except OSError:
+            pass
+    return active_ports
+
+
+def _require_explicit_foreground_port(params, tool_name):
+    """foreground 模式必须显式传端口，避免多 Maya 实例时误连默认端口。"""
+    if getattr(params, 'execution_mode', 'background') != 'foreground':
+        return None
+    if 'foreground_port' in getattr(params, 'model_fields_set', set()):
+        return None
+    return {
+        'status': 'NEEDS_ATTENTION',
+        'tool': tool_name,
+        'error': 'foreground 模式必须显式传 foreground_port，避免多 Maya commandPort 会话时误连。',
+        'active_ports': _scan_foreground_ports(),
+        'recovery_hint': '先用 maya_list_foreground_sessions 确认端口，再显式传 foreground_port。Maya 端建议开启：cmds.commandPort(name=":7009", sourceType="python", echoOutput=True)',
+    }
+
+
 def register_operation_tools(mcp):
     """将所有操作类 Tools 注册到 MCP Server 实例"""
 
@@ -53,6 +83,10 @@ def register_operation_tools(mcp):
         # 闭包捕获，避免循环变量泄漏
         def make_tool_func(sid, s_desc):
             async def dynamic_tool(params: InputModel) -> dict:
+                guard = _require_explicit_foreground_port(params, sid)
+                if guard:
+                    return guard
+
                 # 提取 parameters (排除 _SkillInput 的基础字段)
                 raw_params = params.model_dump()
                 p_project = raw_params.pop('project', 'default')
@@ -99,6 +133,10 @@ def register_operation_tools(mcp):
         用 maya_list_skills 查看所有可用 skill_id 及其参数。
         """
         from mcp_server.internals import _SKILL_MAP
+        guard = _require_explicit_foreground_port(params, 'execute_skill')
+        if guard:
+            return guard
+
         if params.skill_id not in _SKILL_MAP:
             return {
                 'status': 'ERROR',
@@ -196,6 +234,10 @@ def register_operation_tools(mcp):
         - 示例：result = {'status': 'SUCCESS', 'meshes': cmds.ls(type='mesh')}
         - 未设置 result 时返回空 dict，不会报错
         """
+        guard = _require_explicit_foreground_port(params, 'maya_exec_code')
+        if guard:
+            return guard
+
         # foreground 交互场景默认开 sync：跟 Script Editor 一样随手敲、亚秒级拿结果
         effective_sync = bool(params.sync) if params.execution_mode == 'foreground' else False
         return _submit_to_celery('exec_code', {
@@ -237,6 +279,10 @@ def register_operation_tools(mcp):
         Maya 链典型用法：clean_skinweights → fix_shape_names → save_scene
         Blender 链典型用法：blender_export_abc → blender_build_asset_info
         """
+        guard = _require_explicit_foreground_port(params, 'maya_execute_chain')
+        if guard:
+            return guard
+
         chain_data = [{'skill_id': s.skill_id, 'parameters': s.parameters} for s in params.skill_chain]
         return _submit_chain({
             'source_path': params.source_path,
@@ -362,7 +408,8 @@ def register_operation_tools(mcp):
 
         典型用法：
         - blender_tex_export: Blender 导出 ABC + 采集 info
-        - tex_to_rig_verify: Blender info → Maya rig 校验（跨 DCC）
+        - tex_to_rig_verify: 资产名/显式路径 → Blender source → Maya rig 校验（跨 DCC）
+        - tex_to_rig_verify_and_sync: 资产名/显式路径 → 对比 → 拼装 → 材质 → 保存
         - rig_full_cleanup: 蒙皮清理 → Shape 修复 → 全清理 → 保存
         - abc_import_with_materials: ABC 导入 + UDIM 材质分配
         """

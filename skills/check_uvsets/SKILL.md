@@ -11,15 +11,9 @@ parameters:
 io:
   inputs:
   outputs:
-    - name: "total_meshes"
-      type: "int"
-      label: "总 mesh 数"
-    - name: "need_cleanup"
-      type: "int"
-      label: "需清理数"
-    - name: "problems"
+    - name: "result"
       type: "json"
-      label: "问题详情"
+      label: "UV 检查结构化结果"
 category: "inspect"
 ---
 
@@ -37,3 +31,8 @@ category: "inspect"
 
 ### 🟡 参数规则 (PARAMETERS)
 - `cache_group` (string): 选填 | `cache` | 指定所需进行体检的父级节点。支持自动查找 `|Group|cache` 等变体。
+
+### 🟣 输出字段 (OUTPUTS)
+- `outputs.result.total_meshes` (int): 扫描到的 mesh 数。
+- `outputs.result.need_cleanup` (int): 需要清理的 mesh 数。
+- `outputs.result.problems` (list): 可被下游或 AI 消费的问题清单。

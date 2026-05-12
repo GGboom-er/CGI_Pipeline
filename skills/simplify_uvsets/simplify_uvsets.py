@@ -202,10 +202,12 @@ def execute(payload):
         summary_label='mesh',
         items=items,
         outputs={
-            'cleaned': cleaned,
-            'fast_passed': fast_passed,
-            'skipped': skipped,
-            'errors': errors,
+            'result': {
+                'cleaned': cleaned,
+                'fast_passed': fast_passed,
+                'skipped': skipped,
+                'errors': errors,
+            },
         },
     )
 

@@ -29,7 +29,7 @@ def execute(payload: dict) -> dict:
                 status='SUCCESS',
                 start_time=t0,
                 summary_action="新建空场景",
-                outputs={'action': 'new'},
+                outputs={'result': {'action': 'new'}},
                 items=[{'name': '操作', 'detail': '已创建新空场景'}],
             )
         
@@ -83,9 +83,11 @@ def execute(payload: dict) -> dict:
             summary_action=f"打开 {Path(file_path).name}",
             outputs={
                 'output_path': scene_name,
-                'action': 'open',
-                'meshes': mesh_count,
-                'joints': joint_count,
+                'result': {
+                    'action': 'open',
+                    'meshes': mesh_count,
+                    'joints': joint_count,
+                },
             },
             items=[{'name': '已打开', 'detail': file_path}],
             report_content=f"已打开: {file_path}\nMesh: {mesh_count} | 骨骼: {joint_count}"

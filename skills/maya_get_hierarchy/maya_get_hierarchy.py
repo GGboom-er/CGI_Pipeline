@@ -28,7 +28,7 @@ def execute(payload: dict) -> dict:
             status='SUCCESS',
             start_time=t0,
             summary_action=f"查询层级: {node or '根层级'}",
-            outputs={'hierarchy': children},
+            outputs={'result': {'hierarchy': children}},
             items=[{'name': '节点数量', 'detail': f"{len(children)} 个子节点"}],
             report_content="\n".join(children[:100]) + ("\n...等" if len(children)>100 else "")
         )

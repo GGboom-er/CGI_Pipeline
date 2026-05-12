@@ -17,7 +17,7 @@ class _SkillInput(BaseModel):
     asset_name: str = Field(..., description="资产名称，如 'xiaotianquan'。与 category 组合定位资产目录", min_length=1, max_length=100)
     source_path: str = Field(default="", description="Maya 场景文件路径（.ma/.mb）。建议先用 maya_resolve_asset 获取。为空则操作当前已打开的场景")
     execution_mode: str = Field(default="background", description="执行模式：background(后台无头) 或 foreground(当前界面)")
-    foreground_port: int = Field(default=7002, description="前台端口（仅当 execution_mode=foreground 时生效）")
+    foreground_port: int = Field(default=7002, description="前台端口（仅当 execution_mode=foreground 时生效）。foreground 调用必须显式传入；默认值只为兼容旧 schema，不代表自动连接。")
 
 
 # ══════════════════════════════════════════════════
@@ -34,7 +34,7 @@ def create_skill_model(skill_info: dict) -> type[BaseModel]:
     fields['asset_name'] = (str, Field(..., description="资产名称，如 'xiaotianquan'。与 category 组合定位资产目录", min_length=1, max_length=100))
     fields['source_path'] = (str, Field(default="", description="场景文件路径。建议先用 maya_resolve_asset 获取。为空则操作当前已打开的场景"))
     fields['execution_mode'] = (str, Field(default="background", description="执行模式：background(后台无头) 或 foreground(当前界面)"))
-    fields['foreground_port'] = (int, Field(default=7002, description="前台端口（仅当 execution_mode=foreground 时生效）"))
+    fields['foreground_port'] = (int, Field(default=7002, description="前台端口（仅当 execution_mode=foreground 时生效）。foreground 调用必须显式传入；默认值只为兼容旧 schema，不代表自动连接。"))
     
     # 动态参数
     parameters = skill_info.get('parameters', {})
@@ -78,7 +78,7 @@ class ExecCodeInput(BaseModel):
     asset_name: str = Field(default="untitled", description="资产名称")
     source_path: str = Field(default="", description="执行前先打开此场景文件（可选）")
     execution_mode: str = Field(default="background", description="执行模式：background(后台无头) 或 foreground(当前界面)")
-    foreground_port: int = Field(default=7002, description="前台端口（仅当 execution_mode=foreground 时生效）")
+    foreground_port: int = Field(default=7002, description="前台端口（仅当 execution_mode=foreground 时生效）。foreground 调用必须显式传入；默认值只为兼容旧 schema，不代表自动连接。")
     sync: bool = Field(default=True, description="仅 foreground 有效：True（默认）直接同步等 RPyC 返回并在响应里带 receipt，省掉 query_task 轮询（亚秒级响应）。传 False 恢复异步行为。")
 
 
@@ -100,7 +100,7 @@ class ExecuteChainInput(BaseModel):
     asset_name: str = Field(default="untitled", description="资产名称")
     skill_chain: list[ChainStep] = Field(..., description="按顺序执行的技能步骤列表。save_scene 必须放最后一步", min_length=1)
     execution_mode: str = Field(default="background", description="执行模式：background(后台无头) 或 foreground(当前界面)")
-    foreground_port: int = Field(default=7002, description="前台端口（仅当 execution_mode=foreground 时生效）")
+    foreground_port: int = Field(default=7002, description="前台端口（仅当 execution_mode=foreground 时生效）。foreground 调用必须显式传入；默认值只为兼容旧 schema，不代表自动连接。")
 
 
 # ══════════════════════════════════════════════════
@@ -145,7 +145,7 @@ class ExecuteSkillInput(BaseModel):
     source_path: str = Field(default="", description="源文件路径，建议先用 maya_resolve_asset 获取")
     parameters: Optional[dict] = Field(default=None, description="技能专属参数，用 maya_list_skills 查看每个技能的参数 Schema")
     execution_mode: str = Field(default="background", description="执行模式：background(后台无头) 或 foreground(当前界面)")
-    foreground_port: int = Field(default=7002, description="前台端口（仅当 execution_mode=foreground 时生效）")
+    foreground_port: int = Field(default=7002, description="前台端口（仅当 execution_mode=foreground 时生效）。foreground 调用必须显式传入；默认值只为兼容旧 schema，不代表自动连接。")
 
 class StartWorkerInput(BaseModel):
     """启动 DCC Worker 参数"""
@@ -189,7 +189,7 @@ class ExecuteWorkflowInput(BaseModel):
     """工作流执行参数"""
     model_config = ConfigDict(str_strip_whitespace=True)
     workflow_id: str = Field(..., description="工作流 ID，用 list_workflows 查看可用值", min_length=1)
-    source_path: str = Field(..., description="源文件路径（Blender .blend 或 Maya .ma/.mb）", min_length=1)
+    source_path: str = Field(default="", description="可选源文件路径（Blender .blend 或 Maya .ma/.mb）。为空时由 workflow 内的解析节点按 asset_name 查找")
     project: str = Field(default="default", description="项目代号")
     asset_name: str = Field(default="untitled", description="资产名称")
     extra_params: Optional[dict] = Field(default=None, description="工作流额外参数，用于模板变量 {{input.xxx}} 替换")

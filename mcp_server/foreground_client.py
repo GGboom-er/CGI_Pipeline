@@ -27,13 +27,22 @@ def _write_audit(task_id: str, status: str, skill_id: str, detail: str = ''):
 
 import socket
 
-def _auto_discover_maya_port() -> int:
-    """自动扫描 7001-7010 寻找活跃的 Maya commandPort (无感连接核心)"""
+def _discover_maya_ports() -> list[int]:
+    """扫描 7001-7010 寻找活跃的 Maya commandPort。"""
+    active_ports = []
     for p in range(7001, 7011):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.settimeout(0.2)
             if s.connect_ex(('127.0.0.1', p)) == 0:
-                return p
+                active_ports.append(p)
+    return active_ports
+
+
+def _auto_discover_maya_port() -> int:
+    """仅在唯一 Maya commandPort 存活时自动选择端口。"""
+    active_ports = _discover_maya_ports()
+    if len(active_ports) == 1:
+        return active_ports[0]
     return None
 
 def submit_foreground_task(payload: dict, sync: bool = False) -> dict:
@@ -49,8 +58,8 @@ def submit_foreground_task(payload: dict, sync: bool = False) -> dict:
 
     port = parameters.get('foreground_port')
     if not port:
-        port = _auto_discover_maya_port()
-        if not port:
+        active_ports = _discover_maya_ports()
+        if not active_ports:
             err_msg = "无感连接失败：未能在 7001-7010 范围内发现活跃的 Maya 实例，请确保 Maya 已开启并执行了 userSetup.py"
             _write_audit(task_id, 'ERROR', skill_id, err_msg)
             return {
@@ -58,6 +67,17 @@ def submit_foreground_task(payload: dict, sync: bool = False) -> dict:
                 'status': 'SUBMIT_FAILED',
                 'error': err_msg
             }
+        if len(active_ports) > 1:
+            err_msg = "发现多个 Maya commandPort 会话，foreground 模式必须显式传 foreground_port，避免误连。"
+            _write_audit(task_id, 'ERROR', skill_id, err_msg)
+            return {
+                'task_id': task_id,
+                'status': 'NEEDS_ATTENTION',
+                'error': err_msg,
+                'active_ports': active_ports,
+                'recovery_hint': '请在调用参数中传入 foreground_port，例如 foreground_port=7009。',
+            }
+        port = active_ports[0]
     port = int(port)
 
     # 立即写入 STARTED，让查询接口有数据
@@ -74,7 +94,7 @@ def submit_foreground_task(payload: dict, sync: bool = False) -> dict:
             'task_id': task_id,
             'status': 'SUBMIT_FAILED',
             'error': err_msg,
-            'recovery_hint': f'请确保 Maya 中已执行 cmds.commandPort(name=":{port}", sourceType="python")'
+            'recovery_hint': f'请确保 Maya 中已执行 cmds.commandPort(name=":{port}", sourceType="python", echoOutput=True)'
         }
 
     # ── 执行并等待结果 ──

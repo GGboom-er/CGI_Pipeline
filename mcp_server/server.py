@@ -75,6 +75,7 @@ def _build_instructions() -> str:
         "- 若因特殊原因无法使用具名 Tool，可用 execute_skill（兜底接口）。\n"
         "- 需要多步连续操作 → 用 maya_execute_chain（一次提交，共享 DCC 会话）\n"
         "- 临时查询或一次性脚本 → 用 maya_exec_code\n"
+        "- 当前已打开 Maya 场景 → 用 maya_exec_code 或具名 maya_ Tool，必须传 execution_mode=\"foreground\" 和显式 foreground_port。端口未知先调 maya_list_foreground_sessions，禁止省略端口或依赖默认值。\n"
         "\n"
         "## 链式执行规范（maya_execute_chain）\n"
         "- 链引擎会自动打开 source_path，技能步骤中不需要再传 source_path。\n"

@@ -1,13 +1,19 @@
 {
   "workflow_id": "tex_to_rig_verify_and_sync",
   "name": "贴图资产 → 绑定校验 + ABC拼装 + 材质赋予 + 升版本",
-  "description": "Blender 导出 ABC + 抽材质 → Maya 打开 rig 一次 → 场景内对比生成 compare_result → 按 compare_result 增量拼装 → 后置场景内对比验证 → 升版本。",
+  "description": "解析资产 tex/rig 文件（支持只传资产名或显式路径）→ Blender 导出 ABC + 抽材质 → Maya 打开 rig 一次 → 场景内对比生成 compare_result → 按 compare_result 增量拼装 → 后置场景内对比验证 → 升版本。",
   "steps": [
+    {
+      "step_id": "resolve_files",
+      "skill_id": "resolve_asset_files",
+      "parameters": {}
+    },
     {
       "step_id": "export_abc",
       "skill_id": "blender_export_abc",
+      "source_path": "{{outputs.resolve_files.result.source_path}}",
       "parameters": {
-        "abc_path": "{{input.info_dir}}/{{input.source_path | stem}}.abc",
+        "abc_path": "{{input.info_dir}}/{{outputs.resolve_files.result.source_stem}}.abc",
         "cache_group": "{{config.stages.tex.geom_roots.0}}"
       }
     },
@@ -15,18 +21,18 @@
       "step_id": "extract_materials",
       "skill_id": "blender_extract_materials",
       "parameters": {
-        "output_path": "{{input.info_dir}}/{{input.source_path | stem}}_materials.json",
+        "output_path": "{{input.info_dir}}/{{outputs.resolve_files.result.source_stem}}_materials.json",
         "cache_group": "{{config.stages.tex.geom_roots.0}}"
       }
     },
     {
       "step_id": "compare_pre",
       "skill_id": "maya_compare_asset_in_scene",
-      "source_path": "{{input.rig_path}}",
+      "source_path": "{{outputs.resolve_files.result.rig_path}}",
       "parameters": {
         "input_source": "{{outputs.export_abc.output_path}}",
-        "output_path": "{{input.info_dir}}/{{input.rig_path | stem}}_pre_compare_result.json",
-        "cache_group": "{{config.stages.rig.geom_roots.0}}",
+        "output_path": "{{input.info_dir}}/{{outputs.resolve_files.result.rig_stem}}_pre_compare_result.json",
+        "cache_group": "{{config.stages.rig.geom_roots.0}};{{config.stages.rig.geom_roots.1}}",
         "label_source": "tex",
         "label_target": "rig"
       }
@@ -34,18 +40,18 @@
     {
       "step_id": "sync",
       "skill_id": "maya_sync_rig_incremental",
-      "source_path": "{{input.rig_path}}",
+      "source_path": "{{outputs.resolve_files.result.rig_path}}",
       "parameters": {
         "source_abc": "{{outputs.export_abc.output_path}}",
         "compare_result": "{{outputs.compare_pre.output_path}}",
-        "cache_group": "{{config.stages.rig.geom_roots.0}}"
+        "cache_group": "{{config.stages.rig.geom_roots.0}};{{config.stages.rig.geom_roots.1}}"
       }
     },
     {
       "step_id": "fix_shapes",
       "skill_id": "maya_fix_shape_names",
       "parameters": {
-        "target_group": "{{config.stages.rig.geom_roots.0}}"
+        "target_group": "{{config.stages.rig.geom_roots.0}};{{config.stages.rig.geom_roots.1}}"
       }
     },
     {
@@ -53,7 +59,7 @@
       "skill_id": "maya_apply_materials",
       "parameters": {
         "materials_path": "{{outputs.extract_materials.output_path}}",
-        "target_group": "{{config.stages.rig.geom_roots.0}}"
+        "target_group": "{{config.stages.rig.geom_roots.0}};{{config.stages.rig.geom_roots.1}}"
       }
     },
     {
@@ -61,8 +67,8 @@
       "skill_id": "maya_compare_asset_in_scene",
       "parameters": {
         "input_source": "{{outputs.export_abc.output_path}}",
-        "output_path": "{{input.info_dir}}/{{input.rig_path | stem}}_post_compare_result.json",
-        "cache_group": "{{config.stages.rig.geom_roots.0}}",
+        "output_path": "{{input.info_dir}}/{{outputs.resolve_files.result.rig_stem}}_post_compare_result.json",
+        "cache_group": "{{config.stages.rig.geom_roots.0}};{{config.stages.rig.geom_roots.1}}",
         "label_source": "tex",
         "label_target": "rig_post"
       }

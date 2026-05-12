@@ -223,10 +223,13 @@ def execute(payload: dict) -> dict:
         summary_label='问题',
         outputs={
             'report_path': report_path,
-            'passed': all_passed,
-            'total_checks': results['total_checks'],
-            'passed_checks': results['passed_checks'],
-            'failed_checks': results['failed_checks'],
+            'result': {
+                'passed': all_passed,
+                'total_checks': results['total_checks'],
+                'passed_checks': results['passed_checks'],
+                'failed_checks': results['failed_checks'],
+                'checks': checks,
+            },
         },
         report_content=md_content,
     )

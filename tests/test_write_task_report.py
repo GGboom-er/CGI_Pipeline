@@ -39,7 +39,10 @@ def test_happy_path():
         'summary': {'input': 'X:/prod/asset.ma', 'action': '→ sandbox',
                     'output_count': 1, 'output_label': '文件'},
         'items': [{'name': 'asset.ma', 'detail': '188.3 MB'}],
-        'outputs': {'output_path': str(sbx / 'asset.ma'), 'copied_count': 1, 'total_bytes': 197_000_000},
+        'outputs': {
+            'output_path': str(sbx / 'asset.ma'),
+            'result': {'copied_count': 1, 'total_bytes': 197_000_000},
+        },
     }
     step_receipt_compare = {
         'skill_id': 'pipeline_compare_asset', 'status': 'SUCCESS', 'elapsed_min': 0.8,
@@ -85,7 +88,7 @@ def test_happy_path():
     assert 'asset.ma' in content
     assert '188.3 MB' in content, '缺 items 详情'
     assert '完整对比报告' in content, '缺 compare report_content'
-    assert r['outputs']['units_rendered'] == 2
+    assert r['outputs']['result']['units_rendered'] == 2
     print(f'✓ test_happy_path  →  {out}')
 
 
@@ -253,8 +256,8 @@ def test_workflow_mode():
     })
 
     assert r['status'] == 'SUCCESS', r
-    assert r['outputs']['mode'] == 'workflow'
-    assert r['outputs']['units_rendered'] == 2, r['outputs']
+    assert r['outputs']['result']['mode'] == 'workflow'
+    assert r['outputs']['result']['units_rendered'] == 2, r['outputs']
     content = Path(r['outputs']['output_path']).read_text(encoding='utf-8')
     assert 'Segment 0' in content, content
     assert 'Segment 1' in content, content
