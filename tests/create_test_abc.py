@@ -174,7 +174,9 @@ def main():
     info = read_abc_as_info(OUT_PATH)
     print(f'Meshes: {len(info["meshes"])}')
     for dag, data in info['meshes'].items():
-        print(f'  {dag}: {data["vertices"]} verts, uvsets={data["uvsets"]}')
+        uv_count = len(data.get("u_array", []))
+        uv_index_count = len(data.get("uv_indices", []))
+        print(f'  {dag}: {data["vertices"]} verts, uv={uv_count}, uv_indices={uv_index_count}')
     print('DONE')
 
 

@@ -78,3 +78,4 @@
 - [x] 2026-05-13 运行时报告修正：移除 HTML 折叠展示与重复旧报告块，文件流转表补齐节点、参数、输入、输出、状态、耗时。
 - [x] 2026-05-13 workflow 入口节点化：新增 `resolve_asset_files`，`tex_to_rig_verify*` 支持只传资产名自动解析 tex/rig 或显式路径透传。
 - [x] 2026-05-13 skill SOP 输出契约：所有 receipt.outputs 顶层统一为 `output_path/report_path/result`，特殊参数走 `outputs.result.xxx`，并加入静态门禁。
+- [x] 2026-05-13 ABC reader 测试契约修复：`test_abc_reader` / `create_test_abc` 改按当前 `u_array`、`v_array`、`uv_indices` 验证。

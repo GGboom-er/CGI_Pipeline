@@ -58,13 +58,18 @@ print(f'Mesh count: {len(info["meshes"])}')
 for dag, data in info['meshes'].items():
     vtx = data['vertices']
     mats = data['materials']
-    uvs = data['uvsets']
+    uvs = {
+        'u_array': len(data.get('u_array', [])),
+        'v_array': len(data.get('v_array', [])),
+        'uv_indices': len(data.get('uv_indices', [])),
+    }
     pos_count = len(data['vert_positions'])
-    print(f'  {dag}: {vtx} verts, {pos_count} floats, mats={mats}, uvsets={uvs}')
+    print(f'  {dag}: {vtx} verts, {pos_count} floats, mats={mats}, uv={uvs}')
 
 assert len(info['meshes']) == 1, f"Expected 1 mesh, got {len(info['meshes'])}"
 mesh_data = list(info['meshes'].values())[0]
 assert mesh_data['vertices'] == 8, f"Expected 8 verts, got {mesh_data['vertices']}"
 assert len(mesh_data['vert_positions']) == 24, f"Expected 24 floats"
+assert 'u_array' in mesh_data and 'v_array' in mesh_data and 'uv_indices' in mesh_data
 
 print('SUCCESS - all assertions passed')
