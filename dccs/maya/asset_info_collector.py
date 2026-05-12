@@ -42,7 +42,7 @@ def _child_mesh_shapes(transform):
 
 
 def mesh_transforms_under(root):
-    """列出 root 层级下直接带 mesh shape 子物体的 transform。"""
+    """列出 root 全层级中自身带 mesh shape 子物体的 transform。"""
     transforms = [root]
     transforms.extend(
         cmds.listRelatives(root, allDescendents=True, type="transform", fullPath=True) or []
@@ -59,7 +59,7 @@ def mesh_transforms_under(root):
     return sorted(result, key=lambda item: (item.count("|"), item))
 
 
-def _is_standard_visible_shape(shape_full, transform):
+def _is_standard_mesh_shape(shape_full, transform):
     shape_long = (cmds.ls(shape_full, long=True) or [shape_full])[0]
     if not _same_parent_shape(shape_long, transform):
         return False
@@ -81,16 +81,16 @@ def _is_standard_orig(candidate, transform):
 def get_shape_orig(shape_full, transform):
     """返回 shape_full 对应且唯一有效的 Orig；找不到唯一值时返回 None。"""
     all_shapes = _child_mesh_shapes(transform)
-    visible_shapes = [
+    standard_shapes = [
         s for s in all_shapes
         if not cmds.getAttr(s + ".intermediateObject")
     ]
-    if len(visible_shapes) != 1:
+    if len(standard_shapes) != 1:
         return None
     shape_long = (cmds.ls(shape_full, long=True) or [shape_full])[0]
-    if (cmds.ls(visible_shapes[0], long=True) or [visible_shapes[0]])[0] != shape_long:
+    if (cmds.ls(standard_shapes[0], long=True) or [standard_shapes[0]])[0] != shape_long:
         return None
-    if not _is_standard_visible_shape(shape_long, transform):
+    if not _is_standard_mesh_shape(shape_long, transform):
         return None
 
     official = []
@@ -176,7 +176,7 @@ def collect_scene_info(cache_group, include_topology=False, precision=4):
     """
     从当前 Maya 活场景采集 cache 组下的 asset_info。
 
-    meshes 的 key 永远使用标准可见 shape 的绝对 DAG 路径。
+    meshes 的 key 永远使用标准非 intermediate mesh shape 的绝对 DAG 路径。
     顶点数据来自同 transform 下唯一标准 ShapeOrig；找不到 Orig 时保留条目但写空几何。
     include_topology=True 时额外写 face_counts / face_indices，供 rig sync 运行时使用。
     """
@@ -187,14 +187,14 @@ def collect_scene_info(cache_group, include_topology=False, precision=4):
     asset_info = make_empty_info()
 
     for transform_path in mesh_transforms_under(actual_cache):
-        visible_shapes = [
+        standard_shapes = [
             shape for shape in _child_mesh_shapes(transform_path)
             if not cmds.getAttr(shape + ".intermediateObject")
         ]
-        if not visible_shapes:
+        if not standard_shapes:
             continue
 
-        for shape_full in visible_shapes:
+        for shape_full in standard_shapes:
             shape_dag = (cmds.ls(shape_full, long=True) or [shape_full])[0]
             shape_orig = get_shape_orig(shape_full, transform_path)
             if not shape_orig:

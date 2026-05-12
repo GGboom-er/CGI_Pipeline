@@ -1,6 +1,6 @@
 # CGI Pipeline 运行时总规范 v1
 
-更新时间: 2026-05-11
+更新时间: 2026-05-12
 
 本文档定义 CGI Pipeline 中 AI 调用、CLI 调用、Dashboard 调用和自动任务调用共同遵守的运行时契约。后续所有 skill、workflow、MCP Tool 和报告系统都以本文档为准。
 
@@ -195,7 +195,7 @@ core.receipt.make_receipt(...)
 outputs={"output_path": "..."}
 ```
 
-只有确实面向下游机器消费的字段才放入 `outputs`。
+`outputs` 只允许稳定机器契约字段：`output_path`、`report_path`、`result`。统计、分类数量和执行摘要写入 `summary`、`items` 或 `report_content`。
 
 ### 7.3 状态
 
@@ -231,12 +231,15 @@ Workflow 用 JSON 声明步骤：
 
 ```json
 {
-  "step_id": "compare",
-  "skill_id": "pipeline_compare_asset",
+  "step_id": "compare_pre",
+  "skill_id": "maya_compare_asset_in_scene",
   "source_path": "{{input.rig_path}}",
   "parameters": {
-    "input_source": "{{outputs.build_source_info.output_path}}",
-    "input_target": "{{outputs.build_target_info.output_path}}"
+    "input_source": "{{outputs.export_abc.output_path}}",
+    "output_path": "{{input.info_dir}}/{{input.rig_path | stem}}_pre_compare_result.json",
+    "cache_group": "{{config.stages.rig.geom_roots.0}}",
+    "label_source": "tex",
+    "label_target": "rig"
   }
 }
 ```
@@ -277,19 +280,19 @@ Workflow 用 JSON 声明步骤：
 
 ```text
 source DCC scene
-  -> source_info.json 或 source.abc
+  -> source.abc
+  -> source_materials.json
 
 target rig scene
-  -> target_info.json
-
-source_info/source.abc + target_info
+  -> maya_compare_asset_in_scene 采集当前场景 ShapeOrig
+source.abc + target rig in-memory info
   -> compare_result.json
 
 compare_result.json + source.abc
   -> target rig 沙盒副本更新
 
 updated target rig
-  -> post_info.json
+  -> maya_compare_asset_in_scene 采集当前场景 ShapeOrig
   -> post_compare_result.json
   -> version-up scene
 ```
@@ -307,9 +310,7 @@ sandbox/
     source_info.json
     source.abc
     source_materials.json
-    target_pre_info.json
     pre_compare_result.json
-    target_post_info.json
     post_compare_result.json
 ```
 

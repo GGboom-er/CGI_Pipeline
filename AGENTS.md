@@ -45,6 +45,8 @@ python cli.py run-chain --steps s1,s2,s3 --source-path <file> [--param k=v ...]
 ```bash
 python tests/test_rig_sync_profile.py   # P0 单元测试，不依赖 DCC
 python tests/test_pipeline_compare.py
+python tests/test_compare_result_contract.py
+python tests/test_sync_action_dispatch.py
 python tests/test_abc_reader.py
 ```
 
@@ -126,6 +128,7 @@ def execute(payload: dict) -> dict:
 |---|---|
 | `asset_info_schema.py` | `compare(a_dict, b_dict, profile)` —— 三步漏斗（路径匹配 → 同点数池 → 空间分析）。算法层保留 7 种 `actionability` 标签（IDENTICAL/ORIG_INJECT/MODIFIED/MERGE/SPLIT/NEW/DELETE），用户视角层由 `pairing_report` 聚合成 4 种 `outcomes`（identical / matched_different / only_source / only_target）。**两层共存，不是新旧替换**——MERGE/SPLIT 的拓扑关系对下游权重传递必需。**输入是 dict 对 dict，JSON 是可选的。** |
 | `abc_reader.py` | `read_abc_as_info(abc_path)` —— PyAlembic → 同一份 asset_info dict |
+| `compare_result_io.py` | compare_result.v1 写出、读取 `_info.json`/ABC、Markdown 摘要生成、`.info` 输出路径推导 |
 | `pairing_report.py` | dict → MD 报告：主视角是 source 侧 4 种事实去向，算法层 7 标签作为附录 |
 | `spatial_transfer.py` / `deformation_field.py` / `laplacian_diffuse.py` / `biharmonic_diffuse.py` / `non_rigid_registration.py` / `unified_deformation_field.py` | 权重/BlendShape 投射的底层算法，`maya_sync_rig_incremental` 调用 |
 | `config_loader.py` | 配置金字塔：`pipeline_manifest.json` → `{project}_config.json` → 技能默认值 → `.env` |
@@ -133,6 +136,29 @@ def execute(payload: dict) -> dict:
 | `receipt.py` | 唯一合法的回执构造器，列表自动截断到 `MAX_ITEMS = 20` |
 | `run_archive.py` | 按任务隔离的沙盒（`runs/`），带 manifest 持久化 |
 | `service_manager.py` | Dashboard 启动时自动拉起 Redis 和对应 worker |
+
+### DCC 共享采集层
+
+Maya 场景内几何采集放在 `dccs/maya/asset_info_collector.py`，不要放进 `core/`。`maya_build_asset_info`、`maya_compare_asset_in_scene` 和 `maya_sync_rig_incremental` 必须复用同一套采集逻辑：
+
+- 从 `cache_group` 全层级子孙里自身带 mesh shape 的 transform 出发。
+- mesh key 使用标准非 intermediate mesh shape 的绝对 DAG 路径；transform 可见性不参与过滤。
+- 顶点数据只来自同 transform 下命名规范且唯一有效的 `{transform}ShapeOrig`。
+- 找不到标准 Orig 时保留 mesh 条目但写空几何；诊断由对比/报告暴露，不由采集器修复。
+
+### 对比/拼装主线
+
+推荐工作流不再“导出 Maya JSON 再开 Maya 拼装”。主线是：
+
+```text
+Blender source -> blender_export_abc + blender_extract_materials
+Maya target rig -> maya_compare_asset_in_scene 采集当前场景并写 pre compare_result
+pre compare_result + source_abc -> maya_sync_rig_incremental 执行拼装
+maya_compare_asset_in_scene -> post compare_result
+save_scene -> 沙盒内按版本递增保存
+```
+
+`pipeline_compare_asset` 保留为纯数据入口：只有当 source/target 都已经是 `_info.json` 或 ABC 时使用。`maya_sync_rig_incremental` 是执行器，必须消费前置 `compare_result`，不再独立重算对比。
 
 ### 配置金字塔（四层）
 
@@ -174,4 +200,4 @@ def execute(payload: dict) -> dict:
 - 技能代码放在各自文件夹里（`skills/{id}/{id}.py`），不能放 `skills/` 根目录。`__init__.py` 负责 re-export `execute`。
 - `exec_code` / `blender_exec_code` 传了 `source_path` 时，Celery 会**自动打开文件**再跑代码 —— 别在代码片段里再调 `cmds.file(open=...)`。
 - 链式执行已经打开了初始 `source_path`，第一步别再打开一次。
-- 跨 DCC workflow 的段间数据走文件（前一段的 `output_path` → 下一段的输入），在 `workflows/*.json` 里用 `{{outputs.step_id.output_path}}` 表达。
+- 跨 DCC workflow 的段间数据走文件（前一段的 `output_path` → 下一段的输入），在 `workflows/*.json` 里用 `{{outputs.step_id.output_path}}` 表达；JSON/ABC/materials/compare_result 等机器中间产物统一写任务沙盒 `.info`。

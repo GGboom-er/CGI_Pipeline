@@ -35,22 +35,23 @@ target_info.json
   -> compare_result.json
 ```
 
-拼装链路使用同一套核心对比逻辑，但不要求本 skill 先落 `compare_result.json`：
+拼装链路使用同一套核心对比逻辑，但主 workflow 不再要求本 skill 先落 `compare_result.json`：
 
 ```text
 source.abc + Maya 当前 rig 场景
+  -> maya_compare_asset_in_scene
+  -> 场景内采集 target rig info
+  -> 写 pre compare_result.json
+pre compare_result.json + source.abc
   -> maya_sync_rig_incremental
-  -> 内存采集 target rig info
-  -> 内存读取 source abc info
-  -> core.asset_info_schema.compare()
-  -> 根据内存 compare 结果拼装
+  -> 根据 compare_result 执行拼装
 ```
 
 后置验证链路：
 
 ```text
-source.abc + target_post_info.json
-  -> pipeline_compare_asset
+source.abc + Maya 当前 rig 场景
+  -> maya_compare_asset_in_scene
   -> post_compare_result.json
 ```
 
@@ -140,7 +141,7 @@ receipt.outputs：
 - `only_source` = source 独有
 - `only_target` = target 独有
 
-拼装逻辑应直接消费内存 compare 结果中的 `pairing_groups`：
+拼装逻辑应直接消费 compare_result 中的 `pairing_groups`：
 
 - `IDENTICAL`
 - `ORIG_INJECT`
@@ -159,7 +160,8 @@ target 独有项单独走 `target_only_dags`。
 - `receipt.outputs` 只保留 `output_path`。
 - 空几何作为合法事实参与对比，不在本 skill 额外诊断或修复。
 - Markdown 只走 `report_content`，最终由统一任务报告插入。
-- 拼装 workflow 后续应改为 `maya_sync_rig_incremental` 内部采集 target rig info、读取 source ABC info、调用同一套 core compare 内存结果并继续拼装。
+- 主拼装 workflow 使用 `maya_compare_asset_in_scene` 在 Maya 场景内生成 pre/post compare_result。
+- `maya_sync_rig_incremental` 必须消费前置 compare_result，不再内部重算对比。
 
 ## 8. 本轮代码落地
 
@@ -168,6 +170,7 @@ target 独有项单独走 `target_only_dags`。
 - `skills/pipeline_compare_asset/pipeline_compare_asset.py`
 - `skills/pipeline_compare_asset/SKILL.md`
 - `tests/test_compare_result_contract.py`
+- `core/compare_result_io.py`
 - `tools/verify_mcp_contract.py`
 
 行为变化：
@@ -199,4 +202,4 @@ target 独有项单独走 `target_only_dags`。
 
 `pipeline_compare_asset` 已收紧为纯数据对比与 compare_result 生产节点。
 
-后续进入 `maya_sync_rig_incremental` 时，需要把 target rig 信息采集抽成公共函数，使 `maya_build_asset_info` 的写 JSON 模式和 sync 的内存采集模式复用同一套代码。
+Maya 场景内对比由 `maya_compare_asset_in_scene` 负责；Maya target 采集已抽到 `dccs.maya.asset_info_collector`，供 `maya_build_asset_info`、`maya_compare_asset_in_scene` 和 `maya_sync_rig_incremental` 复用。

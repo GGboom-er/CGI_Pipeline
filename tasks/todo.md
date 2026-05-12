@@ -50,7 +50,8 @@
 - [x] 2026-05-12 skill 拆解 05：完成材质采集链路收紧，`blender_extract_materials` 只写任务沙盒 `.info`
 - [x] 2026-05-12 docs 文档治理审查：完成 `docs` 内容盘点、冲突分类和整理方案
 - [ ] docs 文档治理落地：归档备份/临时代码、合并权威规范、同步 operator/README/AGENTS
-- [ ] 同步 MCP Tool 描述、SKILL.md 与 `AGENTS.md` 中的 `.info` 路径规范
+- [x] 同步 MCP Tool 描述、SKILL.md 与 `AGENTS.md` 中的 `.info` 路径规范
+- [x] 2026-05-12 文档同步：README、AGENTS、运行时契约、对比/拼装专项文档已对齐场景内 compare + compare_result 驱动 sync
 - [ ] 实现 `publish_asset` 技能（标准化发布流程：版本递增 + 拷贝到 pub 目录 + 元数据写入）
 - [ ] 巡航测试覆盖更多资产（当前仅 mihouwang + ciweiguai）
 - [ ] Worker 健康检查机制（心跳超时自动重启）

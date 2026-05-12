@@ -4,9 +4,6 @@
 
 ## 架构
 
-```
-## 架构
-
 ```text
 AI (Claude/Gemini)
   ├──► cgi-pipeline MCP (FastMCP 工业管线调度)
@@ -125,7 +122,7 @@ CGI_Pipeline/
 
 运行时目录（不提交 Git）：`audit/` `ipc/` `runtime/` `logs/` `reports/` `runs/` `projects/`
 
-## 技能清单（30 个）
+## 技能清单
 
 ### Maya 技能
 | skill_id | 功能 |
@@ -139,8 +136,9 @@ CGI_Pipeline/
 | `maya_export_abc` | Maya ABC 导出 |
 | `maya_build_mesh_from_abc` | PyAlembic 纯数据构建 mesh（含 UV） |
 | `maya_apply_materials` | 消费 _materials.json 按面赋予材质 |
-| `maya_build_asset_info` | 采集 rig/mesh 拓扑信息 JSON |
-| `maya_sync_rig_incremental` | 增量同步拼装（ABC→rig） |
+| `maya_build_asset_info` | 从标准 ShapeOrig 采集 rig/mesh 几何 _info.json |
+| `maya_compare_asset_in_scene` | 当前 Maya rig 场景内采集并与 source ABC/_info 对比 |
+| `maya_sync_rig_incremental` | 消费前置 compare_result 增量同步拼装（ABC→rig） |
 | `maya_compare_mesh_topology` | mesh 拓扑对比 |
 | `maya_check_textures` | 贴图路径检查 |
 | `maya_split_udim_materials` | UDIM 材质按象限拆分 |
@@ -161,7 +159,7 @@ CGI_Pipeline/
 ### Pipeline 技能（纯计算，不需要 DCC）
 | skill_id | 功能 |
 |----------|------|
-| `pipeline_compare_asset` | 资产对比 + KDTree 匹配 + 报告 |
+| `pipeline_compare_asset` | 纯 JSON/ABC 资产对比，输出 compare_result |
 | `pipeline_export_abc_auto` | 自动路由 ABC 导出 |
 
 ### 工具技能
@@ -177,8 +175,8 @@ CGI_Pipeline/
 | workflow_id | 说明 | 跨 DCC |
 |-------------|------|--------|
 | `blender_to_maya_full_build` | Blender 导出 → Maya 构建 + 材质 + 保存 | Blender→Maya |
-| `tex_to_rig_verify_and_sync` | 贴图导出 → 对比 → 增量同步 → 材质 → 保存 | Blender→Maya |
-| `tex_to_rig_verify` | 贴图采集 → rig 采集 → 对比 | Blender→Maya |
+| `tex_to_rig_verify_and_sync` | Blender 导 ABC/材质 → Maya 场景内对比 → compare_result 驱动同步 → 后置验证 → 升版本保存 | Blender→Maya |
+| `tex_to_rig_verify` | Blender 导 ABC → Maya 场景内采集 target → 写 compare_result | Blender→Maya |
 | `blender_tex_export` | Blender 导出 ABC + 材质 + info | Blender |
 | `abc_import_with_materials` | PyAlembic 构建 + 材质赋予 | Maya |
 | `full_cleanup_and_save` | 全清理 + Shape 修复 + 法线 + 保存 | Maya |

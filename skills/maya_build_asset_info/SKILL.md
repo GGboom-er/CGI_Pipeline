@@ -29,7 +29,7 @@ category: "inspect"
 - **职责边界**: 本技能只生成几何 `_info.json`。贴图、透明度、UDIM、面级材质分配和 ShapeOrig 清理由其他技能负责。
 - **路径规则**: workflow 必须显式传 `info_path="{{input.info_dir}}/..._info.json"`。单技能兜底也只写任务沙盒 `.info`，不回退源文件同目录。
 - **保护拦截**: 若指定了 `info_path` 且其属于 `path_guard` 的网络只读区，返回 `BLOCKED`。
-- **采集范围**: 先列出 `cache_group` 层级下所有直接带 mesh shape 子物体的 transform，再在每个 transform 下检查标准 shape/Orig；可见性不作为过滤条件。
+- **采集范围**: 先列出 `cache_group` 全层级子孙里自身带 mesh shape 子物体的 transform，再在每个 transform 下检查标准 shape/Orig；transform 可见性不作为过滤条件。
 - **采集根组**: `cache_group` 必须由项目配置或 workflow 传入，不在技能内部猜测默认组。
 - **名称规则**: `meshes` 的 key 使用当前标准 shape 的 Maya 绝对 DAG 路径；即使几何来自 ShapeOrig，也不使用 Orig 名称作为 key。
 - **标准结构**: 每个 mesh transform 下必须有且只有一个标准 shape 和一个标准 Orig；命名为 `{transform}`、`{transform}Shape`、`{transform}ShapeOrig`。
@@ -37,7 +37,7 @@ category: "inspect"
 - **不做诊断**: 不返回 ShapeOrig 状态、判断详情或修复建议；后续对比/报告节点根据空几何暴露问题。
 
 ### 🟢 核心逻辑 (CORE LOGIC)
-- 定位 `cache_group` → 枚举所有直接带 mesh shape 子物体的 transform → 在每个 transform 下验证标准 shape 唯一且名为 `{transform}Shape` → 以 shape 的绝对 DAG 路径作为 JSON key → 优先用 `cmds.deformableShape(shape, originalGeometry=True)` 查找同 transform 下 `{transform}ShapeOrig` → 兜底查找同 transform 下唯一有 `outMesh` 下游连接的 `{transform}ShapeOrig` → 找到则采 Orig 顶点，找不到则写空几何 → 汇编 asset_info dict。
+- 定位 `cache_group` → 枚举全层级中自身带 mesh shape 子物体的 transform → 在每个 transform 下验证标准 shape 唯一且名为 `{transform}Shape` → 以 shape 的绝对 DAG 路径作为 JSON key → 优先用 `cmds.deformableShape(shape, originalGeometry=True)` 查找同 transform 下 `{transform}ShapeOrig` → 兜底查找同 transform 下唯一有 `outMesh` 下游连接的 `{transform}ShapeOrig` → 找到则采 Orig 顶点，找不到则写空几何 → 汇编 asset_info dict。
 
 ### 🔵 核心代码与扩展 (IMPLEMENTATION & EXTENSION)
 - **公共采集器**: `dccs.maya.asset_info_collector.collect_scene_info()`；`maya_compare_asset_in_scene` 和 `maya_sync_rig_incremental` 也复用同一套采集逻辑。

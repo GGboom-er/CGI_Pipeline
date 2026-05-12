@@ -13,7 +13,7 @@
 - 从 Maya 沙盒场景读取 target rig 或 Maya source 的几何事实
 - 生成标准 `_info.json`
 - 从每个标准 mesh 同 transform 下命名规范且唯一的 ShapeOrig 采集几何
-- 供 `pipeline_compare_asset` 或 `maya_sync_rig_incremental` 消费
+- 供 `pipeline_compare_asset` 等纯数据对比入口消费
 
 不是：
 
@@ -24,13 +24,15 @@
 - 场景保存节点
 - ShapeOrig 清理节点
 - ShapeOrig 诊断报告节点
+- 主拼装 workflow 的前置对比节点
 
 贴图检查归 `maya_check_textures`。Blender 来源的面级材质归 `blender_extract_materials` 和 `maya_apply_materials`。
 ShapeOrig 清理由 `maya_fix_shape_names` 或后续专用 workflow 负责。
+主对比/拼装 workflow 使用 `maya_compare_asset_in_scene` 在当前 Maya 场景内采集 target 并写 `compare_result`，避免先落 target `_info.json` 再对比。
 
 ## 2. 所属链路
 
-只读对比链路：
+纯数据对比链路：
 
 ```text
 Maya rig scene
@@ -39,15 +41,15 @@ Maya rig scene
   -> pipeline_compare_asset
 ```
 
-对比后拼装链路：
+主对比/拼装链路中，本技能的采集代码被 `maya_compare_asset_in_scene` 复用，但不单独作为 workflow 步骤：
 
 ```text
-Maya rig scene
-  -> maya_build_asset_info(pre)
-  -> compare_result.json
+Maya rig scene + source ABC
+  -> maya_compare_asset_in_scene
+  -> pre compare_result.json
   -> maya_sync_rig_incremental
-  -> maya_build_asset_info(post)
-  -> pipeline_compare_asset(post)
+  -> maya_compare_asset_in_scene
+  -> post compare_result.json
 ```
 
 ## 3. 输入契约
@@ -73,10 +75,10 @@ Maya rig scene
 
 ```json
 {
-  "step_id": "build_rig_info",
+  "step_id": "build_target_info",
   "skill_id": "maya_build_asset_info",
   "parameters": {
-    "info_path": "{{input.info_dir}}/{{input.rig_path | stem}}_pre_sync.json",
+    "info_path": "{{input.info_dir}}/{{input.rig_path | stem}}_info.json",
     "cache_group": "{{config.stages.rig.geom_roots.0}}"
   }
 }
@@ -89,8 +91,7 @@ Maya rig scene
 文件产物：
 
 ```text
-{sandbox}/.info/{rig_stem}_pre_sync.json
-{sandbox}/.info/{rig_stem}_post_sync.json
+{sandbox}/.info/{scene_stem}_info.json
 ```
 
 receipt.outputs：
@@ -134,7 +135,7 @@ receipt.outputs：
 
 ## 6. ShapeOrig 采集规则
 
-- 先列出 `cache_group` 层级下所有直接带 mesh shape 子物体的 transform。
+- 先列出 `cache_group` 全层级子孙里自身带 mesh shape 子物体的 transform。
 - 再在每个 transform 下检查非 `intermediateObject` 的标准 shape。
 - 可见性不作为过滤条件，隐藏绑定 mesh 也参与采集。
 - 标准结构是 transform、`{transform}Shape`、`{transform}ShapeOrig` 都在同一个 transform 层级下。
@@ -157,7 +158,7 @@ receipt.outputs：
 - 未采到标准 Orig 的 mesh 输出空几何，不降级到可见 Shape。
 - 本 skill 不输出 ShapeOrig 状态、详情或修复建议。
 - 去掉材质和贴图职责，避免与材质类 skill 冲突。
-- workflow 中同步显式传 `info_path` 和 `cache_group`。
+- workflow 中显式传 `info_path` 和 `cache_group`；主拼装 workflow 不需要单独调用本 skill。
 
 ## 8. 本轮代码落地
 
@@ -165,7 +166,7 @@ receipt.outputs：
 
 - `skills/maya_build_asset_info/maya_build_asset_info.py`
 - `skills/maya_build_asset_info/SKILL.md`
-- `workflows/tex_to_rig_verify_and_sync.json`
+- `dccs/maya/asset_info_collector.py`
 
 行为变化：
 
@@ -199,4 +200,4 @@ receipt.outputs：
 
 `maya_build_asset_info` 已收紧为只读 Orig 几何采集节点。
 
-后续继续审计下一个 skill：`pipeline_compare_asset`。
+主工作流的场景内对比由 `maya_compare_asset_in_scene` 承担；二者复用同一个 Maya 采集器。
