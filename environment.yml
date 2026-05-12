@@ -1,0 +1,25 @@
+# ── CGI Pipeline v2.0 — Conda 环境定义 ──
+# 使用方法：conda env create -f environment.yml
+# 重建方法：conda env remove -n cgi_pipeline && conda env create -f environment.yml
+# 行业标准：VFX Reference Platform CY2025 → Python 3.11
+
+name: cgi_pipeline
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - pip
+  - pip:
+    # ── 核心框架 ──
+    - celery==5.4.0              # 任务编排（Task Orchestration）
+    - redis==5.2.1               # Celery broker/backend 驱动
+    - fastmcp==3.2.4             # MCP 意图接口（Model Context Protocol）
+    - rpyc==6.0.2                # Maya foreground 注入（与 Maya 2025 Python 3.11 ABI 兼容）
+    # ── 进程与文件管理 ──
+    - filelock==3.16.1           # 并发安全的文件版本锁
+    - psutil==6.1.1              # 进程监控与内存检测
+    - python-dotenv>=1.1.0       # .env 环境变量加载
+    # ── 部署与监控 ──
+    - uvicorn>=0.35.0            # ASGI server（fastmcp 依赖）
+    - flower==2.0.1              # Celery 实时监控 Dashboard

@@ -1,0 +1,91 @@
+{
+  "workflow_id": "tex_to_rig_verify_and_sync",
+  "name": "贴图资产 → 绑定校验 + ABC拼装 + 材质赋予 + 升版本",
+  "description": "Blender 导出 ABC + 抽材质 → Maya 采集 rig info → 生成 compare_result → 按 compare_result 增量拼装 → 采集同步后 rig info → 后置对比验证 → 升版本。",
+  "steps": [
+    {
+      "step_id": "export_abc",
+      "skill_id": "blender_export_abc",
+      "parameters": {
+        "abc_path": "{{input.info_dir}}/{{input.source_path | stem}}.abc",
+        "cache_group": "{{config.stages.tex.geom_roots.0}}"
+      }
+    },
+    {
+      "step_id": "extract_materials",
+      "skill_id": "blender_extract_materials",
+      "parameters": {
+        "output_path": "{{input.info_dir}}/{{input.source_path | stem}}_materials.json",
+        "cache_group": "{{config.stages.tex.geom_roots.0}}"
+      }
+    },
+    {
+      "step_id": "build_rig_info",
+      "skill_id": "maya_build_asset_info",
+      "source_path": "{{input.rig_path}}",
+      "parameters": {
+        "info_path": "{{input.info_dir}}/{{input.rig_path | stem}}_pre_sync.json",
+        "cache_group": "{{config.stages.rig.geom_roots.0}}"
+      }
+    },
+    {
+      "step_id": "compare",
+      "skill_id": "pipeline_compare_asset",
+      "parameters": {
+        "input_source": "{{outputs.export_abc.output_path}}",
+        "input_target": "{{outputs.build_rig_info.output_path}}",
+        "output_path": "{{input.info_dir}}/{{input.rig_path | stem}}_pre_compare_result.json",
+        "label_source": "tex",
+        "label_target": "rig"
+      }
+    },
+    {
+      "step_id": "sync",
+      "skill_id": "maya_sync_rig_incremental",
+      "source_path": "{{input.rig_path}}",
+      "parameters": {
+        "source_abc": "{{outputs.export_abc.output_path}}",
+        "compare_result": "{{outputs.compare.output_path}}"
+      }
+    },
+    {
+      "step_id": "fix_shapes",
+      "skill_id": "maya_fix_shape_names",
+      "parameters": {
+        "target_group": "{{config.stages.rig.geom_roots.0}}"
+      }
+    },
+    {
+      "step_id": "assign_materials",
+      "skill_id": "maya_apply_materials",
+      "parameters": {
+        "materials_path": "{{outputs.extract_materials.output_path}}",
+        "target_group": "{{config.stages.rig.geom_roots.0}}"
+      }
+    },
+    {
+      "step_id": "build_rig_info_post",
+      "skill_id": "maya_build_asset_info",
+      "parameters": {
+        "info_path": "{{input.info_dir}}/{{input.rig_path | stem}}_post_sync.json",
+        "cache_group": "{{config.stages.rig.geom_roots.0}}"
+      }
+    },
+    {
+      "step_id": "save",
+      "skill_id": "save_scene",
+      "parameters": {}
+    },
+    {
+      "step_id": "verify",
+      "skill_id": "pipeline_compare_asset",
+      "parameters": {
+        "input_source": "{{outputs.export_abc.output_path}}",
+        "input_target": "{{outputs.build_rig_info_post.output_path}}",
+        "output_path": "{{input.info_dir}}/{{input.rig_path | stem}}_post_compare_result.json",
+        "label_source": "tex",
+        "label_target": "rig_synced"
+      }
+    }
+  ]
+}

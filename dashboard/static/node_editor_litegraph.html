@@ -1,0 +1,1656 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CGI Pipeline — Node Graph</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/litegraph.js@0.7.18/css/litegraph.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        /* ═══════════════════════════════════════════
+           配色方案对标 UE Blueprint + Blender GeoNodes
+           ═══════════════════════════════════════════ */
+        :root {
+            --bg: #1a1a2e;
+            /* UE Blueprint 深蓝灰背景 */
+            --surface: #16213e;
+            /* 面板深色 */
+            --surface2: #0f3460;
+            /* 高亮面板 */
+            --border: #30363d;
+            --text: #e6edf3;
+            --text-dim: #7b8794;
+            --accent: #7c6aef;
+            --success: #3fb950;
+            --error: #f85149;
+            --warning: #d29922;
+            --info: #58a6ff;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        /* ── Top Bar ── */
+        .topbar {
+            height: 44px;
+            background: var(--surface);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+            display: flex;
+            align-items: center;
+            padding: 0 16px;
+            gap: 12px;
+            flex-shrink: 0;
+            z-index: 100;
+        }
+
+        .topbar .logo {
+            font-weight: 700;
+            font-size: 13px;
+            background: linear-gradient(135deg, #7c6aef, #a78bfa);
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .topbar .sep {
+            width: 1px;
+            height: 20px;
+            background: rgba(255, 255, 255, 0.08);
+        }
+
+        .topbar .btn {
+            padding: 5px 12px;
+            border-radius: 4px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            background: rgba(255, 255, 255, 0.04);
+            color: var(--text);
+            font-size: 11px;
+            cursor: pointer;
+            transition: all 0.15s;
+            font-family: inherit;
+        }
+
+        .topbar .btn:hover {
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        .topbar .btn.primary {
+            background: var(--accent);
+            border-color: transparent;
+            font-weight: 600;
+        }
+
+        .topbar .btn.primary:hover {
+            opacity: 0.85;
+        }
+
+        .topbar .status {
+            margin-left: auto;
+            font-size: 11px;
+            color: var(--text-dim);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .topbar .dot {
+            width: 5px;
+            height: 5px;
+            border-radius: 50%;
+            background: var(--success);
+            box-shadow: 0 0 6px var(--success);
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+
+            0%,
+            100% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.3;
+            }
+        }
+
+        /* ── Main Layout ── */
+        .main {
+            flex: 1;
+            display: flex;
+            overflow: hidden;
+        }
+
+        /* ── Side Panel (Blender 风格) ── */
+        .sidebar {
+            width: 220px;
+            background: var(--surface);
+            border-right: 1px solid rgba(255, 255, 255, 0.06);
+            display: flex;
+            flex-direction: column;
+            flex-shrink: 0;
+            overflow-y: auto;
+        }
+
+        .sidebar-section {
+            padding: 10px 12px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+        }
+
+        .sidebar-section .title {
+            font-size: 9px;
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+            color: var(--text-dim);
+            margin-bottom: 6px;
+        }
+
+        .skill-item {
+            padding: 6px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            cursor: grab;
+            margin-bottom: 2px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            transition: background 0.12s;
+        }
+
+        .skill-item:hover {
+            background: rgba(255, 255, 255, 0.06);
+        }
+
+        .skill-item .icon {
+            font-size: 12px;
+        }
+
+        .skill-item .dcc {
+            margin-left: auto;
+            font-size: 8px;
+            padding: 1px 5px;
+            border-radius: 2px;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+        }
+
+        .dcc-maya {
+            background: rgba(0, 188, 212, 0.12);
+            color: #00bcd4;
+        }
+
+        .dcc-blender {
+            background: rgba(255, 152, 0, 0.12);
+            color: #ff9800;
+        }
+
+        .dcc-ue {
+            background: rgba(156, 39, 176, 0.12);
+            color: #ce93d8;
+        }
+
+        .dcc-none {
+            background: rgba(88, 166, 255, 0.12);
+            color: #58a6ff;
+        }
+
+        /* ── Graph Canvas ── */
+        .graph-container {
+            flex: 1;
+            position: relative;
+        }
+
+        #graph-canvas {
+            width: 100%;
+            height: 100%;
+        }
+
+        /* ── Bottom Log Panel ── */
+        .log-panel {
+            height: 140px;
+            background: var(--surface);
+            border-top: 1px solid rgba(255, 255, 255, 0.06);
+            display: flex;
+            flex-direction: column;
+            flex-shrink: 0;
+        }
+
+        .log-panel .log-header {
+            display: flex;
+            align-items: center;
+            padding: 4px 12px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+            gap: 8px;
+        }
+
+        .log-panel .log-header .label {
+            font-size: 9px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-dim);
+        }
+
+        .log-panel .log-header .counter {
+            font-size: 9px;
+            padding: 1px 6px;
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.06);
+            color: var(--text-dim);
+        }
+
+        .log-body {
+            flex: 1;
+            overflow-y: auto;
+            padding: 4px 12px;
+            font-family: 'JetBrains Mono', 'Consolas', monospace;
+            font-size: 10px;
+            line-height: 1.5;
+        }
+
+        .log-line {
+            display: flex;
+            gap: 6px;
+        }
+
+        .log-line .ts {
+            color: var(--text-dim);
+            flex-shrink: 0;
+        }
+
+        .log-line .msg {
+            color: var(--text);
+        }
+
+        .log-line.success .msg {
+            color: var(--success);
+        }
+
+        .log-line.error .msg {
+            color: var(--error);
+        }
+
+        .log-line.warning .msg {
+            color: var(--warning);
+        }
+
+        .log-line.info .msg {
+            color: var(--info);
+        }
+
+        ::-webkit-scrollbar {
+            width: 4px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 2px;
+        }
+
+        /* ── 覆写 LiteGraph 默认样式 ── */
+        .litegraph .litemenu-entry {
+            font-family: 'Inter', sans-serif !important;
+        }
+
+        /* 隐藏 LiteGraph 自带的调试信息框 */
+        .litegraph .subgraph_property {
+            display: none !important;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="topbar">
+        <span class="logo">⚡ CGI Pipeline</span>
+        <div class="sep"></div>
+        <button class="btn" onclick="loadDemo()">📦 加载示例</button>
+        <button class="btn" onclick="clearGraph()">🗑️ 清空</button>
+        <button class="btn primary" onclick="executeGraph()">▶ 执行</button>
+        <a href="/report" target="_blank" class="btn" style="text-decoration:none">📋 查看报告</a>
+        <div class="status">
+            <div class="dot"></div>
+            <span id="status-text">LIVE</span>
+            <span id="status-workers" style="margin-left:4px">Workers: —</span>
+        </div>
+    </div>
+
+    <div class="main">
+        <div class="sidebar" id="sidebar">
+            <div class="sidebar-section">
+                <div class="title">📋 资产定位</div>
+                <div class="skill-item" data-type="pipeline/resolve_stage">
+                    <span class="icon">📥</span><span>资产输入</span>
+                    <span class="dcc dcc-none">CORE</span>
+                </div>
+                <div class="skill-item" data-type="pipeline/resolve_asset">
+                    <span class="icon">📂</span><span>资产定位</span>
+                    <span class="dcc dcc-none">CORE</span>
+                </div>
+            </div>
+            <div class="sidebar-section" id="skill-section">
+                <div class="title">🔧 已注册技能</div>
+            </div>
+            <div class="sidebar-section">
+                <div class="title">🧪 动态执行</div>
+                <div class="skill-item" data-type="pipeline/exec_code">
+                    <span class="icon">⚡</span><span>代码执行</span>
+                    <span class="dcc dcc-maya">MAYA</span>
+                </div>
+            </div>
+            <div class="sidebar-section">
+                <div class="title">📤 输出</div>
+                <div class="skill-item" data-type="pipeline/save_result">
+                    <span class="icon">💾</span><span>保存结果</span>
+                    <span class="dcc dcc-none">CORE</span>
+                </div>
+                <div class="skill-item" data-type="pipeline/publish">
+                    <span class="icon">🚀</span><span>发布</span>
+                    <span class="dcc dcc-none">CORE</span>
+                </div>
+            </div>
+        </div>
+        <div class="graph-container">
+            <canvas id="graph-canvas"></canvas>
+        </div>
+    </div>
+
+    <div class="log-panel">
+        <div class="log-header">
+            <span class="label">📡 执行日志</span>
+            <span class="counter" id="log-count">0</span>
+            <button class="btn" style="margin-left:auto;padding:2px 8px;font-size:9px" onclick="clearLog()">清空</button>
+        </div>
+        <div class="log-body" id="log-body"></div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/litegraph.js@0.7.18/build/litegraph.min.js"></script>
+    <script>
+        // ═══════════════════════════════════════════════════════
+        // 全局 LiteGraph 配置 — 对标 UE Blueprint / Blender GeoNodes
+        // ═══════════════════════════════════════════════════════
+
+        // 按类型着色（UE Blueprint 风格）
+        const TYPE_COLORS = {
+            'string': '#f0a',     // 洋红 — UE String
+            'number': '#7efa84',  // 绿色 — UE Float/Int
+            'boolean': '#f44',     // 红色 — UE Bool
+            'exec': '#fff',     // 白色 — UE Exec pin
+        };
+
+        const STATUS_COLORS = {
+            idle: '#30363d',
+            running: '#58a6ff',
+            success: '#3fb950',
+            failed: '#f85149',
+        };
+
+        const HIDDEN_SKILLS = ['ping', 'save_scene', 'exec_code'];
+
+        // ═══════════════════════════════════════════════════════
+        // ── 级联下拉辅助：扫描指定路径的子文件夹 ──
+        async function browsePath(dirPath) {
+            try {
+                const r = await fetch('/api/browse?path=' + encodeURIComponent(dirPath));
+                return await r.json();
+            } catch (e) {
+                return { dirs: [], files: [] };
+            }
+        }
+
+        // ── 级联下拉定义 ──
+        // 每一级: { label, key, buildPath(node) }
+        const CASCADE_LEVELS = [
+            { label: '项目', key: 'project' },
+            { label: '提交类型', key: 'publish_type' },
+            { label: '内容类型', key: 'content_type' },
+            { label: '资产类型', key: 'asset_type' },
+            { label: '资产名称', key: 'asset_name' },
+            { label: '环节', key: 'department' },
+            { label: '环节提交', key: 'submission' },
+        ];
+
+        function ResolveStageNode() {
+            this.addOutput('source_path', 'string');
+            this.addOutput('asset_name', 'string');
+            this.addOutput('project', 'string');
+
+            // 根路径 — 用户可编辑
+            this._rootPath = 'Y:/GGbommer/scripts/CGI_Pipeline/projects/';
+            this.addWidget('text', 'projects_root', this._rootPath, (v) => {
+                this._rootPath = v;
+                this._refreshLevel(0);
+            });
+
+            // 7 级级联下拉 widget 引用
+            this._comboWidgets = [];
+            this._comboValues = {};    // { key: selectedValue }
+            this._levelOptions = {};   // { key: [options] }
+            this._resolvedFile = '';
+
+            for (let i = 0; i < CASCADE_LEVELS.length; i++) {
+                const level = CASCADE_LEVELS[i];
+                const w = this.addWidget('combo', level.label, '(加载中...)',
+                    (v) => { this._onLevelSelect(i, v); },
+                    { values: ['(加载中...)'] }
+                );
+                this._comboWidgets.push(w);
+                this._comboValues[level.key] = '';
+            }
+
+            // 工程文件 — combo 下拉，列出所有版本可供切换
+            this._fileWidget = this.addWidget('combo', '工程文件', '(自动选择)',
+                (v) => {
+                    // 用户手动切换版本
+                    this._resolvedFileName = v;
+                    const subPath = this._buildPath(CASCADE_LEVELS.length - 1);
+                    if (subPath) {
+                        this._resolvedFile = subPath.replace(/\/$/, '') + '/' + v;
+                    }
+                },
+                { values: ['(自动选择)'] }
+            );
+
+            this.properties = { status: 'idle' };
+            this.size = [520, 330];
+            this.color = '#233';
+            this.bgcolor = '#1a2530';
+
+            // 启动时加载第一级
+            setTimeout(() => this._refreshLevel(0), 300);
+        }
+
+        // 构建到第 N 级的路径
+        ResolveStageNode.prototype._buildPath = function (upToLevel) {
+            let p = this._rootPath;
+            for (let i = 0; i <= upToLevel; i++) {
+                const key = CASCADE_LEVELS[i].key;
+                const v = this._comboValues[key];
+                if (!v || v.startsWith('(')) return null;
+                p = p.replace(/\/$/, '') + '/' + v;
+            }
+            return p;
+        };
+
+        // 刷新第 N 级的选项
+        ResolveStageNode.prototype._refreshLevel = async function (levelIdx) {
+            // 构建父路径
+            let parentPath;
+            if (levelIdx === 0) {
+                parentPath = this._rootPath;
+            } else {
+                parentPath = this._buildPath(levelIdx - 1);
+            }
+
+            if (!parentPath) {
+                this._clearFrom(levelIdx);
+                return;
+            }
+
+            const data = await browsePath(parentPath);
+            const widget = this._comboWidgets[levelIdx];
+            const level = CASCADE_LEVELS[levelIdx];
+
+            if (data.dirs && data.dirs.length > 0) {
+                widget.options.values = data.dirs;
+                widget.value = data.dirs[0];
+                this._comboValues[level.key] = data.dirs[0];
+                this._levelOptions[level.key] = data.dirs;
+            } else {
+                widget.options.values = ['(无)'];
+                widget.value = '(无)';
+                this._comboValues[level.key] = '';
+            }
+
+            // 清空后续级别
+            this._clearFrom(levelIdx + 1);
+
+            // 如果有选项，自动触发下一级
+            if (data.dirs && data.dirs.length > 0 && levelIdx < CASCADE_LEVELS.length - 1) {
+                await this._refreshLevel(levelIdx + 1);
+            }
+
+            // 如果是最后一级（submission），自动查找工程文件
+            if (levelIdx === CASCADE_LEVELS.length - 1) {
+                await this._findLatestFile();
+            }
+
+            this.setDirtyCanvas(true, true);
+        };
+
+        // 清空从 levelIdx 开始的所有下拉
+        ResolveStageNode.prototype._clearFrom = function (levelIdx) {
+            for (let i = levelIdx; i < CASCADE_LEVELS.length; i++) {
+                const w = this._comboWidgets[i];
+                w.options.values = ['(选择上级...)'];
+                w.value = '(选择上级...)';
+                this._comboValues[CASCADE_LEVELS[i].key] = '';
+            }
+            this._fileWidget.options.values = ['(自动选择)'];
+            this._fileWidget.value = '(自动选择)';
+            this._resolvedFileName = '';
+            this._resolvedFile = '';
+        };
+
+        // 选中某级时的回调
+        ResolveStageNode.prototype._onLevelSelect = async function (levelIdx, value) {
+            const level = CASCADE_LEVELS[levelIdx];
+            this._comboValues[level.key] = value;
+
+            // 刷新下一级
+            if (levelIdx < CASCADE_LEVELS.length - 1) {
+                await this._refreshLevel(levelIdx + 1);
+            } else {
+                // 最后一级 → 查找工程文件
+                await this._findLatestFile();
+            }
+        };
+
+        // 查找工程文件并填入 combo（所有版本可选，默认最新）
+        ResolveStageNode.prototype._findLatestFile = async function () {
+            const subPath = this._buildPath(CASCADE_LEVELS.length - 1);
+            if (!subPath) {
+                this._fileWidget.options.values = ['(路径不完整)'];
+                this._fileWidget.value = '(路径不完整)';
+                this._resolvedFileName = '';
+                this._resolvedFile = '';
+                return;
+            }
+
+            const data = await browsePath(subPath);
+            // 筛选 .ma / .mb 文件（已按版本号降序排列）
+            const maFiles = (data.files || []).filter(f =>
+                /\.(ma|mb|blend|abc|json)$/i.test(f.name)
+            );
+
+            if (maFiles.length > 0) {
+                const fileNames = maFiles.map(f => f.name);
+                this._fileWidget.options.values = fileNames;
+                this._fileWidget.value = fileNames[0];  // 默认最新版
+                this._resolvedFileName = fileNames[0];
+                this._resolvedFile = subPath.replace(/\/$/, '') + '/' + fileNames[0];
+            } else {
+                this._fileWidget.options.values = ['(无工程文件)'];
+                this._fileWidget.value = '(无工程文件)';
+                this._resolvedFileName = '';
+                this._resolvedFile = '';
+            }
+            this.setDirtyCanvas(true, true);
+        };
+
+        ResolveStageNode.title = '资产输入';
+        ResolveStageNode.desc = '级联下拉选择资产路径，自动定位最新版本工程文件';
+
+        ResolveStageNode.prototype.onExecute = function () {
+            this.boxcolor = STATUS_COLORS[this.properties.status] || STATUS_COLORS.idle;
+        };
+
+        // getOutputData 供下游节点读取
+        ResolveStageNode.prototype.getOutputData = function (slot) {
+            if (slot === 0) return this._resolvedFile;                              // source_path
+            if (slot === 1) return this._comboValues['asset_name'] || '';           // asset_name
+            if (slot === 2) return this._comboValues['project'] || '';              // project
+            return null;
+        };
+
+        LiteGraph.registerNodeType('pipeline/resolve_stage', ResolveStageNode);
+
+        function ResolveAssetNode() {
+            this.addInput('project', 'string');
+            this.addInput('asset_name', 'string');
+            this.addOutput('latest_path', 'string');
+            this.addOutput('work_path', 'string');
+            this.addOutput('version', 'number');
+            this.addWidget('text', 'project', 'hero_project');
+            this.addWidget('text', 'asset_name', 'hero_01');
+            this.properties = { status: 'idle' };
+            this.size = [280, 180];
+            this.color = '#233';
+            this.bgcolor = '#1a2530';
+        }
+        ResolveAssetNode.title = '资产定位';
+        ResolveAssetNode.desc = '查询资产最新版本路径';
+        ResolveAssetNode.prototype.onExecute = function () {
+            this.boxcolor = STATUS_COLORS[this.properties.status] || STATUS_COLORS.idle;
+        };
+        LiteGraph.registerNodeType('pipeline/resolve_asset', ResolveAssetNode);
+
+        function SaveResultNode() {
+            this.addInput('source_path', 'string');
+            this.addOutput('save_path', 'string');
+
+            // ── 内部状态 ──
+            this._upstreamPath = '';
+            this._resolvedSavePath = '';
+            this._cascadeWidgets = [];   // 动态探索下拉
+            this._cascadeValues = [];
+            this._originalFileName = ''; // 未递增前的原始文件名
+            this._fileName = '';
+
+            // ── 固定 Widget: auto_version ──
+            this.addWidget('toggle', 'auto_version', true, () => this._recalcFileName());
+
+            // ── 固定 Widget: 格式 ──
+            this.addWidget('combo', '格式', '.ma', () => this._recalcFileName(),
+                { values: ['.ma', '.mb', '.blend', '.fbx', '.abc', '.usd'] });
+
+            // ── 固定 Widget: 根路径 ──
+            this._rootWidget = this.addWidget('text', '根路径', '', (v) => {
+                this._clearCascade();
+                if (v) this._exploreDir(v);
+            });
+
+            // ── 固定 Widget: 工程文件（始终在最底部）──
+            this._fileWidget = this.addWidget('combo', '工程文件', '(自动填充)',
+                (v) => {
+                    if (!v || v.startsWith('(')) return;
+                    this._originalFileName = v;
+                    this._recalcFileName();
+                },
+                { values: ['(自动填充)'] }
+            );
+
+            this.properties = { status: 'idle' };
+            this.size = [520, 200];
+            this.color = '#243';
+            this.bgcolor = '#1a2a1f';
+        }
+
+        SaveResultNode.title = '保存结果';
+        SaveResultNode.desc = '保存工程文件到指定路径，支持逐级路径探索和自动版本递增';
+
+        // ── 版本号递增 ──
+        function incrementVersion(fileName) {
+            const m = fileName.match(/_v(\d+)(\.\w+)$/);
+            if (m) {
+                const next = String(parseInt(m[1], 10) + 1).padStart(m[1].length, '0');
+                return fileName.replace(/_v\d+(\.\w+)$/, '_v' + next + '$1');
+            }
+            const ext = fileName.match(/(\.\w+)$/);
+            return ext ? fileName.replace(/(\.\w+)$/, '_v001$1') : fileName + '_v001';
+        }
+
+        // ══════════════════════════════════════════
+        //  上游数据感知
+        // ══════════════════════════════════════════
+        SaveResultNode.prototype.onConnectionsChange = function (type, slot, connected, info) {
+            if (type !== LiteGraph.INPUT || slot !== 0) return;
+            if (connected && info) {
+                const src = graph.getNodeById(info.origin_id);
+                if (src) {
+                    const p = src.getOutputData(info.origin_slot);
+                    if (p) { this._upstreamPath = p; this._onUpstreamPath(p); }
+                }
+            } else {
+                this._upstreamPath = '';
+            }
+        };
+
+        // 每帧检测上游数据变更（用户在资产输入切换版本时）
+        SaveResultNode.prototype.onDrawForeground = function () {
+            if (!this.inputs || !this.inputs[0] || this.inputs[0].link == null) return;
+            const link = graph.links[this.inputs[0].link];
+            if (!link) return;
+            const src = graph.getNodeById(link.origin_id);
+            if (!src) return;
+            const p = src.getOutputData(link.origin_slot);
+            if (p && p !== this._upstreamPath) {
+                this._upstreamPath = p;
+                this._onUpstreamPath(p);
+            }
+        };
+
+        SaveResultNode.prototype.onExecute = function () {
+            this.boxcolor = STATUS_COLORS[this.properties.status] || STATUS_COLORS.idle;
+        };
+
+        // ══════════════════════════════════════════
+        //  上游路径变更 → 设根路径 + 填文件名
+        // ══════════════════════════════════════════
+        SaveResultNode.prototype._onUpstreamPath = function (fullPath) {
+            if (!fullPath) return;
+            const norm = fullPath.replace(/\\/g, '/');
+            const lastSlash = norm.lastIndexOf('/');
+            const dir = lastSlash >= 0 ? norm.substring(0, lastSlash) : norm;
+            const file = lastSlash >= 0 ? norm.substring(lastSlash + 1) : '';
+
+            // 清空旧级联
+            this._clearCascade();
+
+            // 根路径 = 完整目录（不拆分）
+            this._rootWidget.value = dir;
+
+            // 设置原始文件名 → recalc 会处理 auto_version
+            this._originalFileName = file;
+            this._recalcFileName();
+            this._updateSavePath();
+        };
+
+        // ══════════════════════════════════════════
+        //  逐级向下探索子文件夹
+        // ══════════════════════════════════════════
+
+        // 获取当前探索到的完整路径
+        SaveResultNode.prototype._currentDir = function () {
+            let p = this._rootWidget.value || '';
+            for (const v of this._cascadeValues) {
+                if (!v || v.startsWith('(')) break;
+                p = p.replace(/\/$/, '') + '/' + v;
+            }
+            return p;
+        };
+
+        // 探索指定目录：有子文件夹 → 生成下拉；查找工程文件
+        SaveResultNode.prototype._exploreDir = async function (dirPath) {
+            const data = await browsePath(dirPath);
+            const dirs = data.dirs || [];
+
+            // 查找工程文件（始终更新，不管有没有子文件夹）
+            await this._findFiles(dirPath);
+
+            // 有子文件夹 → 添加一级探索下拉
+            if (dirs.length > 0) {
+                const levelIdx = this._cascadeWidgets.length;
+                const w = this.addWidget('combo', '📂 ' + (levelIdx + 1), dirs[0],
+                    async (v) => {
+                        this._cascadeValues[levelIdx] = v;
+                        // 清除此级之后的所有下拉
+                        this._clearCascadeFrom(levelIdx + 1);
+                        // 继续探索选中的子目录
+                        const nextDir = this._currentDir();
+                        await this._exploreDir(nextDir);
+                    },
+                    { values: dirs }
+                );
+
+                this._insertBeforeFile(w);
+                this._cascadeWidgets.push(w);
+                this._cascadeValues.push(dirs[0]);
+
+                // 自动进入第一个子文件夹继续探索
+                const nextDir = dirPath.replace(/\/$/, '') + '/' + dirs[0];
+                await this._exploreDir(nextDir);
+            }
+
+            this._updateSize();
+            this._updateSavePath();
+        };
+
+        // 查找目录下的工程文件
+        SaveResultNode.prototype._findFiles = async function (dirPath) {
+            const data = await browsePath(dirPath);
+            const files = (data.files || []).filter(f =>
+                /\.(ma|mb|blend|fbx|abc|usd|json)$/i.test(f.name)
+            );
+
+            if (files.length > 0) {
+                const names = files.map(f => f.name);
+                this._fileWidget.options.values = names;
+                // 如果还没有文件名，选最新的
+                if (!this._originalFileName || this._originalFileName.startsWith('(')) {
+                    this._originalFileName = names[0];
+                    this._recalcFileName();
+                }
+            } else if (!this._originalFileName || this._originalFileName.startsWith('(')) {
+                this._fileWidget.options.values = ['(无工程文件)'];
+                this._fileWidget.value = '(无工程文件)';
+            }
+
+            this.setDirtyCanvas(true, true);
+        };
+
+        // ══════════════════════════════════════════
+        //  Widget 管理
+        // ══════════════════════════════════════════
+
+        // 将 widget 插入到 _fileWidget 之前
+        SaveResultNode.prototype._insertBeforeFile = function (w) {
+            const fi = this.widgets.indexOf(this._fileWidget);
+            if (fi < 0) return;
+            const wi = this.widgets.indexOf(w);
+            if (wi >= 0) this.widgets.splice(wi, 1);
+            this.widgets.splice(this.widgets.indexOf(this._fileWidget), 0, w);
+        };
+
+        // 清除所有级联
+        SaveResultNode.prototype._clearCascade = function () {
+            for (const w of this._cascadeWidgets) {
+                const i = this.widgets.indexOf(w);
+                if (i >= 0) this.widgets.splice(i, 1);
+            }
+            this._cascadeWidgets = [];
+            this._cascadeValues = [];
+            this._updateSize();
+        };
+
+        // 清除 fromLevel 及之后的级联
+        SaveResultNode.prototype._clearCascadeFrom = function (fromLevel) {
+            const removed = this._cascadeWidgets.splice(fromLevel);
+            this._cascadeValues.splice(fromLevel);
+            for (const w of removed) {
+                const i = this.widgets.indexOf(w);
+                if (i >= 0) this.widgets.splice(i, 1);
+            }
+            this._updateSize();
+        };
+
+        // ══════════════════════════════════════════
+        //  文件名计算 & 路径拼合
+        // ══════════════════════════════════════════
+
+        SaveResultNode.prototype._recalcFileName = function () {
+            let name = this._originalFileName || '';
+            if (!name || name.startsWith('(')) {
+                this._fileWidget.value = name || '(自动填充)';
+                this._updateSavePath();
+                return;
+            }
+
+            const autoVer = this.widgets.find(w => w.name === 'auto_version');
+            if (autoVer && autoVer.value) name = incrementVersion(name);
+
+            const fmt = this.widgets.find(w => w.name === '格式');
+            if (fmt && fmt.value) name = name.replace(/\.\w+$/, fmt.value);
+
+            this._fileName = name;
+            this._fileWidget.value = name;
+            this._updateSavePath();
+        };
+
+        SaveResultNode.prototype._updateSavePath = function () {
+            const dir = this._currentDir();
+            if (this._fileName && !this._fileName.startsWith('(')) {
+                this._resolvedSavePath = dir.replace(/\/$/, '') + '/' + this._fileName;
+            } else {
+                this._resolvedSavePath = dir;
+            }
+            this.setDirtyCanvas(true, true);
+        };
+
+        SaveResultNode.prototype._updateSize = function () {
+            this.size[1] = Math.max(200, 200 + this._cascadeWidgets.length * 24);
+        };
+
+        SaveResultNode.prototype.getOutputData = function (slot) {
+            return slot === 0 ? this._resolvedSavePath : null;
+        };
+
+        LiteGraph.registerNodeType('pipeline/save_result', SaveResultNode);
+
+        // ─────────────────────────────────────────────
+        // ExecCodeNode — 动态代码执行（Ⅳ 级技能）
+        // ─────────────────────────────────────────────
+        function ExecCodeNode() {
+            this.addInput('source_path', 'string');
+            this.addOutput('result', 'string');
+
+            this._code = '# 在此编写 Python 代码\n# 将结果赋值给 result 变量\nimport maya.cmds as cmds\nresult = {"nodes": cmds.ls(type="transform")}';
+            this._desc = '';
+            this.addWidget('text', 'description', '', (v) => { this._desc = v; });
+            this.properties = { skill_id: 'exec_code', status: 'idle' };
+            this.size = [320, 180];
+            this.color = '#2a3a2a';
+            this.bgcolor = '#1a2a1a';
+        }
+        ExecCodeNode.title = '代码执行';
+        ExecCodeNode.desc = '在 Maya 中执行任意 Python 代码并返回结果';
+
+        ExecCodeNode.prototype.onDrawForeground = function (ctx) {
+            if (!this.flags.collapsed) {
+                // 绘制代码预览区域
+                const y = this.size[1] - 80;
+                ctx.fillStyle = '#0d1117';
+                ctx.strokeStyle = '#30363d';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.roundRect(10, y, this.size[0] - 20, 70, 4);
+                ctx.fill();
+                ctx.stroke();
+
+                // 显示代码前几行
+                ctx.fillStyle = '#7b8794';
+                ctx.font = '9px monospace';
+                const lines = this._code.split('\n').slice(0, 5);
+                for (let i = 0; i < lines.length; i++) {
+                    const line = lines[i].length > 40 ? lines[i].substring(0, 37) + '...' : lines[i];
+                    ctx.fillText(line, 15, y + 12 + i * 12);
+                }
+                if (this._code.split('\n').length > 5) {
+                    ctx.fillStyle = '#58a6ff';
+                    ctx.fillText('... (双击编辑)', 15, y + 12 + 5 * 12);
+                }
+            }
+        };
+        ExecCodeNode.prototype._openCodeEditor = function () {
+            // 弹出代码编辑器
+            const node = this;
+            const dialog = document.createElement('div');
+            dialog.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.7);z-index:9999;display:flex;align-items:center;justify-content:center;';
+
+            const panel = document.createElement('div');
+            panel.style.cssText = 'background:#1a1a2e;border:1px solid #30363d;border-radius:8px;padding:16px;width:600px;max-height:80vh;display:flex;flex-direction:column;gap:8px;';
+
+            const title = document.createElement('div');
+            title.style.cssText = 'color:#e6edf3;font-size:13px;font-weight:600;';
+            title.textContent = '⚡ 代码编辑器 — exec_code';
+
+            const textarea = document.createElement('textarea');
+            textarea.style.cssText = 'width:100%;height:300px;background:#0d1117;color:#e6edf3;border:1px solid #30363d;border-radius:4px;padding:8px;font-family:monospace;font-size:12px;resize:vertical;tab-size:4;';
+            textarea.value = node._code;
+            textarea.spellcheck = false;
+
+            // Tab 支持
+            textarea.addEventListener('keydown', (e) => {
+                if (e.key === 'Tab') {
+                    e.preventDefault();
+                    const start = textarea.selectionStart;
+                    const end = textarea.selectionEnd;
+                    textarea.value = textarea.value.substring(0, start) + '    ' + textarea.value.substring(end);
+                    textarea.selectionStart = textarea.selectionEnd = start + 4;
+                }
+            });
+
+            const hint = document.createElement('div');
+            hint.style.cssText = 'color:#7b8794;font-size:10px;';
+            hint.textContent = '提示: 将结果赋值给 result 变量（dict），该变量将作为技能返回值。';
+
+            const btnRow = document.createElement('div');
+            btnRow.style.cssText = 'display:flex;gap:8px;justify-content:flex-end;';
+
+            const cancelBtn = document.createElement('button');
+            cancelBtn.style.cssText = 'padding:6px 16px;background:#30363d;color:#e6edf3;border:none;border-radius:4px;cursor:pointer;';
+            cancelBtn.textContent = '取消';
+            cancelBtn.onclick = () => document.body.removeChild(dialog);
+
+            const saveBtn = document.createElement('button');
+            saveBtn.style.cssText = 'padding:6px 16px;background:#7c6aef;color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:600;';
+            saveBtn.textContent = '确定';
+            saveBtn.onclick = () => {
+                node._code = textarea.value;
+                document.body.removeChild(dialog);
+                graphCanvas.setDirty(true, true);
+            };
+
+            btnRow.appendChild(cancelBtn);
+            btnRow.appendChild(saveBtn);
+            panel.appendChild(title);
+            panel.appendChild(textarea);
+            panel.appendChild(hint);
+            panel.appendChild(btnRow);
+            dialog.appendChild(panel);
+            document.body.appendChild(dialog);
+            textarea.focus();
+        };
+
+        ExecCodeNode.prototype.onExecute = function () {
+            this.setOutputData(0, JSON.stringify({
+                code: this._code,
+                description: this._desc
+            }));
+        };
+
+        ExecCodeNode.prototype.getOutputData = function (slot) {
+            if (slot === 0) return JSON.stringify({ code: this._code, description: this._desc });
+        };
+
+        LiteGraph.registerNodeType('pipeline/exec_code', ExecCodeNode);
+
+        // ── 发布节点（简化版，仅做版本递增标记）──
+        function PublishNode() {
+            this.addInput('save_path', 'string');
+            this.addOutput('published_path', 'string');
+            this.addWidget('toggle', 'auto_version', true);
+            this.properties = { status: 'idle' };
+            this.size = [240, 110];
+            this.color = '#324';
+            this.bgcolor = '#251a2a';
+        }
+        PublishNode.title = '发布';
+        PublishNode.desc = '将资产发布到生产库（自动递增版本号）';
+        PublishNode.prototype.onExecute = function () {
+            this.boxcolor = STATUS_COLORS[this.properties.status] || STATUS_COLORS.idle;
+        };
+        LiteGraph.registerNodeType('pipeline/publish', PublishNode);
+
+        // ── 动态 Skill 节点工厂 ──
+        function createSkillNodeClass(skill) {
+            const dccColors = {
+                maya: { color: '#234', bgcolor: '#1a2530' },
+                blender: { color: '#342', bgcolor: '#2a2518' },
+                ue: { color: '#324', bgcolor: '#251a2a' },
+            };
+            const colors = dccColors[skill.dcc] || dccColors.maya;
+
+            function SkillNode() {
+                this.addInput('source_path', 'string');
+                this.addOutput('result_path', 'string');
+                this.addOutput('status', 'string');
+                let wc = 0;
+                if (skill.parameters_schema) {
+                    for (const [key, schema] of Object.entries(skill.parameters_schema)) {
+                        if (schema.type === 'boolean') {
+                            this.addWidget('toggle', key, schema.default || false);
+                        } else if (schema.enum) {
+                            this.addWidget('combo', key, schema.default || schema.enum[0], function () { }, { values: schema.enum });
+                        } else {
+                            this.addWidget('text', key, String(schema.default || ''));
+                        }
+                        wc++;
+                    }
+                }
+                this.properties = { skill_id: skill.skill_id, dcc: skill.dcc, status: 'idle' };
+                this.size = [300, 120 + wc * 32];
+                this.color = colors.color;
+                this.bgcolor = colors.bgcolor;
+            }
+            SkillNode.title = skill.name;
+            SkillNode.desc = skill.description;
+            SkillNode.prototype.onExecute = function () {
+                this.boxcolor = STATUS_COLORS[this.properties.status] || STATUS_COLORS.idle;
+            };
+            return SkillNode;
+        }
+
+        // ═══════════════════════════════════════════════════════
+        // 初始化 Graph + Canvas
+        // ═══════════════════════════════════════════════════════
+
+        const graph = new LGraph();
+        const canvasEl = document.getElementById('graph-canvas');
+
+        function resizeCanvas() {
+            const c = canvasEl.parentElement;
+            canvasEl.width = c.clientWidth;
+            canvasEl.height = c.clientHeight;
+        }
+        resizeCanvas();
+        window.addEventListener('resize', resizeCanvas);
+
+        const graphCanvas = new LGraphCanvas('#graph-canvas', graph);
+
+        // ── 画布基础设置 ──
+        graphCanvas.background_image = null;             // 关闭默认背景图
+        graphCanvas.clear_background_color = '#1a1a2e';  // UE Blueprint 深蓝灰
+        graphCanvas.show_info = false;                   // 关闭左下角调试信息框
+        graphCanvas.render_shadows = false;
+        graphCanvas.render_curved_connections = true;
+        graphCanvas.links_render_mode = LiteGraph.SPLINE_LINK;
+        graphCanvas.render_connection_arrows = false;
+        graphCanvas.render_connections_border = 0;
+        graphCanvas.highquality_render = true;
+
+        // ── ExecCodeNode 双击拦截（必须在 graphCanvas 创建后注册）──
+        const _origNodeDblClicked = graphCanvas.onNodeDblClicked;
+        graphCanvas.onNodeDblClicked = function (node) {
+            if (node && node.type === 'pipeline/exec_code') {
+                ExecCodeNode.prototype._openCodeEditor.call(node);
+                return;
+            }
+            if (_origNodeDblClicked) _origNodeDblClicked.call(this, node);
+        };
+
+        // ── [FIX] 去掉连线中间的圆圈标记 ──
+        LiteGraph.LINK_MARK = false;   // 禁用连线中点圆圈
+        if (LGraphCanvas.prototype.renderLink) {
+            const _origRenderLink = LGraphCanvas.prototype.renderLink;
+            LGraphCanvas.prototype.renderLink = function (ctx, a, b, link, skip_border, flow, color, start_dir, end_dir, num_sublines) {
+                const oldMark = LiteGraph.LINK_MARK;
+                LiteGraph.LINK_MARK = false;
+                _origRenderLink.call(this, ctx, a, b, link, skip_border, flow, color, start_dir, end_dir, num_sublines);
+                LiteGraph.LINK_MARK = oldMark;
+            };
+        }
+
+
+        // ── [FIX] 加宽 Value 输入弹窗 ──
+        const _origPrompt = LGraphCanvas.prototype.prompt;
+        if (_origPrompt) {
+            LGraphCanvas.prototype.prompt = function (title, value, callback, ev, multiline) {
+                const result = _origPrompt.call(this, title, value, callback, ev, multiline);
+                setTimeout(() => {
+                    const dialogs = document.querySelectorAll('.graphdialog');
+                    dialogs.forEach(d => {
+                        d.style.minWidth = '500px';
+                        const input = d.querySelector('input');
+                        if (input) {
+                            input.style.width = '460px';
+                            input.style.fontSize = '14px';
+                        }
+                    });
+                }, 10);
+                return result;
+            };
+        }
+
+
+        // ── 连线颜色 ──
+        graphCanvas.default_connection_color = {
+            input_off: '#555', input_on: '#aef',
+            output_off: '#555', output_on: '#aef'
+        };
+
+        // ── 自定义背景：细点网格（UE Blueprint 风格）──
+        graphCanvas.drawBackCanvas = (function (original) {
+            return function () {
+                original.call(this);
+                const ctx = this.bgcanvas.getContext('2d');
+                if (!ctx) return;
+                const s = this.ds.scale;
+                const o = this.ds.offset;
+                const w = this.bgcanvas.width;
+                const h = this.bgcanvas.height;
+
+                // 小点网格
+                const gridSize = 20;
+                ctx.fillStyle = 'rgba(255,255,255,0.03)';
+                const startX = (o[0] % (gridSize * s));
+                const startY = (o[1] % (gridSize * s));
+                for (let x = startX; x < w; x += gridSize * s) {
+                    for (let y = startY; y < h; y += gridSize * s) {
+                        ctx.fillRect(x, y, 1, 1);
+                    }
+                }
+
+                // 大网格线
+                const bigGrid = 100;
+                ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+                ctx.lineWidth = 1;
+                const bStartX = (o[0] % (bigGrid * s));
+                const bStartY = (o[1] % (bigGrid * s));
+                ctx.beginPath();
+                for (let x = bStartX; x < w; x += bigGrid * s) {
+                    ctx.moveTo(x, 0); ctx.lineTo(x, h);
+                }
+                for (let y = bStartY; y < h; y += bigGrid * s) {
+                    ctx.moveTo(0, y); ctx.lineTo(w, y);
+                }
+                ctx.stroke();
+            };
+        })(graphCanvas.drawBackCanvas.bind(graphCanvas));
+
+        // ── Maya Node Editor 风格：连线中点三角箭头 ──
+        const _origDrawConnections = LGraphCanvas.prototype.drawConnections;
+        LGraphCanvas.prototype.drawConnections = function (ctx) {
+            _origDrawConnections.call(this, ctx);
+            if (!this.graph || !this.graph.links) return;
+
+            ctx.save();
+            for (const linkId in this.graph.links) {
+                const link = this.graph.links[linkId];
+                if (!link) continue;
+                const srcNode = this.graph.getNodeById(link.origin_id);
+                const dstNode = this.graph.getNodeById(link.target_id);
+                if (!srcNode || !dstNode) continue;
+
+                const srcPos = srcNode.getConnectionPos(false, link.origin_slot);
+                const dstPos = dstNode.getConnectionPos(true, link.target_slot);
+                if (!srcPos || !dstPos) continue;
+
+                // 贝塞尔曲线中点 t=0.5
+                const dx = Math.abs(dstPos[0] - srcPos[0]) * 0.5;
+                const cp1x = srcPos[0] + dx, cp1y = srcPos[1];
+                const cp2x = dstPos[0] - dx, cp2y = dstPos[1];
+                const t = 0.5, it = 0.5;
+                const mx = it * it * it * srcPos[0] + 3 * it * it * t * cp1x + 3 * it * t * t * cp2x + t * t * t * dstPos[0];
+                const my = it * it * it * srcPos[1] + 3 * it * it * t * cp1y + 3 * it * t * t * cp2y + t * t * t * dstPos[1];
+
+                // 切线方向（t=0.5 处导数）
+                const dt = 0.01;
+                const t2 = t + dt, it2 = 1 - t2;
+                const mx2 = it2 * it2 * it2 * srcPos[0] + 3 * it2 * it2 * t2 * cp1x + 3 * it2 * t2 * t2 * cp2x + t2 * t2 * t2 * dstPos[0];
+                const my2 = it2 * it2 * it2 * srcPos[1] + 3 * it2 * it2 * t2 * cp1y + 3 * it2 * t2 * t2 * cp2y + t2 * t2 * t2 * dstPos[1];
+                const angle = Math.atan2(my2 - my, mx2 - mx);
+
+                // 画三角箭头（实心，指向下游）
+                const size = 6;
+                ctx.beginPath();
+                ctx.moveTo(mx + Math.cos(angle) * size, my + Math.sin(angle) * size);
+                ctx.lineTo(mx + Math.cos(angle + 2.5) * size, my + Math.sin(angle + 2.5) * size);
+                ctx.lineTo(mx + Math.cos(angle - 2.5) * size, my + Math.sin(angle - 2.5) * size);
+                ctx.closePath();
+                ctx.fillStyle = 'rgba(170, 220, 170, 0.9)';
+                ctx.fill();
+            }
+            ctx.restore();
+        };
+
+        graph.start();
+
+        // ═══════════════════════════════════════════════════════
+        // 从后端加载技能
+        // ═══════════════════════════════════════════════════════
+
+        let loadedSkills = [];
+
+        async function loadSkills() {
+            try {
+                const r = await fetch('/api/skills');
+                const data = await r.json();
+                const allSkills = data.skills || [];
+                loadedSkills = allSkills.filter(s => !HIDDEN_SKILLS.includes(s.skill_id));
+
+                const section = document.getElementById('skill-section');
+                for (const skill of loadedSkills) {
+                    const nodeType = `skill/${skill.skill_id}`;
+                    const NodeClass = createSkillNodeClass(skill);
+                    LiteGraph.registerNodeType(nodeType, NodeClass);
+
+                    const dcc = skill.dcc || 'maya';
+                    const el = document.createElement('div');
+                    el.className = 'skill-item';
+                    el.dataset.type = nodeType;
+                    el.innerHTML = `<span class="icon">⚙️</span><span>${skill.name}</span><span class="dcc dcc-${dcc}">${dcc.toUpperCase()}</span>`;
+                    section.appendChild(el);
+                }
+                setupDragDrop();
+                log('info', `已加载 ${loadedSkills.length} 个技能节点`);
+            } catch (e) {
+                log('error', `技能加载失败: ${e.message}`);
+            }
+        }
+
+        // ═══════════════════════════════════════════════════════
+        // 拖拽创建节点
+        // ═══════════════════════════════════════════════════════
+
+        function setupDragDrop() {
+            document.querySelectorAll('.skill-item').forEach(item => {
+                item.draggable = true;
+                item.addEventListener('dragstart', e => {
+                    e.dataTransfer.setData('node-type', item.dataset.type);
+                });
+            });
+            canvasEl.addEventListener('dragover', e => e.preventDefault());
+            canvasEl.addEventListener('drop', e => {
+                e.preventDefault();
+                const type = e.dataTransfer.getData('node-type');
+                if (!type) return;
+                const pos = graphCanvas.convertEventToCanvasOffset(e);
+                const node = LiteGraph.createNode(type);
+                if (node) {
+                    node.pos = [pos[0], pos[1]];
+                    graph.add(node);
+                    log('info', `创建节点: ${node.title}`);
+                }
+            });
+        }
+
+        // ═══════════════════════════════════════════════════════
+        // 拓扑排序 + 图执行
+        // ═══════════════════════════════════════════════════════
+
+        function topologicalSort(g) {
+            const nodes = g._nodes;
+            if (!nodes || nodes.length === 0) return [];
+            const inDeg = new Map();
+            const adj = new Map();
+            for (const n of nodes) { inDeg.set(n.id, 0); adj.set(n.id, []); }
+            if (g.links) {
+                for (const lid in g.links) {
+                    const lk = g.links[lid];
+                    if (!lk) continue;
+                    if (adj.has(lk.origin_id) && inDeg.has(lk.target_id)) {
+                        adj.get(lk.origin_id).push(lk.target_id);
+                        inDeg.set(lk.target_id, inDeg.get(lk.target_id) + 1);
+                    }
+                }
+            }
+            const queue = [];
+            for (const n of nodes) { if (inDeg.get(n.id) === 0) queue.push(n); }
+            const sorted = [];
+            const nm = new Map(nodes.map(n => [n.id, n]));
+            while (queue.length) {
+                const c = queue.shift();
+                sorted.push(c);
+                for (const nid of adj.get(c.id)) {
+                    inDeg.set(nid, inDeg.get(nid) - 1);
+                    if (inDeg.get(nid) === 0) queue.push(nm.get(nid));
+                }
+            }
+            for (const n of nodes) { if (!sorted.includes(n)) sorted.push(n); }
+            return sorted;
+        }
+
+        // ── 轮询任务状态直到完成 ──
+        function pollTask(taskId) {
+            return new Promise((resolve) => {
+                const es = new EventSource(`/api/tasks/${taskId}/poll`);
+                es.onmessage = (e) => {
+                    try {
+                        const data = JSON.parse(e.data);
+                        if (['SUCCESS', 'ERROR', 'TIMEOUT'].includes(data.status)) {
+                            es.close();
+                            resolve(data);
+                        }
+                    } catch (err) { /* 忽略解析错误 */ }
+                };
+                es.onerror = () => {
+                    es.close();
+                    resolve({ task_id: taskId, status: 'ERROR', detail: 'SSE 连接断开' });
+                };
+            });
+        }
+
+        // ── 从上游节点获取参数 ──
+        function getUpstreamParams(node) {
+            const params = { project: 'default', asset_name: 'unknown', source_path: '' };
+            if (!node.inputs) return params;
+            for (let i = 0; i < node.inputs.length; i++) {
+                const inp = node.inputs[i];
+                if (inp.link == null) continue;
+                const link = graph.links[inp.link];
+                if (!link) continue;
+                const src = graph.getNodeById(link.origin_id);
+                if (!src) continue;
+
+                // 优先使用 getOutputData（级联下拉节点）
+                if (typeof src.getOutputData === 'function') {
+                    const sp = src.getOutputData(0);
+                    const an = src.getOutputData(1);
+                    const pj = src.getOutputData(2);
+                    if (sp) params.source_path = sp;
+                    if (an) params.asset_name = an;
+                    if (pj) params.project = pj;
+                }
+
+                // 回退：从 widget 读取（兼容旧节点）
+                if (src.widgets) {
+                    src.widgets.forEach(w => {
+                        if (w.name === 'project' && !params.project) params.project = w.value;
+                        if (w.name === 'asset_name' && !params.asset_name) params.asset_name = w.value;
+                        if (w.name === 'source_path' && !params.source_path) params.source_path = w.value;
+                    });
+                }
+            }
+            return params;
+        }
+
+        async function executeGraph() {
+            const nodes = graph._nodes;
+            if (!nodes || nodes.length === 0) { log('warning', '图为空'); return; }
+
+            const sorted = topologicalSort(graph);
+            log('info', `▶ 提交执行图 (${sorted.length} 节点): ${sorted.map(n => n.title).join(' → ')}`);
+
+            // ── 阶段1：解析节点图 → 提取技能链 ──
+            // 找到 ResolveStageNode（资产输入）获取全局参数
+            const resolveNode = sorted.find(n => n.type === 'pipeline/resolve_stage');
+            const upstream = resolveNode ? getUpstreamParams(resolveNode) : {};
+            const sourcePath = resolveNode ? (resolveNode.getOutputData(0) || '') : '';
+            const project = upstream.project || 'default';
+            const assetName = upstream.asset_name || 'untitled';
+
+            // 收集技能链（按拓扑序，跳过 pipeline 辅助节点）
+            const skillChain = [];
+            const skillNodeMap = [];  // 技能链 index → node 的映射
+
+            for (const node of sorted) {
+                node.properties.status = 'running';
+                node.boxcolor = STATUS_COLORS.running;
+
+                if (node.properties.skill_id && node.type.startsWith('skill/')) {
+                    // 注册技能节点
+                    const params = {};
+                    if (node.widgets) node.widgets.forEach(w => {
+                        if (w.name && w.value !== undefined) params[w.name] = w.value;
+                    });
+                    skillChain.push({ skill_id: node.properties.skill_id, parameters: params });
+                    skillNodeMap.push(node);
+                    log('info', `  📦 ${node.title} → 加入技能链`);
+
+                } else if (node.type === 'pipeline/exec_code') {
+                    // 动态代码执行节点
+                    skillChain.push({
+                        skill_id: 'exec_code',
+                        parameters: { code: node._code, description: node._desc || '(节点执行)' },
+                    });
+                    skillNodeMap.push(node);
+                    log('info', `  ⚡ ${node.title} → 加入技能链`);
+
+                } else if (node.type === 'pipeline/save_result') {
+                    // 保存结果节点
+                    const savePath = node.getOutputData(0);
+                    if (savePath) {
+                        skillChain.push({
+                            skill_id: 'save_scene',
+                            parameters: { save_path: savePath },
+                        });
+                        skillNodeMap.push(node);
+                        log('info', `  💾 ${node.title} → 保存至: ${savePath}`);
+                    } else {
+                        node.properties.status = 'failed';
+                        node.boxcolor = STATUS_COLORS.failed;
+                        log('error', `✗ ${node.title} → 未配置保存路径`);
+                    }
+
+                } else {
+                    // pipeline 辅助节点（资产输入/发布等），标记完成
+                    node.properties.status = 'success';
+                    node.boxcolor = STATUS_COLORS.success;
+                    log('success', `✓ ${node.title} 完成`);
+                }
+                graphCanvas.setDirty(true, true);
+            }
+
+            if (skillChain.length === 0) {
+                log('warning', '图中没有可执行的技能节点');
+                log('info', '▶ 图执行完成');
+                return;
+            }
+
+            // ── 阶段2：一次性提交整张图到后端 ──
+            log('info', `🚀 提交技能链: ${skillChain.length} 个技能 → /api/execute_graph`);
+
+            let chainTaskId = null;
+            try {
+                const resp = await fetch('/api/execute_graph', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        source_path: sourcePath,
+                        project: project,
+                        asset_name: assetName,
+                        skill_chain: skillChain,
+                    }),
+                });
+
+                if (!resp.ok) {
+                    log('error', `✗ 图提交失败: HTTP ${resp.status}`);
+                    skillNodeMap.forEach(n => { n.properties.status = 'failed'; n.boxcolor = STATUS_COLORS.failed; });
+                    graphCanvas.setDirty(true, true);
+                    return;
+                }
+
+                const data = await resp.json();
+                chainTaskId = data.task_id;
+
+                if (!data.dispatched) {
+                    log('warning', `⚠ 降级模式 (Redis/Celery 未就绪)`);
+                    skillNodeMap.forEach(n => { n.properties.status = 'failed'; n.boxcolor = STATUS_COLORS.failed; });
+                    graphCanvas.setDirty(true, true);
+                    return;
+                }
+
+                log('info', `⏳ 技能链已派发 (${chainTaskId})，等待 Maya 执行...`);
+
+            } catch (err) {
+                log('error', `✗ 网络错误: ${err.message}`);
+                skillNodeMap.forEach(n => { n.properties.status = 'failed'; n.boxcolor = STATUS_COLORS.failed; });
+                graphCanvas.setDirty(true, true);
+                return;
+            }
+
+            // ── 阶段3：轮询一个 task_id 拿所有结果 ──
+            const result = await pollTask(chainTaskId);
+
+            // ── 阶段4：按 chain_results 逐节点标色 ──
+            const chainResults = result.chain_results || [];
+            for (let i = 0; i < chainResults.length; i++) {
+                const stepResult = chainResults[i];
+                const node = skillNodeMap[i];
+                if (!node) continue;
+
+                if (stepResult.status === 'SUCCESS') {
+                    node.properties.status = 'success';
+                    node.boxcolor = STATUS_COLORS.success;
+                    log('success', `✓ [${i + 1}/${skillChain.length}] ${node.title} → 完成`);
+                } else {
+                    node.properties.status = 'failed';
+                    node.boxcolor = STATUS_COLORS.failed;
+                    log('error', `✗ [${i + 1}/${skillChain.length}] ${node.title} → ${stepResult.status}: ${(stepResult.detail || '').substring(0, 120)}`);
+                }
+            }
+
+            // 未执行到的节点标记为 idle
+            for (let i = chainResults.length; i < skillNodeMap.length; i++) {
+                skillNodeMap[i].properties.status = 'idle';
+                skillNodeMap[i].boxcolor = STATUS_COLORS.idle;
+            }
+
+            graphCanvas.setDirty(true, true);
+
+            // ── 生成报告（传递 chain_results + source_path）──
+            if (chainTaskId) {
+                log('info', '📋 正在生成报告...');
+                try {
+                    const reportResp = await fetch('/api/reports/generate', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            task_id: chainTaskId,
+                            chain_results: chainResults,
+                            source_path: sourcePath,
+                            task_name: `${assetName}_node_graph`,
+                        }),
+                    });
+                    if (reportResp.ok) {
+                        const reportData = await reportResp.json();
+                        if (reportData.status === 'ok') {
+                            log('success', `📋 报告已生成: ${reportData.report_path || reportData.run_id}`);
+                            log('info', `点击顶部 [📋 查看报告] 查看详情`);
+                        } else {
+                            log('warning', `报告生成异常: ${reportData.error || reportData.message}`);
+                        }
+                    }
+                } catch (e) {
+                    log('warning', `报告生成失败: ${e.message}`);
+                }
+            }
+
+            const allSuccess = chainResults.every(r => r.status === 'SUCCESS');
+            log(allSuccess ? 'success' : 'warning',
+                `▶ 图执行完成 — ${chainResults.filter(r => r.status === 'SUCCESS').length}/${skillChain.length} 成功`);
+        }
+
+
+
+
+
+        // ═══════════════════════════════════════════════════════
+        // 示例流程
+        // ═══════════════════════════════════════════════════════
+
+        function loadDemo() {
+            graph.clear();
+            const resolve = LiteGraph.createNode('pipeline/resolve_stage');
+            resolve.pos = [60, 120];
+            graph.add(resolve);
+
+            // 优先使用 ping，最安全的只读技能
+            const checkSkill = loadedSkills.find(s => s.skill_id === 'ping');
+            const skillType = checkSkill ? `skill/${checkSkill.skill_id}` : (loadedSkills.length > 0 ? `skill/${loadedSkills[0].skill_id}` : null);
+            if (skillType) {
+                const skill = LiteGraph.createNode(skillType);
+                skill.pos = [500, 100];
+                graph.add(skill);
+                resolve.connect(0, skill, 0);
+
+                // 保存结果节点 — 连接资产输入的 source_path
+                const save = LiteGraph.createNode('pipeline/save_result');
+                save.pos = [860, 100];
+                graph.add(save);
+                resolve.connect(0, save, 0);  // source_path → save_result
+
+                log('info', '示例流程: 资产输入 → 检查层级规范 + 保存结果');
+            }
+            graphCanvas.setDirty(true, true);
+        }
+
+        function clearGraph() {
+            graph.clear();
+            log('info', '已清空');
+            graphCanvas.setDirty(true, true);
+        }
+
+        // ═══════════════════════════════════════════════════════
+        // 日志
+        // ═══════════════════════════════════════════════════════
+
+        let logCount = 0;
+        function log(level, msg) {
+            const body = document.getElementById('log-body');
+            const now = new Date();
+            const ts = now.toLocaleTimeString('zh-CN', { hour12: false }) + '.' + String(now.getMilliseconds()).padStart(3, '0');
+            const line = document.createElement('div');
+            line.className = `log-line ${level}`;
+            line.innerHTML = `<span class="ts">${ts}</span><span class="msg">${msg}</span>`;
+            body.appendChild(line);
+            body.scrollTop = body.scrollHeight;
+            logCount++;
+            document.getElementById('log-count').textContent = logCount;
+        }
+        function clearLog() {
+            document.getElementById('log-body').innerHTML = '';
+            logCount = 0;
+            document.getElementById('log-count').textContent = '0';
+        }
+
+        // ═══════════════════════════════════════════════════════
+        // 系统状态 + SSE
+        // ═══════════════════════════════════════════════════════
+
+        async function loadStatus() {
+            try {
+                const r = await fetch('/api/status');
+                const data = await r.json();
+                document.getElementById('status-workers').textContent = `Workers: ${data.worker_count}`;
+            } catch (e) { }
+        }
+        function startSSE() {
+            const es = new EventSource('/api/events');
+            es.onmessage = function (e) {
+                try {
+                    const data = JSON.parse(e.data);
+                    const lv = data.status === 'SUCCESS' ? 'success' : data.status === 'FAILED' ? 'error' : 'info';
+                    log(lv, `[SSE] ${data.skill_id} → ${data.status} (${data.task_id})`);
+                } catch (err) { }
+            };
+        }
+
+        // ── Init ──
+        loadSkills();
+        loadStatus();
+        startSSE();
+        setInterval(loadStatus, 10000);
+        log('info', 'CGI Pipeline Node Graph 已初始化');
+        log('info', '从左侧拖拽技能到画布，或点击 [📦 加载示例]');
+    </script>
+</body>
+
+</html>

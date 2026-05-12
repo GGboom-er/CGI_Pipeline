@@ -1,0 +1,74 @@
+<evaluation>
+  <!--
+    CGI Pipeline MCP Server 评估测试
+
+    前置条件：
+    - Maya Worker 已启动（Celery + Maya 2025）
+    - Redis 运行中
+    - 测试资产存在于 projects/ysj/pub/assets/chr/xiaotianquan/
+    - 所有问题仅使用只读操作
+  -->
+
+  <!-- Q1: 技能发现 — 验证 LLM 能否正确枚举系统能力 -->
+  <qa_pair>
+    <question>使用 CGI Pipeline MCP 查询当前注册了多少个 Maya 技能，其中有几个技能的参数列表为空（即不需要任何额外参数就能执行）？回答空参数技能的数量。</question>
+    <answer>1</answer>
+    <!-- ping 的 parameters 为 {} -->
+  </qa_pair>
+
+  <!-- Q2: 资产定位 — 验证 LLM 能否通过文件系统找到正确版本 -->
+  <qa_pair>
+    <question>查询项目 ysj 中资产 xiaotianquan 在 pub 路径下 rig/rigMaster 阶段有几个版本的 .ma 文件？回答版本数量。</question>
+    <answer>3</answer>
+    <!-- pub 下有 v001, v002, v003 三个版本 -->
+  </qa_pair>
+
+  <!-- Q3: 场景查询 — 通过 exec_code 查询顶层节点 -->
+  <qa_pair>
+    <question>使用 exec_code 打开项目 ysj 资产 xiaotianquan 的 rig 最新版本，然后用 cmds.ls(assemblies=True) 查询场景顶层节点。回答包含资产主体（非默认相机）的根组名（不含管道符号）。</question>
+    <answer>XiaoTianQuan</answer>
+  </qa_pair>
+
+  <!-- Q4: 场景信息查询 — 通过 exec_code 只读查询 -->
+  <qa_pair>
+    <question>使用 exec_code 打开项目 ysj 资产 xiaotianquan 的 rig 最新版本（v003），然后查询场景中所有 skinCluster 节点的数量。回答 skinCluster 的总数。</question>
+    <answer>58</answer>
+  </qa_pair>
+
+  <!-- Q5: 审计日志分析 — 通过 query_task 读取历史执行记录 -->
+  <qa_pair>
+    <question>查询任务 ID 为 chain-c6b9d72f 的链式执行记录。该链总共包含几个技能步骤（total_steps）？回答步骤数。</question>
+    <answer>1</answer>
+  </qa_pair>
+
+  <!-- Q6: 管线诊断 — master_cleanup check 模式 -->
+  <qa_pair>
+    <question>对项目 ysj 资产 xiaotianquan 的 rig 最新版本执行 master_cleanup 的 check 模式（只读诊断）。诊断报告中是否检测到了 unknown 类型节点？回答 Yes 或 No。</question>
+    <answer>Yes</answer>
+  </qa_pair>
+
+  <!-- Q7: 多步推理 — 需要先 list_skills 再判断能力 -->
+  <qa_pair>
+    <question>在 CGI Pipeline 注册的所有技能中，哪些技能的 description 中明确提到了"蒙皮"这个关键词？列出这些技能的 skill_id，按字母顺序排列，用逗号分隔。</question>
+    <answer>clean_skinweights</answer>
+  </qa_pair>
+
+  <!-- Q8: 文件命名规范解析 — 从文件名提取元数据 -->
+  <qa_pair>
+    <question>项目 ysj 中资产 xiaotianquan 在 uv 阶段（uvMaster）有几个版本的 .ma 文件？回答版本数量。</question>
+    <answer>1</answer>
+  </qa_pair>
+
+  <!-- Q9: 场景深度查询 — exec_code 多步查询 -->
+  <qa_pair>
+    <question>使用 exec_code 打开 ysj 项目 xiaotianquan 的 rig v003 文件，查询场景中所有 mesh 类型节点（cmds.ls(type='mesh')）的数量。回答 mesh 节点总数。</question>
+    <answer>59</answer>
+  </qa_pair>
+
+  <!-- Q10: 配置理解 — 通过 list_skills 理解系统设计 -->
+  <qa_pair>
+    <question>在 CGI Pipeline 的技能注册表中，master_cleanup 技能的 mode 参数有两个可选值。其中用于只读安全扫描的模式值是什么？回答该模式的字符串值。</question>
+    <answer>check</answer>
+  </qa_pair>
+
+</evaluation>

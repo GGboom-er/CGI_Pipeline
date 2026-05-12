@@ -1,0 +1,1111 @@
+# -*- coding: utf-8 -*-
+# Maya 2024 - Copy Skin Weights (RBF unified, kNN + API2, Adaptive Sigma, Auto-Add Influences, Spread Mode) & Relax
+# 增强：新增“分布式RBF(质量守恒)”用于少→多的更稳定散布；可与经典目标归一RBF混合。
+
+import maya.cmds as cmds
+import maya.mel as mel
+import maya.api.OpenMaya as om2
+import maya.api.OpenMayaAnim as oma2
+import numpy as np
+from collections import defaultdict
+
+WINDOW_ID = "CopySkin2024Window"
+
+# Debug logging
+DEBUG_LOG = True
+
+def _log(msg):
+    if DEBUG_LOG:
+        try:
+            print('[CopySkin] %s' % msg)
+        except Exception:
+            pass
+
+# 传递模式：auto 自动判别；few_to_many 少→多贴合(IDW近邻)；many_to_few 多→少平均(RBF)
+MODE_AUTO = 'auto'
+MODE_FEW_TO_MANY = 'few_to_many'
+MODE_MANY_TO_FEW = 'many_to_few'
+# 拟合方法：idw 最近邻逆距离加权；rbf 高斯RBF
+METHOD_IDW = 'idw'
+METHOD_RBF = 'rbf'
+METHOD_CSB = 'csb'  # Closest Surface Barycentric: 最近面插值（严格贴合）
+
+def _strip_namespace(name):
+    if '|' in name:
+        name = name.split('|')[-1]
+    if ':' in name:
+        name = name.split(':')[-1]
+    return name
+
+
+def _long_transform(node_or_comp):
+    if '.' in node_or_comp:
+        node = node_or_comp.split('.', 1)[0]
+    else:
+        node = node_or_comp
+    long_names = cmds.ls(node, long=True) or []
+    return long_names[0] if long_names else node
+
+
+def _list_shapes(transform):
+    return cmds.listRelatives(transform, shapes=True, fullPath=True) or []
+
+
+def find_skin_cluster(transform):
+    shapes = _list_shapes(transform)
+    targets = shapes if shapes else [transform]
+    for dag in targets:
+        hist = cmds.listHistory(dag, pruneDagObjects=True) or []
+        for h in hist:
+            try:
+                if cmds.nodeType(h) == 'skinCluster' and cmds.objExists(h):
+                    # 返回长名，避免短名失效
+                    long_h = (cmds.ls(h, long=True) or [h])[0]
+                    return long_h
+            except Exception:
+                continue
+    return None
+
+
+def ensure_vertex_selection(components):
+    if not components:
+        return []
+    flat = cmds.ls(components, flatten=True) or []
+    converted = cmds.polyListComponentConversion(flat, toVertex=True) or []
+    verts = cmds.ls(converted, flatten=True) or []
+    return verts
+
+
+def all_vertices_of_transform(xform):
+    xform = _long_transform(xform)
+    try:
+        vcount = cmds.polyEvaluate(xform, vertex=True)
+    except Exception:
+        vcount = 0
+    if not vcount:
+        return []
+    return ["%s.vtx[%d]" % (xform, i) for i in range(vcount)]
+
+
+def _gaussian_rbf_np(dist_sq, sigma):
+    return np.exp(-(dist_sq) / (2.0 * (sigma ** 2)))
+
+
+def _compute_rbf_weights(
+    target_positions,
+    source_positions,
+    sigma,
+    k_neighbors,
+    distance_threshold,
+    adaptive_sigma,
+    sigma_scale,
+    min_sigma,
+):
+    # 距离矩阵
+    diff = target_positions[:, np.newaxis, :] - source_positions[np.newaxis, :, :]
+    distances = np.linalg.norm(diff, axis=2)  # [T x S]
+    dist_sq = distances * distances
+
+    # kNN 掩码
+    S = distances.shape[1]
+    if k_neighbors is not None and k_neighbors > 0 and k_neighbors < S:
+        knn_idx = np.argpartition(distances, kth=k_neighbors - 1, axis=1)[:, :k_neighbors]
+        mask = np.zeros_like(distances, dtype=bool)
+        rows = np.arange(distances.shape[0])[:, None]
+        mask[rows, knn_idx] = True
+    else:
+        mask = np.ones_like(distances, dtype=bool)
+
+    # 行有效掩码（距离阈值）
+    if distance_threshold is not None and distance_threshold > 0:
+        valid_any = (distances <= distance_threshold).any(axis=1)
+    else:
+        valid_any = np.ones((len(target_positions),), dtype=bool)
+
+    # 计算 RBF 核矩阵（按行广播，后置掩码）
+    if adaptive_sigma:
+        masked_d = np.where(mask, distances, np.nan)
+        local_scale = np.nanmean(masked_d, axis=1)
+        local_scale = np.where(np.isfinite(local_scale), local_scale, sigma)
+        local_sigma = np.maximum(local_scale * float(sigma_scale), float(min_sigma))
+        sigma_mat = local_sigma[:, np.newaxis]
+        rbf_full = np.exp(-(dist_sq) / (2.0 * (sigma_mat ** 2)))
+        rbf = np.where(mask, rbf_full, 0.0)
+    else:
+        rbf_full = _gaussian_rbf_np(dist_sq, float(sigma))
+        rbf = np.where(mask, rbf_full, 0.0)
+
+    return distances, rbf, mask, valid_any
+
+
+def _predict_weight_batch_knn(
+    target_positions,
+    source_positions,
+    source_weights_array,
+    sigma,
+    max_influences,
+    min_weight_threshold,
+    k_neighbors,
+    distance_threshold=None,
+    adaptive_sigma=False,
+    sigma_scale=1.0,
+    min_sigma=1e-3,
+    spread_mode=False,
+    spread_mix=0.5,
+    mode=MODE_AUTO,
+    method=METHOD_IDW,
+    idw_power=2.0,
+    idw_eps=1e-6,
+    nn_boost_top=0,
+    nn_boost_gain=1.0,
+):
+    if len(source_positions) == 0:
+        return np.zeros((len(target_positions), source_weights_array.shape[1]))
+
+    distances, rbf, mask, valid_any = _compute_rbf_weights(
+        target_positions, source_positions, sigma, k_neighbors, distance_threshold,
+        adaptive_sigma, sigma_scale, min_sigma
+    )
+
+    # 模式：少→多与多→少都可选择方法；默认 IDW。
+    use_idw = (method == METHOD_IDW)
+    if use_idw:
+        safe_d = distances + float(idw_eps)
+        with np.errstate(divide='ignore'):
+            idw = 1.0 / np.power(safe_d, float(idw_power))
+        idw = np.where(mask, idw, 0.0)
+        if nn_boost_top and nn_boost_gain > 1.0:
+            top = min(int(nn_boost_top), idw.shape[1])
+            nn_idx = np.argpartition(safe_d, kth=top-1, axis=1)[:, :top]
+            rows = np.arange(idw.shape[0])[:, None]
+            idw[rows, nn_idx] *= float(nn_boost_gain)
+        row_sum = np.sum(idw, axis=1, keepdims=True)
+        row_sum[row_sum == 0] = 1.0
+        idw_norm = idw / row_sum
+        base = idw_norm @ source_weights_array
+    else:
+        # RBF 分支（仅在选择RBF方法时启用）
+        weighted = rbf @ source_weights_array
+        row_sum = np.sum(weighted, axis=1, keepdims=True)
+        row_sum[row_sum == 0] = 1.0
+        classic = weighted / row_sum
+        if not spread_mode:
+            base = classic
+        else:
+            col_sum = np.sum(rbf, axis=0, keepdims=True)
+            col_sum[col_sum == 0] = 1.0
+            rbf_col_norm = rbf / col_sum
+            spread = rbf_col_norm @ source_weights_array
+            s_row = np.sum(spread, axis=1, keepdims=True)
+            s_row[s_row == 0] = 1.0
+            spread = spread / s_row
+            alpha = np.clip(float(spread_mix), 0.0, 1.0)
+            base = alpha * spread + (1.0 - alpha) * classic
+
+    # 阈值与最大影响数限制
+    out = np.zeros_like(base)
+    for i in range(base.shape[0]):
+        if not valid_any[i]:
+            continue
+        w = base[i]
+        w[w < min_weight_threshold] = 0.0
+        if np.count_nonzero(w) > max_influences:
+            idx = np.argpartition(w, -max_influences)[-max_influences:]
+            nw = np.zeros_like(w)
+            nw[idx] = w[idx]
+            w = nw
+        total = np.sum(w)
+        if total > 0:
+            w = w / total
+        out[i] = w
+    return out
+
+
+class CopySkinUI(object):
+    def __init__(self):
+        # 列表输入（对象/点）
+        self.src_objs = []
+        self.dst_objs = []
+        self.src_verts = []
+        self.dst_verts = []
+        # 缓存与设置
+        self._skin_cache = {}
+        self.settings = {
+            'sigma': 1.0,
+            'max_influences': 12,              # 预测阶段裁剪的最大影响数
+            'distance_threshold': 100.0,
+            'min_weight_threshold': 0.001,
+            'k_neighbors': 64,
+            'adaptive_sigma': True,
+            'sigma_scale': 1.0,
+            'min_sigma': 1e-3,
+            'spread_mode': True,
+            'spread_mix': 0.7,
+            'idw_power': 2.0,
+            'idw_eps': 1e-6,
+            'nn_boost_top': 2,
+            'nn_boost_gain': 1.5,
+            'mode': MODE_AUTO,
+            'method': METHOD_IDW,
+            # 新增：后处理平滑与最大影响控制（作用于写入后）
+            'post_smooth_strength': 0.5,       # 0..1 强度
+            'post_smooth_iters': 1,            # 迭代次数 0..5
+            'post_max_influences': 8,          # 平滑阶段希望保持的最大影响数
+        }
+
+    # -------------------- UI --------------------
+    def show(self):
+        if cmds.window(WINDOW_ID, exists=True):
+            cmds.deleteUI(WINDOW_ID)
+        if cmds.windowPref(WINDOW_ID, exists=True):
+            cmds.windowPref(WINDOW_ID, remove=True)
+
+        win = cmds.window(WINDOW_ID, title=u"权重拷贝（模式切换：少→多贴合 / 多→少平均）- Maya 2024", sizeable=True, mxb=False)
+        col = cmds.columnLayout(adj=True)
+
+        # 对象/点 列表区
+        cmds.frameLayout(label=u"对象与点 列表", collapsable=True, collapse=False, mh=6, mw=6)
+        cmds.rowLayout(nc=2, cw2=(300, 300), adj=2)
+        self.src_list_ui = cmds.textScrollList(allowMultiSelection=True, h=160)
+        self.dst_list_ui = cmds.textScrollList(allowMultiSelection=True, h=160)
+        cmds.setParent('..')
+        cmds.rowLayout(nc=4, cw4=(150, 150, 150, 150))
+        cmds.button(l=u"添加选择到源(对象或点)", c=self._add_selected_to_src)
+        cmds.button(l=u"添加选择到目标(对象或点)", c=self._add_selected_to_dst)
+        cmds.button(l=u"移除选中(源/目标)", c=self._remove_selected_from_lists)
+        cmds.button(l=u"清空(源/目标)", c=self._clear_lists)
+        cmds.setParent('..')
+
+        # 模式切换
+        cmds.frameLayout(label=u"传递模式", collapsable=True, collapse=False, mh=6, mw=6)
+        self.ui_mode = cmds.optionMenuGrp(label=u"模式", cw=[1, 80], columnWidth=[1, 80])
+        cmds.menuItem(label=u"自动判别(auto)")
+        cmds.menuItem(label=u"少→多贴合(few_to_many)")
+        cmds.menuItem(label=u"多→少贴合(many_to_few)")
+        cmds.setParent('..')
+
+        # 方法切换
+        cmds.frameLayout(label=u"拟合方法", collapsable=True, collapse=False, mh=6, mw=6)
+        self.ui_method = cmds.optionMenuGrp(label=u"方法", cw=[1, 100], columnWidth=[1, 100])
+        cmds.menuItem(label=u"IDW最近邻(idw)")
+        cmds.menuItem(label=u"最近面插值(csb)")
+        cmds.menuItem(label=u"高斯RBF(rbf)")
+        cmds.setParent('..')
+
+        # 参数（精简）
+        cmds.frameLayout(label=u"近邻/阈值参数", collapsable=True, collapse=False, mh=6, mw=6)
+        self.ui_knn = cmds.intSliderGrp(l=u"k近邻(K)", field=True, minValue=1, maxValue=2048,
+                                        value=self.settings['k_neighbors'], cw3=[100, 60, 140],
+                                        cc=self._update_settings_from_ui)
+        self.ui_idwp = cmds.floatSliderGrp(l=u"IDW幂次", field=True, minValue=0.5, maxValue=6.0,
+                                           value=self.settings['idw_power'], cw3=[100, 60, 140],
+                                           cc=self._update_settings_from_ui)
+        self.ui_boostn = cmds.intSliderGrp(l=u"最近邻提升数", field=True, minValue=0, maxValue=8,
+                                           value=self.settings['nn_boost_top'], cw3=[120, 60, 120],
+                                           cc=self._update_settings_from_ui)
+        self.ui_boostg = cmds.floatSliderGrp(l=u"提升倍率", field=True, minValue=1.0, maxValue=3.0,
+                                             value=self.settings['nn_boost_gain'], cw3=[100, 60, 140],
+                                             cc=self._update_settings_from_ui)
+        self.ui_maxinf = cmds.intSliderGrp(l=u"最大影响数", field=True, minValue=1, maxValue=32,
+                                           value=self.settings['max_influences'], cw3=[100, 60, 140],
+                                           cc=self._update_settings_from_ui)
+        self.ui_minw = cmds.floatSliderGrp(l=u"最小权重阈值", field=True, minValue=0.0, maxValue=0.05,
+                                           value=self.settings['min_weight_threshold'], cw3=[120, 60, 120],
+                                           cc=self._update_settings_from_ui)
+        self.ui_dist = cmds.floatSliderGrp(l=u"距离阈值", field=True, minValue=0.0, maxValue=10000.0,
+                                           value=self.settings['distance_threshold'], cw3=[100, 60, 140],
+                                           cc=self._update_settings_from_ui)
+        cmds.setParent('..')
+
+        # 写入后平滑与最大影响控制
+        cmds.frameLayout(label=u"后处理：平滑与最大影响数", collapsable=True, collapse=False, mh=6, mw=6)
+        self.ui_ps_strength = cmds.floatSliderGrp(l=u"平滑强度", field=True, minValue=0.0, maxValue=1.0,
+                                                  value=self.settings['post_smooth_strength'], cw3=[100, 60, 140],
+                                                  cc=self._update_settings_from_ui)
+        self.ui_ps_iters = cmds.intSliderGrp(l=u"平滑迭代", field=True, minValue=0, maxValue=5,
+                                             value=self.settings['post_smooth_iters'], cw3=[100, 60, 140],
+                                             cc=self._update_settings_from_ui)
+        self.ui_ps_maxinf = cmds.intSliderGrp(l=u"最大影响数(后处理)", field=True, minValue=1, maxValue=32,
+                                              value=self.settings['post_max_influences'], cw3=[150, 60, 90],
+                                              cc=self._update_settings_from_ui)
+        cmds.setParent('..')
+
+        # 执行
+        cmds.frameLayout(label=u"执行", collapsable=True, collapse=False, mh=6, mw=6)
+        cmds.button(l=u"执行贴合拷贝（支持一对多/多对一/多对多）", bgc=(0.1, 0.5, 0.7), h=34, c=self.run_smart_rbf_transfer)
+        cmds.setParent('..')
+
+        cmds.showWindow(win)
+
+    # -------------------- UI Helpers --------------------
+    def _refresh_lists(self):
+        cmds.textScrollList(self.src_list_ui, e=True, removeAll=True)
+        cmds.textScrollList(self.src_list_ui, e=True, append=(self.src_objs + self.src_verts))
+        cmds.textScrollList(self.dst_list_ui, e=True, removeAll=True)
+        cmds.textScrollList(self.dst_list_ui, e=True, append=(self.dst_objs + self.dst_verts))
+
+    def _add_selected_to_src(self, *args):
+        sel = cmds.ls(sl=True, fl=True) or []
+        verts = ensure_vertex_selection(sel)
+        self.src_verts.extend([v for v in verts])
+        self.src_objs.extend([_long_transform(t) for t in cmds.ls(sel, transforms=True) or []])
+        self.src_verts = list(dict.fromkeys(self.src_verts))
+        self.src_objs = list(dict.fromkeys(self.src_objs))
+        self._refresh_lists()
+
+    def _add_selected_to_dst(self, *args):
+        sel = cmds.ls(sl=True, fl=True) or []
+        verts = ensure_vertex_selection(sel)
+        self.dst_verts.extend([v for v in verts])
+        self.dst_objs.extend([_long_transform(t) for t in cmds.ls(sel, transforms=True) or []])
+        self.dst_verts = list(dict.fromkeys(self.dst_verts))
+        self.dst_objs = list(dict.fromkeys(self.dst_objs))
+        self._refresh_lists()
+
+    def _remove_selected_from_lists(self, *args):
+        src_sel = cmds.textScrollList(self.src_list_ui, q=True, si=True) or []
+        dst_sel = cmds.textScrollList(self.dst_list_ui, q=True, si=True) or []
+        self.src_verts = [x for x in self.src_verts if x not in src_sel]
+        self.dst_verts = [x for x in self.dst_verts if x not in dst_sel]
+        self.src_objs = [x for x in self.src_objs if x not in src_sel]
+        self.dst_objs = [x for x in self.dst_objs if x not in dst_sel]
+        self._refresh_lists()
+
+    def _clear_lists(self, *args):
+        self.src_objs, self.dst_objs, self.src_verts, self.dst_verts = [], [], [], []
+        # 清空内部缓存，防止复用过期skin名字
+        self._skin_cache = {}
+        self._refresh_lists()
+
+    def _update_settings_from_ui(self, *args):
+        # 近邻/阈值参数
+        self.settings['k_neighbors'] = int(cmds.intSliderGrp(self.ui_knn, q=True, value=True))
+        self.settings['idw_power'] = float(cmds.floatSliderGrp(self.ui_idwp, q=True, value=True))
+        self.settings['nn_boost_top'] = int(cmds.intSliderGrp(self.ui_boostn, q=True, value=True))
+        self.settings['nn_boost_gain'] = float(cmds.floatSliderGrp(self.ui_boostg, q=True, value=True))
+        self.settings['max_influences'] = int(cmds.intSliderGrp(self.ui_maxinf, q=True, value=True))
+        self.settings['min_weight_threshold'] = float(cmds.floatSliderGrp(self.ui_minw, q=True, value=True))
+        self.settings['distance_threshold'] = float(cmds.floatSliderGrp(self.ui_dist, q=True, value=True))
+        # 模式读取
+        mode_label = cmds.optionMenuGrp(self.ui_mode, q=True, value=True)
+        if u"少→多" in mode_label:
+            self.settings['mode'] = MODE_FEW_TO_MANY
+        elif u"多→少" in mode_label:
+            self.settings['mode'] = MODE_MANY_TO_FEW
+        else:
+            self.settings['mode'] = MODE_AUTO
+        # 方法读取
+        method_label = cmds.optionMenuGrp(self.ui_method, q=True, value=True)
+        if u"RBF" in method_label:
+            self.settings['method'] = METHOD_RBF
+        elif u"最近面" in method_label:
+            self.settings['method'] = METHOD_CSB
+        else:
+            self.settings['method'] = METHOD_IDW
+        # 后处理读取
+        self.settings['post_smooth_strength'] = float(cmds.floatSliderGrp(self.ui_ps_strength, q=True, value=True))
+        self.settings['post_smooth_iters'] = int(cmds.intSliderGrp(self.ui_ps_iters, q=True, value=True))
+        self.settings['post_max_influences'] = int(cmds.intSliderGrp(self.ui_ps_maxinf, q=True, value=True))
+
+    def post_smooth_hint(self, *args):
+        cmds.inViewMessage(amg=u"已按mesh分组在写入阶段进行规范化；若仍需平滑，可再运行主按钮后重复一次。", pos='midCenter', fade=True)
+
+    # -------------------- Core helpers --------------------
+    def _get_skin_cluster_cached(self, node_or_comp):
+        mesh = node_or_comp.split('.')[0]
+        mesh = _long_transform(mesh)
+        cached = self._skin_cache.get(mesh, None)
+        if cached and cmds.objExists(cached):
+            return cached
+        # 自愈：缓存失效或不存在，重新解析
+        sc = find_skin_cluster(mesh)
+        if sc and cmds.objExists(sc):
+            self._skin_cache[mesh] = sc
+            return sc
+        # 不创建：只作为查询
+        return None
+
+    def _collect_source_vertices(self):
+        src_from_objs = []
+        for o in self.src_objs:
+            src_from_objs.extend(all_vertices_of_transform(o))
+        all_src = list(dict.fromkeys(src_from_objs + self.src_verts))
+        return all_src
+
+    def _collect_target_vertices(self):
+        # 若用户明确提供了目标顶点，则只使用这些顶点，避免影响其他未选中的点
+        if self.dst_verts:
+            return list(dict.fromkeys(self.dst_verts))
+        dst_from_objs = []
+        for o in self.dst_objs:
+            dst_from_objs.extend(all_vertices_of_transform(o))
+        all_dst = list(dict.fromkeys(dst_from_objs))
+        return all_dst
+
+    def _build_union_influences(self, vertices):
+        infl_set = set()
+        for v in vertices:
+            sc = self._get_skin_cluster_cached(v)
+            if not sc:
+                continue
+            infls = cmds.skinCluster(sc, q=True, inf=True) or []
+            infl_set.update(infls)
+        infl_list = sorted(list(infl_set), key=lambda s: _strip_namespace(s))
+        index = {j: i for i, j in enumerate(infl_list)}
+        return infl_list, index
+
+    def _sample_source_positions_and_weights(self, src_vertices, infl_list, infl_index):
+        positions = []
+        weights_rows = []
+        names = []
+        indices = []
+
+        # 按mesh分组以批量处理
+        mesh_groups = defaultdict(list)
+        for v in src_vertices:
+            mesh = v.split('.')[0]
+            mesh_groups[mesh].append(v)
+
+        total = len(src_vertices)
+        processed = 0
+
+        for mesh, verts in mesh_groups.items():
+            sc = self._get_skin_cluster_cached(verts[0])
+            if not sc:
+                processed += len(verts)
+                continue
+
+            # 批量获取位置（更快）
+            try:
+                vert_ids = [int(v.split('[')[-1].rstrip(']')) for v in verts]
+                pos_list = cmds.xform(verts, q=True, t=True, ws=True)
+                pos_array = np.array(pos_list).reshape(-1, 3)
+            except Exception:
+                processed += len(verts)
+                continue
+
+            # 批量获取权重（使用API更快）
+            try:
+                sel = om2.MSelectionList()
+                sel.add(sc)
+                sc_obj = sel.getDependNode(0)
+                fn_skin = oma2.MFnSkinCluster(sc_obj)
+
+                # 获取dagPath
+                mesh_long = _long_transform(mesh)
+                mesh_shapes = _list_shapes(mesh_long)
+                if mesh_shapes:
+                    sel_mesh = om2.MSelectionList()
+                    sel_mesh.add(mesh_shapes[0])
+                    dag_path = sel_mesh.getDagPath(0)
+
+                    # 创建顶点组件
+                    comp_fn = om2.MFnSingleIndexedComponent()
+                    comp = comp_fn.create(om2.MFn.kMeshVertComponent)
+                    vert_ids_array = om2.MIntArray(vert_ids)
+                    comp_fn.addElements(vert_ids_array)
+
+                    # 批量获取权重
+                    weights, infl_count = fn_skin.getWeights(dag_path, comp)
+                    skin_infls = fn_skin.influenceObjects()
+
+                    # 构建影响索引映射
+                    skin_infl_map = {}
+                    for i, infl_path in enumerate(skin_infls):
+                        try:
+                            infl_name = infl_path.partialPathName()
+                            skin_infl_map[infl_name] = i
+                        except:
+                            pass
+
+                    # 转换权重到统一格式
+                    num_verts = len(vert_ids)
+                    for i, v in enumerate(verts):
+                        row = np.zeros(len(infl_list), dtype=float)
+                        start_idx = i * infl_count
+
+                        for j_name in infl_list:
+                            if j_name in skin_infl_map:
+                                skin_idx = skin_infl_map[j_name]
+                                weight_idx = start_idx + skin_idx
+                                if weight_idx < len(weights):
+                                    row[infl_index[j_name]] = weights[weight_idx]
+
+                        positions.append(pos_array[i])
+                        weights_rows.append(row)
+                        names.append(v)
+                        indices.append(vert_ids[i])
+
+                    processed += len(verts)
+
+                    # 更新进度
+                    if cmds.progressWindow(q=True, isCancelled=True):
+                        return None, None, None, None
+                    progress = int(50.0 * processed / total)
+                    cmds.progressWindow(edit=True, progress=progress,
+                                      status=u"采样源权重: {}/{}".format(processed, total))
+
+            except Exception as e:
+                _log('batch weight sampling failed for mesh %s: %s, fallback to per-vertex' % (mesh, e))
+                # 回退到逐顶点处理
+                for v in verts:
+                    try:
+                        pos = cmds.xform(v, q=True, t=True, ws=True)
+                        row = np.zeros((len(infl_list),), dtype=float)
+                        for j in infl_list:
+                            try:
+                                w = cmds.skinPercent(sc, v, transform=j, q=True)
+                                row[infl_index[j]] = 0.0 if w is None else float(w)
+                            except Exception:
+                                row[infl_index[j]] = 0.0
+                        positions.append(pos)
+                        weights_rows.append(row)
+                        names.append(v)
+                        try:
+                            idx = int(v.split('[')[-1].rstrip(']'))
+                        except Exception:
+                            idx = -1
+                        indices.append(idx)
+                    except Exception:
+                        pass
+                processed += len(verts)
+
+        if not positions:
+            return None, None, None, None
+        return np.array(positions, dtype=float), np.array(weights_rows, dtype=float), names, indices
+
+    # -------------------- 最近面插值（CSB） --------------------
+    def _predict_barycentric_on_source_meshes(self, src_vert_names, src_positions, src_weights, dst_vert_names, dst_positions):
+        # 思路：将所有源顶点按mesh分组，构建三角面索引与每个三角的顶点位置与权重；
+        # 对每个目标顶点：找到最近mesh（按包围盒或sample KD），对最近三角做点到三角最近点，取其重心系数 * 三顶点权重线性插值。
+        # 为简化与稳健：这里先用最近顶点+其相邻三角近似（若无法获得拓扑，则退化为IDW近邻）。
+        preds = np.zeros((len(dst_positions), src_weights.shape[1]), dtype=float)
+        # 将源按mesh聚合
+        mesh_to_indices = defaultdict(list)
+        for i, name in enumerate(src_vert_names):
+            mesh = name.split('.')[0]
+            mesh_to_indices[mesh].append(i)
+        # 简易策略：对每个目标，先找最近源顶点所在mesh，再对该mesh的k小邻居做IDW（p=2.0）作为近似的面插值。
+        # 这样避免昂贵的三角遍历，同时效果比全局IDW更贴合，因为限定在同一mesh的局部簇。
+        dst_positions = np.asarray(dst_positions, dtype=float)
+        for ti, tp in enumerate(dst_positions):
+            best_mesh = None
+            best_d = 1e18
+            best_idx = -1
+            for mesh, idxs in mesh_to_indices.items():
+                sp = src_positions[idxs]
+                d = np.min(np.linalg.norm(sp - tp[None, :], axis=1))
+                if d < best_d:
+                    best_d = d; best_mesh = mesh; best_idx = np.argmin(np.linalg.norm(sp - tp[None, :], axis=1))
+            if best_mesh is None:
+                continue
+            idxs = mesh_to_indices[best_mesh]
+            sp = src_positions[idxs]
+            sw = src_weights[idxs]
+            # 取局部最近K=12做IDW
+            k = min(12, len(idxs))
+            dists = np.linalg.norm(sp - tp[None, :], axis=1)
+            nn = np.argpartition(dists, kth=k-1)[:k]
+            sd = dists[nn] + 1e-6
+            w = 1.0 / (sd ** 2.0)
+            w /= np.sum(w)
+            preds[ti] = (w[:, None] * sw[nn]).sum(axis=0)
+        # 行归一
+        row = preds.sum(axis=1, keepdims=True)
+        row[row == 0] = 1.0
+        preds /= row
+        return preds
+
+    # -------------------- 写入后平滑与最大影响控制 --------------------
+    def _post_process_after_write(self, verts):
+        s = self.settings
+        if s['post_smooth_iters'] <= 0 and s['post_max_influences'] <= 0:
+            return
+        # 按 skin+mesh 分组
+        group = defaultdict(list)
+        for v in verts:
+            sc = self._get_skin_cluster_cached(v)
+            if sc:
+                mesh = v.split('.')[0]
+                group[(sc, mesh)].append(v)
+        for (sc, mesh), vnames in group.items():
+            try:
+                if s['post_max_influences'] > 0:
+                    try:
+                        cmds.skinCluster(sc, e=True, mi=s['post_max_influences'])
+                    except Exception:
+                        pass
+                if s['post_smooth_iters'] > 0 and s['post_smooth_strength'] > 0:
+                    for _ in range(s['post_smooth_iters']):
+                        try:
+                            cmds.skinCluster(sc, e=True, smoothWeights=float(s['post_smooth_strength']), smoothWeightsMaxIterations=1)
+                        except Exception:
+                            break
+            except Exception:
+                continue
+
+    # -------------------- API accelerated writer --------------------
+    def _apply_weights_api(self, verts, preds, infl_list, min_w):
+        # 按网格分组，避免以过期的 skin 名分组
+        group = defaultdict(list)
+        for i, v in enumerate(verts):
+            mesh = v.split('.')[0]
+            group[mesh].append(i)
+
+        total_groups = len(group)
+        processed_groups = 0
+
+        for mesh, idx_list in group.items():
+            processed_groups += 1
+            progress = 50 + int(45.0 * processed_groups / total_groups)
+            cmds.progressWindow(edit=True, progress=progress,
+                              status=u"写入权重: {}/{} 网格".format(processed_groups, total_groups))
+
+            if cmds.progressWindow(q=True, isCancelled=True):
+                _log('User cancelled weight writing')
+                return
+            if not idx_list:
+                continue
+            # 始终基于mesh当前状态解析skinCluster，避免使用过期名称
+            mesh_long = _long_transform(mesh)
+            current_sc = find_skin_cluster(mesh_long)
+            if not current_sc:
+                _log('no skin on mesh %s, creating one' % mesh_long)
+                valid_infl = [j for j in infl_list if cmds.objExists(j)]
+                if not valid_infl:
+                    joints = cmds.ls(type='joint') or []
+                    if joints:
+                        valid_infl = [joints[0]]
+                if not valid_infl:
+                    _log('no available joints to create skin for %s, skip group' % mesh_long)
+                    continue
+                try:
+                    current_sc = cmds.skinCluster(valid_infl, mesh_long, tsb=True, mi=max(1, self.settings.get('post_max_influences', 8)), nw=1, bm=0)[0]
+                    _log('created skinCluster %s on %s' % (current_sc, mesh_long))
+                except Exception as ce:
+                    _log('create skin failed on %s: %s' % (mesh_long, ce))
+                    continue
+            # 记录与补齐影响
+            self._skin_cache[mesh_long] = current_sc
+            try:
+                self._ensure_influences_on_skin(current_sc, infl_list)
+            except Exception:
+                pass
+            # 最终存在性校验
+            if not cmds.objExists(current_sc):
+                _log('final check: skin %s missing on %s, attempt create' % (current_sc, mesh_long))
+                try:
+                    valid_infl = [j for j in infl_list if cmds.objExists(j)]
+                    if not valid_infl:
+                        joints = cmds.ls(type='joint') or []
+                        if joints:
+                            valid_infl = [joints[0]]
+                    if not valid_infl:
+                        _log('no joints available, skip %s' % mesh_long)
+                        continue
+                    current_sc = cmds.skinCluster(valid_infl, mesh_long, tsb=True, mi=max(1, self.settings.get('post_max_influences', 8)), nw=1, bm=0)[0]
+                    self._skin_cache[mesh_long] = current_sc
+                    self._ensure_influences_on_skin(current_sc, infl_list)
+                except Exception as fe:
+                    _log('final create failed on %s: %s' % (mesh_long, fe))
+                    continue
+            try:
+                _log('apply group sc=%s mesh=%s verts=%d' % (current_sc, mesh_long, len(idx_list)))
+                sc_to_add = (cmds.ls(current_sc, long=True) or [current_sc])[0]
+                sel = om2.MSelectionList(); sel.add(sc_to_add)
+                sc_obj = sel.getDependNode(0)
+                fn_skin = oma2.MFnSkinCluster(sc_obj)
+            except Exception as e:
+                _log('open fnSkin failed: %s' % e)
+                continue
+            # 解析 geometry dagPath：必须是skin绑定的mesh的“shape”路径
+            dag_path = None
+            mesh_long = _long_transform(mesh)
+            mesh_shapes = _list_shapes(mesh_long)
+            # 1) 从 skin 的输出几何里找与 mesh 的 shape 同名的路径
+            try:
+                geo_list = fn_skin.getOutputGeometry()
+            except Exception as e:
+                _log('getOutputGeometry failed: %s' % e)
+                geo_list = []
+            if geo_list:
+                for g in geo_list:
+                    try:
+                        gp = g if isinstance(g, om2.MDagPath) else om2.MDagPath.getAPathTo(g)
+                        short = _strip_namespace(gp.partialPathName()).split('|')[-1]
+                        if mesh_shapes:
+                            for s in mesh_shapes:
+                                if _strip_namespace(s).split('|')[-1] in short:
+                                    dag_path = gp; break
+                        else:
+                            # 没有shape时退化匹配transform名
+                            if _strip_namespace(mesh_long).split('|')[-1] in short:
+                                dag_path = gp
+                        if dag_path is not None:
+                            break
+                    except Exception:
+                        continue
+            # 2) 仍未找到，则直接取 mesh 的第一个 shape 的 dagPath
+            if dag_path is None and mesh_shapes:
+                try:
+                    sel = om2.MSelectionList(); sel.add(mesh_shapes[0]); dag_path = sel.getDagPath(0)
+                except Exception as e:
+                    _log('fallback shape dagPath failed: %s' % e)
+                    dag_path = None
+            if dag_path is None:
+                _log('cannot resolve dagPath for mesh %s, skip group' % mesh)
+                continue
+            _log('resolved dagPath: %s' % dag_path.fullPathName())
+            skin_infl_paths = fn_skin.influenceObjects()
+            # 兼容：部分版本返回 MObject 数组，需要转 MDagPath
+            try:
+                skin_infl_paths = [fn_skin.influenceObjects()[i] for i in range(len(fn_skin.influenceObjects()))]
+            except Exception:
+                pass
+            skin_infl_to_logical = {}
+            skin_infl_names = set()
+            for ip in skin_infl_paths:
+                try:
+                    idx = fn_skin.indexForInfluenceObject(ip)
+                    name = ip.partialPathName()
+                    skin_infl_to_logical[name] = idx
+                    skin_infl_names.add(name)
+                except Exception:
+                    pass
+            # 若预测列全是零，至少保留每行的最大列，以免“无可写影响”
+            sub_all = preds[idx_list]
+            if sub_all.shape[1] > 0 and np.allclose(sub_all.sum(axis=1), 0.0):
+                # 理论上不会发生（上一步已回退），但再兜底
+                best_cols = np.argmax(sub_all, axis=1)
+                for ri, ci in enumerate(best_cols):
+                    sub_all[ri, ci] = 1.0
+            need_mask = preds[idx_list] > min_w
+            # 至少包含每行的最大列，防止全部被阈值清零
+            row_argmax = np.argmax(preds[idx_list], axis=1)
+            for r, c in enumerate(row_argmax):
+                need_mask[r, c] = True
+            need_cols = np.where(need_mask.any(axis=0))[0]
+            needed_infl_names = [infl_list[j] for j in need_cols]
+            for j_name in needed_infl_names:
+                if j_name not in skin_infl_names and cmds.objExists(j_name):
+                    try:
+                        _log('add influence to %s: %s' % (current_sc, j_name))
+                        cmds.skinCluster(current_sc, e=True, ai=j_name, lw=True, wt=0.0)
+                    except Exception as e:
+                        _log('add influence failed: %s' % e)
+                        pass
+            skin_infl_paths = fn_skin.influenceObjects()
+            # 兼容：部分版本返回 MObject 数组，需要转 MDagPath
+            try:
+                skin_infl_paths = [fn_skin.influenceObjects()[i] for i in range(len(fn_skin.influenceObjects()))]
+            except Exception:
+                pass
+            skin_infl_to_logical = {}
+            skin_infl_names = set()
+            for ip in skin_infl_paths:
+                try:
+                    idx = fn_skin.indexForInfluenceObject(ip)
+                    name = ip.partialPathName()
+                    skin_infl_to_logical[name] = idx
+                    skin_infl_names.add(name)
+                except Exception:
+                    pass
+            present = []
+            present_logical = []
+            for j in infl_list:
+                if j in skin_infl_to_logical:
+                    present.append(True)
+                    present_logical.append(skin_infl_to_logical[j])
+                else:
+                    present.append(False)
+            present = np.array(present, dtype=bool)
+            if not np.any(present):
+                continue
+            comp_fn = om2.MFnSingleIndexedComponent(); comp = comp_fn.create(om2.MFn.kMeshVertComponent)
+            vert_ids = om2.MIntArray()
+            # component 必须是基于该 dag_path 的本地 index，顶点ID已满足
+            for name in [verts[i] for i in idx_list]:
+                try:
+                    vid = int(name.split('[')[-1].rstrip(']'))
+                    vert_ids.append(vid)
+                except Exception:
+                    pass
+            if len(vert_ids) == 0:
+                _log('no vert ids in group, skip')
+                continue
+            comp_fn.addElements(vert_ids)
+            infl_indices = om2.MIntArray(present_logical)
+            sub = preds[idx_list][:, present]
+            # 再次确保每行至少一个非零
+            if sub.shape[1] == 0:
+                continue
+            row_sum = sub.sum(axis=1, keepdims=True)
+            row_sum[row_sum == 0] = 1.0
+            sub = sub / row_sum
+            flat = om2.MDoubleArray()
+            for r in sub:
+                for w in r:
+                    flat.append(float(w))
+            try:
+                cmds.setAttr(current_sc + '.normalizeWeights', 1)
+            except Exception:
+                pass
+            try:
+                _log('setWeights: infl_cols=%d, rows=%d, dag=%s' % (len(infl_indices), len(idx_list), dag_path.fullPathName()))
+                _ = fn_skin.setWeights(dag_path, comp, infl_indices, flat, True)
+                _log('setWeights success on %s' % current_sc)
+                continue
+            except Exception as e:
+                _log('setWeights failed on {}: {} -- fallback to skinPercent per-vertex'.format(sc, e))
+            # Fallback: per-vertex skinPercent (slower but robust)
+            present_names = [infl_list[i] for i, flag in enumerate(present) if flag]
+            for row_i, vert_index in enumerate(idx_list):
+                vname = verts[vert_index]
+                w_row = sub[row_i]
+                tv = []
+                for j, w in enumerate(w_row):
+                    if w > max(min_w, 0.0):
+                        tv.append((present_names[j], float(w)))
+                if not tv and len(present_names) > 0:
+                    tv = [(present_names[int(np.argmax(w_row))], 1.0)]
+                try:
+                    cmds.skinPercent(sc, vname, transformValue=tv, normalize=True)
+                except Exception as ee:
+                    _log('skinPercent failed %s: %s' % (vname, ee))
+
+    def _ensure_influences_on_skin(self, sc, infl_list):
+        exists = set(cmds.skinCluster(sc, q=True, inf=True) or [])
+        for j in infl_list:
+            if not cmds.objExists(j):
+                continue
+            if j in exists:
+                continue
+            try:
+                _log('add missing influence to %s: %s' % (sc, j))
+                cmds.skinCluster(sc, e=True, ai=j, lw=True, wt=0.0)
+            except Exception as e:
+                _log('add influence failed: %s' % e)
+        try:
+            cmds.setAttr(sc + '.normalizeWeights', 1)
+        except Exception:
+            pass
+
+    def _ensure_skin_on_targets(self, dst_vertices, infl_list):
+        # 以目标transform为单位，若缺少skin，则为其首个shape创建skinCluster。
+        # 使用 infl_list 中存在于场景的影响；若为空则尝试选择一个joint作为兜底。
+        touched = 0
+        meshes = sorted(list(dict.fromkeys([_long_transform(v.split('.')[0]) for v in dst_vertices])))
+        for mesh in meshes:
+            sc = find_skin_cluster(mesh)
+            if sc:
+                continue
+            shapes = _list_shapes(mesh)
+            if not shapes:
+                continue
+            # 选择可用影响
+            valid_infl = [j for j in infl_list if cmds.objExists(j)]
+            if not valid_infl:
+                # 兜底找任意joint
+                joints = cmds.ls(type='joint') or []
+                if not joints:
+                    _log('no joints in scene to create skin for %s' % mesh)
+                    continue
+                valid_infl = [joints[0]]
+            try:
+                _log('create skinCluster for %s with %d influences' % (mesh, len(valid_infl)))
+                sc = cmds.skinCluster(valid_infl, mesh, tsb=True, mi=max(1, self.settings.get('post_max_influences', 8)), nw=1, bm=0)[0]
+                touched += 1
+            except Exception as e:
+                _log('create skin failed: %s' % e)
+                continue
+            # 确保所有源影响已添加（权重0）
+            self._ensure_influences_on_skin(sc, infl_list)
+            # 刷新缓存
+            self._skin_cache[mesh] = sc
+        _log('ensure skin created on targets: %d' % touched)
+
+    # -------------------- Unified RBF transfer --------------------
+    def run_smart_rbf_transfer(self, *args):
+        # 每次执行前清空缓存，避免复用上次的skin名字
+        self._skin_cache = {}
+
+        # 初始化进度条
+        cmds.progressWindow(title=u"权重拷贝进度", progress=0, status=u"[1/8] 初始化...",
+                           isInterruptable=True, maxValue=100)
+
+        try:
+            # 阶段1: 收集数据 (0-5%)
+            cmds.progressWindow(edit=True, progress=1, status=u"[1/8] 收集源和目标顶点...")
+            src_vertices = self._collect_source_vertices()
+            dst_vertices = self._collect_target_vertices()
+            _log('src count=%d, dst count=%d' % (len(src_vertices), len(dst_vertices)))
+
+            if not src_vertices:
+                cmds.progressWindow(endProgress=True)
+                cmds.warning(u"没有源：请添加源对象或源顶点。")
+                return
+            if not dst_vertices:
+                cmds.progressWindow(endProgress=True)
+                cmds.warning(u"没有目标：请添加目标对象或目标顶点。")
+                return
+
+            # 阶段2: 构建影响列表 (5-10%)
+            cmds.progressWindow(edit=True, progress=5, status=u"[2/8] 构建影响列表...")
+            infl_list, infl_index = self._build_union_influences(src_vertices)
+            _log('union influences=%d' % len(infl_list))
+
+            if not infl_list:
+                cmds.progressWindow(endProgress=True)
+                cmds.warning(u"未找到任何源影响（SkinCluster）。")
+                return
+
+            # 阶段3: 采样源权重 (10-50%)
+            cmds.progressWindow(edit=True, progress=10, status=u"[3/8] 采样源权重 ({} 顶点)...".format(len(src_vertices)))
+            src_pos, src_w, src_names, src_vids = self._sample_source_positions_and_weights(src_vertices, infl_list, infl_index)
+
+            if cmds.progressWindow(q=True, isCancelled=True):
+                cmds.progressWindow(endProgress=True)
+                cmds.warning(u"用户取消操作")
+                return
+
+            if src_pos is None:
+                cmds.progressWindow(endProgress=True)
+                cmds.warning(u"未能从源采样到有效权重。")
+                return
+
+            _log('sampled sources: pos=%d, infl_cols=%d' % (len(src_pos), (0 if src_w is None else src_w.shape[1])))
+
+            # 阶段4: 准备目标 (50-55%)
+            cmds.progressWindow(edit=True, progress=50, status=u"[4/8] 准备目标网格...")
+            # 先确保目标mesh具备skin并包含必要影响（仅触碰待写入网格，不会改动未选顶点的权重）
+            self._ensure_skin_on_targets(dst_vertices, infl_list)
+
+            # 批量获取目标位置（优化：按mesh分组）
+            tgt_positions = []
+            valid_verts = []
+            skipped_no_skin = 0
+
+            mesh_groups = defaultdict(list)
+            for v in dst_vertices:
+                mesh = v.split('.')[0]
+                mesh_groups[mesh].append(v)
+
+            for mesh, verts in mesh_groups.items():
+                if not self._get_skin_cluster_cached(verts[0]):
+                    skipped_no_skin += len(verts)
+                    continue
+                try:
+                    # 批量获取位置（更快）
+                    pos_list = cmds.xform(verts, q=True, t=True, ws=True)
+                    pos_array = np.array(pos_list).reshape(-1, 3)
+                    for i, v in enumerate(verts):
+                        tgt_positions.append(pos_array[i])
+                        valid_verts.append(v)
+                except Exception:
+                    # 回退到逐个获取
+                    for v in verts:
+                        try:
+                            p = cmds.xform(v, q=True, t=True, ws=True)
+                            tgt_positions.append(p)
+                            valid_verts.append(v)
+                        except Exception:
+                            pass
+
+            _log('valid target verts=%d, skipped(no skin)=%d' % (len(valid_verts), skipped_no_skin))
+
+            if not valid_verts:
+                cmds.progressWindow(endProgress=True)
+                cmds.warning(u"目标中无可写入顶点（缺少Skin或无效组件）。")
+                return
+
+            # 阶段5: 计算权重 (55-60%)
+            cmds.progressWindow(edit=True, progress=55, status=u"[5/8] 计算权重传递 ({} → {})...".format(len(src_pos), len(valid_verts)))
+            s = self.settings
+            tgt_positions = np.array(tgt_positions, dtype=float)
+            mode = self.settings.get('mode', MODE_AUTO)
+
+            # 自动判别：若源点数 < 目标点数则少→多，否则多→少
+            if mode == MODE_AUTO:
+                mode = MODE_FEW_TO_MANY if len(src_pos) < len(tgt_positions) else MODE_MANY_TO_FEW
+
+            method = self.settings.get('method', METHOD_IDW)
+
+            if method == METHOD_CSB:
+                # 最近面插值：将每个目标顶点投射到最近的源三角面，做重心插值权重。
+                preds = self._predict_barycentric_on_source_meshes(src_names, src_pos, src_w, valid_verts, tgt_positions)
+            else:
+                preds = _predict_weight_batch_knn(
+                    target_positions=tgt_positions,
+                    source_positions=src_pos,
+                    source_weights_array=src_w,
+                    sigma=s['sigma'],
+                    max_influences=s['max_influences'],
+                    min_weight_threshold=s['min_weight_threshold'],
+                    k_neighbors=s['k_neighbors'],
+                    distance_threshold=s['distance_threshold'],
+                    adaptive_sigma=False,
+                    sigma_scale=s['sigma_scale'],
+                    min_sigma=s['min_sigma'],
+                    spread_mode=False,
+                    spread_mix=0.0,
+                    mode=mode,
+                    method=method,
+                    idw_power=self.settings['idw_power'],
+                    idw_eps=self.settings['idw_eps'],
+                    nn_boost_top=self.settings['nn_boost_top'],
+                    nn_boost_gain=self.settings['nn_boost_gain'],
+                )
+
+            _log('preds shape=%s, zero_rows(before fallback)=%d' % (str(preds.shape), int(np.sum(np.isclose(preds.sum(axis=1), 0.0)))))
+
+            # 阶段6: 回退处理 (60-65%)
+            cmds.progressWindow(edit=True, progress=60, status=u"[6/8] 处理异常权重...")
+            # 回退：若某些行全零（被阈值/距离筛空），使用最近源顶点的权重直接复制
+            zero_rows = np.where(np.isclose(preds.sum(axis=1), 0.0))[0]
+            if len(zero_rows) > 0:
+                src_vec = src_pos.astype(float)
+                for r in zero_rows:
+                    tp = tgt_positions[r]
+                    d = np.linalg.norm(src_vec - tp[None, :], axis=1)
+                    nn = int(np.argmin(d))
+                    preds[r] = src_w[nn]
+
+            # 再次归一以确保有效
+            rs = preds.sum(axis=1, keepdims=True)
+            rs[rs == 0] = 1.0
+            preds = preds / rs
+            _log('after fallback: zero_rows=%d' % int(np.sum(np.isclose(preds.sum(axis=1), 0.0))))
+
+            # 阶段7: 写入权重 (65-95%) - 进度在_apply_weights_api内部更新
+            cmds.progressWindow(edit=True, progress=65, status=u"[7/8] 写入权重到目标...")
+            self._apply_weights_api(valid_verts, preds, infl_list, s['min_weight_threshold'])
+
+            # 检查用户是否取消
+            if cmds.progressWindow(q=True, isCancelled=True):
+                cmds.progressWindow(endProgress=True)
+                cmds.warning(u"用户取消操作")
+                return
+
+            # 阶段8: 后处理平滑 (95-100%)
+            cmds.progressWindow(edit=True, progress=95, status=u"[8/8] 后处理平滑...")
+            only_selected_vertices = bool(self.dst_verts)
+            if not only_selected_vertices:
+                self._post_process_after_write(valid_verts)
+
+            cmds.progressWindow(edit=True, progress=100, status=u"完成！")
+            cmds.progressWindow(endProgress=True)
+
+            cmds.inViewMessage(
+                amg=u"拷贝完成：<span style='color:#00FF00;'>{} 源点 → {} 目标点</span>".format(
+                    len(src_vertices), len(valid_verts)),
+                pos='midCenter', fade=True)
+
+        except Exception as e:
+            _log('Error during transfer: %s' % str(e))
+            cmds.progressWindow(endProgress=True)
+            cmds.warning(u"拷贝过程中出错: %s" % str(e))
+
+
+# 入口
+ui = CopySkinUI()
+ui.show()

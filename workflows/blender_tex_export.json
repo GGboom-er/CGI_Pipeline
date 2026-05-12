@@ -1,0 +1,31 @@
+{
+  "workflow_id": "blender_tex_export",
+  "name": "Blender 贴图资产导出",
+  "description": "从 Blender 导出 ABC + 采集材质信息 + 采集几何 info JSON",
+  "steps": [
+    {
+      "step_id": "export_abc",
+      "skill_id": "blender_export_abc",
+      "parameters": {
+        "abc_path": "{{input.info_dir}}/{{input.source_path | stem}}.abc",
+        "cache_group": "{{config.stages.tex.geom_roots.0}}"
+      }
+    },
+    {
+      "step_id": "extract_materials",
+      "skill_id": "blender_extract_materials",
+      "parameters": {
+        "output_path": "{{input.info_dir}}/{{input.source_path | stem}}_materials.json",
+        "cache_group": "{{config.stages.tex.geom_roots.0}}"
+      }
+    },
+    {
+      "step_id": "build_info",
+      "skill_id": "blender_build_asset_info",
+      "parameters": {
+        "info_path": "{{input.info_dir}}/{{input.source_path | stem}}_info.json",
+        "cache_group": "{{config.stages.tex.geom_roots.0}}"
+      }
+    }
+  ]
+}

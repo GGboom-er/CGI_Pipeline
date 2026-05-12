@@ -1,0 +1,320 @@
+"""CGI Pipeline MCP 契约扫描。
+
+只做静态和纯函数级检查，不启动 DCC，不依赖 Celery。
+"""
+
+from __future__ import annotations
+
+import json
+import pathlib
+import re
+import sys
+
+import yaml
+
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+
+
+def _read_text(path: pathlib.Path) -> str:
+    return path.read_text(encoding="utf-8", errors="replace")
+
+
+def _load_skill_params() -> dict[str, set[str]]:
+    skills: dict[str, set[str]] = {}
+    for skill_md in sorted((ROOT / "skills").glob("*/SKILL.md")):
+        text = _read_text(skill_md)
+        if not text.startswith("---"):
+            continue
+        end = text.find("---", 3)
+        if end < 0:
+            continue
+        data = yaml.safe_load(text[3:end].strip()) or {}
+        skill_id = data.get("skill_id")
+        if skill_id:
+            skills[skill_id] = set((data.get("parameters") or {}).keys())
+    return skills
+
+
+def _resolve_template_vars(params: dict, outputs: dict, extra_params: dict, config: dict | None = None) -> dict:
+    """与 core.tasks._resolve_template_vars 保持一致的轻量副本，避免导入 Celery。"""
+
+    config = config or {}
+    placeholder_re = re.compile(r"\{\{\s*(.+?)\s*\}\}")
+    base_re = re.compile(
+        r"^(?P<kind>outputs|input|config)\.(?P<path>[\w\.]+?)"
+        r"(?P<tail>(?:\s*\|\s*[^|]+)*)$"
+    )
+    filter_re = re.compile(
+        r"\|\s*replace\(\s*"
+        r"(?P<a>\"(?:[^\"\\]|\\.)*\"|'(?:[^'\\]|\\.)*')\s*,\s*"
+        r"(?P<b>\"(?:[^\"\\]|\\.)*\"|'(?:[^'\\]|\\.)*')\s*\)"
+    )
+
+    def _unquote(s: str) -> str:
+        s = s.strip()
+        if (s.startswith("'") and s.endswith("'")) or (s.startswith('"') and s.endswith('"')):
+            return bytes(s[1:-1], "utf-8").decode("unicode_escape")
+        return s
+
+    def _resolve_base(kind: str, path: str):
+        keys = path.split(".")
+        if kind == "outputs":
+            if len(keys) < 2:
+                return None, False
+            step_outputs = outputs.get(keys[0], {})
+            field = ".".join(keys[1:])
+            return (step_outputs[field], True) if field in step_outputs else (None, False)
+        if kind == "input":
+            curr = extra_params
+        else:
+            curr = config
+        for key in keys:
+            if isinstance(curr, dict) and key in curr:
+                curr = curr[key]
+            elif isinstance(curr, list) and key.isdigit() and int(key) < len(curr):
+                curr = curr[int(key)]
+            else:
+                return None, False
+        return curr, True
+
+    def _eval_expr(expr: str):
+        match = base_re.match(expr.strip())
+        if not match:
+            return None, False
+        value, ok = _resolve_base(match.group("kind"), match.group("path"))
+        if not ok:
+            return None, False
+        for token in (match.group("tail") or "").split("|")[1:]:
+            token = token.strip()
+            replace_match = filter_re.fullmatch("|" + token)
+            if replace_match:
+                value = str(value).replace(_unquote(replace_match.group("a")), _unquote(replace_match.group("b")))
+            elif token == "basename":
+                value = str(value).replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+            elif token == "stem":
+                basename = str(value).replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+                value = pathlib.Path(basename).stem
+            elif token == "dirname":
+                norm = str(value).replace("\\", "/").rstrip("/")
+                value = norm.rsplit("/", 1)[0] if "/" in norm else ""
+            elif token:
+                return None, False
+        return value, True
+
+    def _resolve_string(value: str):
+        full = placeholder_re.fullmatch(value.strip())
+        if full:
+            resolved, ok = _eval_expr(full.group(1))
+            return resolved if ok else value
+        return placeholder_re.sub(lambda m: str(_eval_expr(m.group(1))[0]) if _eval_expr(m.group(1))[1] else m.group(0), value)
+
+    return {k: _resolve_string(v) if isinstance(v, str) else v for k, v in params.items()}
+
+
+def check_workflow_params(errors: list[str]) -> None:
+    skills = _load_skill_params()
+    if len(skills) < 1:
+        errors.append("未读取到任何 SKILL.md frontmatter")
+        return
+    for wf_path in sorted((ROOT / "workflows").glob("*.json")):
+        workflow = json.loads(_read_text(wf_path))
+        for idx, step in enumerate(workflow.get("steps", [])):
+            skill_id = step.get("skill_id", "")
+            if skill_id not in skills:
+                errors.append(f"{wf_path.name} step {idx}: skill_id 不存在: {skill_id}")
+                continue
+            params = set((step.get("parameters") or {}).keys())
+            extra = sorted(params - skills[skill_id])
+            if extra:
+                errors.append(f"{wf_path.name} step {idx} ({skill_id}): 未声明参数 {extra}")
+
+
+def check_template_replace(errors: list[str]) -> None:
+    params = {
+        "materials": "{{outputs.export_abc.output_path | replace('.abc', '_materials.json')}}",
+        "scene": "{{outputs.export_abc.output_path | replace('.abc', '.ma')}}",
+        "mixed": "out={{outputs.export_abc.output_path | replace(\".abc\", \".json\")}}",
+        "stem": "{{input.source_path | stem}}",
+    }
+    resolved = _resolve_template_vars(
+        params,
+        {"export_abc": {"output_path": "Y:/run/test.abc"}},
+        {"source_path": "Y:/run/asset.blend"},
+        {},
+    )
+    expected = {
+        "materials": "Y:/run/test_materials.json",
+        "scene": "Y:/run/test.ma",
+        "mixed": "out=Y:/run/test.json",
+        "stem": "asset",
+    }
+    if resolved != expected:
+        errors.append(f"模板 replace 解析失败: {resolved!r}")
+
+
+def check_text_patterns(errors: list[str]) -> None:
+    scan_files = [
+        *list((ROOT / "core").glob("*.py")),
+        *list((ROOT / "dccs").glob("*/*.py")),
+        *list((ROOT / "mcp_server").glob("*.py")),
+        *list((ROOT / "skills").glob("*/*.py")),
+        *list((ROOT / "skills").glob("*/*.md")),
+        *list((ROOT / "workflows").glob("*.json")),
+        ROOT / "config" / "pipeline_manifest.json",
+        ROOT / "AGENTS.md",
+        ROOT / "CLAUDE.md",
+        ROOT / "AI_ONBOARDING.md",
+        ROOT / ".env",
+        ROOT / ".env.example",
+    ]
+    hard_timeout = re.compile(r"\b(time_limit|soft_time_limit)\s*=|_poll_timeout\s*=|IPC_TIMEOUT_SEC=1800")
+    forbidden = {
+        "from skills.compare_asset": "旧 compare_asset 导入",
+        "suggested_actions": "后台人工 suggested_actions 语义",
+        "Ai_pub": "旧 Ai_pub 文档语义",
+        "needs_attention_holds_scene\": true": "旧 hold manifest 开关",
+        "hold_on_needs_attention\": true": "旧 hold chain 开关",
+    }
+    for path in scan_files:
+        if not path.exists():
+            continue
+        text = _read_text(path)
+        rel = path.relative_to(ROOT)
+        if hard_timeout.search(text):
+            errors.append(f"{rel}: 存在硬超时配置")
+        for needle, label in forbidden.items():
+            if needle in text:
+                errors.append(f"{rel}: {label}")
+
+
+def check_workflow_resume_order(errors: list[str]) -> None:
+    text = _read_text(ROOT / "core" / "tasks.py")
+    fail_guard = "if seg_status not in ('SUCCESS', 'CHAIN_SUCCESS'):"
+    persist_call = "persist_outputs(task_id, all_outputs)"
+    mark_call = "mark_segment_done(task_id, seg_idx)"
+    fail_idx = text.find(fail_guard)
+    persist_idx = text.find(persist_call)
+    mark_idx = text.find(mark_call)
+    if fail_idx < 0 or persist_idx < 0 or mark_idx < 0:
+        errors.append("core/tasks.py: workflow 段完成标记逻辑缺失")
+        return
+    if not (fail_idx < persist_idx < mark_idx):
+        errors.append("core/tasks.py: 失败段可能先被标记完成，断点恢复会跳过失败段")
+
+
+def check_workflow_internal_outputs(errors: list[str]) -> None:
+    """对比/拼装 workflow 的机器中间产物必须进 .info。"""
+    required_by_workflow = {
+        "tex_to_rig_verify_and_sync.json": {
+            "export_abc": ("abc_path", ".abc"),
+            "extract_materials": ("output_path", "_materials.json"),
+            "build_rig_info": ("info_path", "_pre_sync.json"),
+            "compare": ("output_path", "_pre_compare_result.json"),
+            "build_rig_info_post": ("info_path", "_post_sync.json"),
+            "verify": ("output_path", "_post_compare_result.json"),
+        },
+        "tex_to_rig_verify.json": {
+            "build_tex_info": ("info_path", "_info.json"),
+            "build_rig_info": ("info_path", "_info.json"),
+            "compare": ("output_path", "_compare_result.json"),
+        },
+        "blender_tex_export.json": {
+            "export_abc": ("abc_path", ".abc"),
+            "extract_materials": ("output_path", "_materials.json"),
+            "build_info": ("info_path", "_info.json"),
+        },
+        "blender_to_maya_full_build.json": {
+            "export_abc": ("abc_path", ".abc"),
+            "extract_materials": ("output_path", "_materials.json"),
+        },
+    }
+
+    for wf_name, required in required_by_workflow.items():
+        wf_path = ROOT / "workflows" / wf_name
+        workflow = json.loads(_read_text(wf_path))
+        steps = {step.get("step_id"): step for step in workflow.get("steps", [])}
+        for step_id, (param_name, suffix) in required.items():
+            step = steps.get(step_id)
+            if not step:
+                errors.append(f"{wf_name}: 缺少步骤 {step_id}")
+                continue
+            value = (step.get("parameters") or {}).get(param_name, "")
+            if "{{input.info_dir}}" not in value or suffix not in value:
+                errors.append(f"{wf_name} {step_id}.{param_name}: 内部产物未写入 .info: {value}")
+
+        for step in workflow.get("steps", []):
+            params = step.get("parameters") or {}
+            if step.get("skill_id") in ("blender_build_asset_info", "maya_build_asset_info"):
+                cache_group = params.get("cache_group", "")
+                if "{{config." not in cache_group:
+                    errors.append(
+                        f"{wf_name} {step.get('step_id')}.cache_group: 组名必须来自项目配置: {cache_group}"
+                    )
+
+
+def check_default_output_fallbacks(errors: list[str]) -> None:
+    """默认输出路径不得回退到输入文件同目录。"""
+    checks = {
+        "pipeline_compare_asset": {
+            "path": ROOT / "skills" / "pipeline_compare_asset" / "pipeline_compare_asset.py",
+            "needles": [
+                "base_dir = os.path.dirname(os.path.abspath(input_b))",
+                "def _default_compare_result_path",
+            ],
+        },
+        "maya_export_abc": {
+            "path": ROOT / "skills" / "maya_export_abc" / "maya_export_abc.py",
+            "needles": [
+                "src_dir = os.path.dirname(scene)",
+                "candidate = os.path.join(src_dir",
+                "abc_path = candidate",
+            ],
+        },
+        "blender_export_abc": {
+            "path": ROOT / "skills" / "blender_export_abc" / "blender_export_abc.py",
+            "needles": [
+                "candidate = os.path.join(os.path.dirname(src)",
+                "abc_path = candidate",
+            ],
+        },
+        "pipeline_export_abc_auto": {
+            "path": ROOT / "skills" / "pipeline_export_abc_auto" / "pipeline_export_abc_auto.py",
+            "needles": [
+                "build_publish_path",
+                "with_suffix('.abc')",
+            ],
+        },
+        "blender_extract_materials": {
+            "path": ROOT / "skills" / "blender_extract_materials" / "blender_extract_materials.py",
+            "needles": [
+                "os.path.splitext(source_path)[0] + '_materials.json'",
+            ],
+        },
+    }
+    for skill_id, spec in checks.items():
+        text = _read_text(spec["path"])
+        for needle in spec["needles"]:
+            if needle in text:
+                errors.append(f"{skill_id}: 默认输出仍可能回退源目录/发布目录: {needle}")
+
+
+def main() -> int:
+    errors: list[str] = []
+    check_workflow_params(errors)
+    check_template_replace(errors)
+    check_text_patterns(errors)
+    check_workflow_resume_order(errors)
+    check_workflow_internal_outputs(errors)
+    check_default_output_fallbacks(errors)
+    if errors:
+        print("[FAIL] MCP 契约扫描发现问题:")
+        for item in errors:
+            print(f"  - {item}")
+        return 1
+    print("[PASS] MCP 契约扫描通过")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

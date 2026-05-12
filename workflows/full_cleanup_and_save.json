@@ -1,0 +1,27 @@
+{
+  "workflow_id": "full_cleanup_and_save",
+  "name": "全清理 + 保存",
+  "description": "场景全清理（Fix 模式）→ Shape 命名修复 → 法线统一 → 另存为",
+  "steps": [
+    {
+      "step_id": "cleanup",
+      "skill_id": "maya_master_cleanup",
+      "parameters": {"mode": "fix"}
+    },
+    {
+      "step_id": "fix_shapes",
+      "skill_id": "maya_fix_shape_names",
+      "parameters": {}
+    },
+    {
+      "step_id": "normals",
+      "skill_id": "maya_conform_normals",
+      "parameters": {}
+    },
+    {
+      "step_id": "save",
+      "skill_id": "save_scene",
+      "parameters": {}
+    }
+  ]
+}

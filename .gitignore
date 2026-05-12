@@ -1,0 +1,60 @@
+# ── CGI Pipeline v2.0 ──
+
+# ── 运行时产物（禁止提交）──
+runtime/
+sandbox/
+publish/
+audit/
+logs/
+reports/
+runs/
+backups/
+tmp/
+ipc/
+projects/
+assets/
+*.lock
+!filelock
+*.stackdump
+*.pdb
+
+# ── 备份文件 ──
+*.bak_*
+
+# ── DCC 大型二进制（不入库）──
+*.ma
+*.mb
+*.blend
+*.blend1
+*.abc
+*.fbx
+
+# ── 本地环境配置（每台机器不同）──
+.env
+
+# ── Redis 本地数据 ──
+redis_server/dump.rdb
+
+# ── Python ──
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.venv/
+.pytest_cache/
+
+# ── 日志 ──
+*.log
+
+# ── IDE ──
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ── OS ──
+Thumbs.db
+Desktop.ini
+.DS_Store

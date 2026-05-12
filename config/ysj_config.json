@@ -1,0 +1,235 @@
+{
+    "project_name": "ysj",
+    "description": "YSJ 项目配置 — 基于 Flow Production Tracking 定义手册 Ver 2026.02.24",
+
+    "server_root": "X:/Project/ysj",
+    "path_pattern_asset": "{category}/{asset}/{stage}/{task}",
+    "path_pattern_shot": "{sequence}/{shot}/{stage}/{task}",
+
+    "path_roots": {
+        "assets": "pub/assets",
+        "asset_lib": "pub/asset_lib",
+        "shots": "pub/shots",
+        "sourceimages": "sourceimages",
+        "efx_asset": "pub/efx/efx_asset",
+        "work_assets": "assets",
+        "lgt": "lgt",
+        "lgt_comp": "pub/lgt_comp"
+    },
+
+    "protected_roots": [
+        "X:/Project/",
+        "//server/",
+        "\\\\server\\"
+    ],
+
+    "categories": {
+        "chr": {
+            "label": "assets-chr",
+            "path_root": "assets",
+            "stages": ["mod", "uv", "tex", "lyrig", "rig", "lib"]
+        },
+        "prp": {
+            "label": "assets-prp",
+            "path_root": "assets",
+            "stages": ["lybg", "mod", "uv", "tex", "rig", "lib"]
+        },
+        "env": {
+            "label": "assets-env",
+            "path_root": "assets",
+            "stages": ["lybg", "mod", "uv", "tex", "lib"]
+        }
+    },
+
+    "stages": {
+        "mod": {
+            "description": "模型阶段",
+            "primary_task": "modMaster",
+            "sub_tasks": {},
+            "geom_roots": ["|Group|cache", "|*|geo"],
+            "rules": {
+                "require_orig": false,
+                "allow_orig": false,
+                "allow_rig_data": false,
+                "report_level_if_orig_exists": "ERROR",
+                "require_skin": false
+            }
+        },
+        "lybg": {
+            "description": "Layout场景阶段",
+            "primary_task": "lybgMaster",
+            "sub_tasks": {},
+            "geom_roots": ["|Group|cache", "|*|geo"],
+            "rules": {}
+        },
+        "uv": {
+            "description": "UV阶段",
+            "primary_task": "uvMaster",
+            "sub_tasks": {},
+            "geom_roots": ["|Group|cache", "|*|geo"],
+            "rules": {
+                "require_orig": false,
+                "allow_orig": false,
+                "allow_rig_data": false,
+                "report_level_if_orig_exists": "ERROR"
+            }
+        },
+        "tex": {
+            "description": "贴图阶段",
+            "primary_task": "texMaster",
+            "sub_tasks": {
+                "paintTex": {"path_root": "work_assets"},
+                "refinement": {"path_root": "work_assets"},
+                "fur": {"path_root": "work_assets"},
+                "basicTex": {"path_root": "work_assets"}
+            },
+            "texture_path_root": "sourceimages",
+            "geom_roots": ["|Group|cache", "|*|geo"],
+            "rules": {
+                "require_orig": false,
+                "allow_orig": false,
+                "allow_rig_data": false,
+                "report_level_if_orig_exists": "ERROR"
+            }
+        },
+        "lyrig": {
+            "description": "Layout代理绑定阶段",
+            "primary_task": "lyrigMaster",
+            "sub_tasks": {},
+            "geom_roots": ["|Group|Geometry|cache", "|*|geo"],
+            "rules": {"allow_orig": true}
+        },
+        "rig": {
+            "description": "绑定阶段",
+            "primary_task": "rigMaster",
+            "sub_tasks": {
+                "bs": {"path_root": "assets"},
+                "facialTex": {"path_root": "sourceimages", "path_pattern": "{category}/{asset}/rig/facialtex"},
+                "assetCfx": {"path_root": "efx_asset", "path_pattern": "{category}/{asset}/{task}"},
+                "proxyRig": {"path_root": "assets"}
+            },
+            "geom_roots": ["|Group|Geometry|cache", "|*|geo"],
+            "ctrl_root": "|*|MotionSystem",
+            "deform_root": "|*|DeformationSystem",
+            "rules": {
+                "require_orig": true,
+                "allow_orig": true,
+                "report_level_if_orig_missing": "WARNING",
+                "require_skin": true
+            }
+        },
+        "lib": {
+            "description": "资产入库阶段",
+            "primary_task": "libMaster",
+            "path_root_override": "asset_lib",
+            "sub_tasks": {
+                "libRig": {"path_root": "asset_lib"},
+                "lightMap": {"path_root": "asset_lib"}
+            },
+            "geom_roots": ["|Group|Geometry|cache", "|*|geo"],
+            "rules": {"allow_orig": true}
+        }
+    },
+
+    "shots": {
+        "path_root": "shots",
+        "naming_convention": "{project}_{sequence}_{shot}_{stage}_{task}_v{version}.ma",
+        "stages": {
+            "ly": {
+                "description": "镜头布局",
+                "primary_task": "lyMaster",
+                "sub_tasks": {}
+            },
+            "ani": {
+                "description": "动画",
+                "primary_task": "aniMaster",
+                "sub_tasks": {}
+            },
+            "cfx": {
+                "description": "角色特效",
+                "primary_task": "cfxMaster",
+                "sub_tasks": {}
+            },
+            "efx2d": {
+                "description": "2D特效",
+                "primary_task": "efx2dMaster",
+                "sub_tasks": {
+                    "efx2dSource": {"path_root": "lgt_comp", "path_pattern": "lgt_to_2deffect/{sequence}/{shot}"}
+                }
+            },
+            "efx": {
+                "description": "环境特效",
+                "primary_task": "efxMaster",
+                "sub_tasks": {"efxTex": {}}
+            },
+            "lgt": {
+                "description": "灯光",
+                "primary_task": "lgtMaster",
+                "path_root_override": "lgt",
+                "path_pattern": "{sequence}/{shot}/{task}",
+                "sub_tasks": {"set": {}}
+            },
+            "mat": {
+                "description": "后期合成",
+                "primary_task": "ui",
+                "sub_tasks": {
+                    "mp": {},
+                    "mpSource": {"path_root": "lgt_comp", "path_pattern": "lgt_to_mp/{sequence}/{shot}"},
+                    "shotAsset": {}
+                }
+            }
+        }
+    },
+
+    "pipelines": {
+        "model": {
+            "label": "模型环节",
+            "stages": ["tex", "uv", "mod"]
+        },
+        "rig": {
+            "label": "绑定环节",
+            "stages": ["lib", "rig", "lyrig"]
+        }
+    },
+
+    "rig_sync_profile": {
+        "description": "Rig-Asset 同步算法参数。所有距离单位均为 cm。",
+
+        "pairing": {
+            "enable_cpd": true,
+            "cpd_point_diff_threshold": 0.8,
+            "cpd_max_iterations": 30,
+            "cpd_tolerance": 0.001,
+            "chamfer_threshold": 5.0,
+            "bbox_iou_min": 0.01,
+            "name_bonus": 0.0,
+            "kdtree_round_decimals": 4,
+            "auto_approve_threshold": 0.95,
+            "review_threshold": 0.80,
+            "strict_mode": false
+        },
+
+        "classification": {
+            "precision_exact": 0.0001,
+            "precision_loose": 0.005,
+            "reorder_require_100pct": true,
+            "partial_match_min_pct": 0.99
+        },
+
+        "tnb_projection": {
+            "max_normal_angle_deg": 90.0,
+            "k_candidates": 8,
+            "bary_outgrow": 0.1
+        },
+
+        "diffuse": {
+            "backend": "scipy",
+            "fallback_sigma": 0.05,
+            "fallback_k": 3
+        },
+
+        "rig_prefix": "RIG_",
+        "min_dot": 0.0,
+        "max_k_search": 50
+    }
+}

@@ -1,0 +1,392 @@
+import maya.cmds as cmds
+import maya.OpenMaya as om
+import json
+import os
+import numpy as np
+from collections import defaultdict
+
+# Global variables
+source_weights = {}
+source_positions = np.array([])
+source_influences = []
+settings = {
+    "sigma": 1.0,
+    "max_influences": 12,  # 增加到12
+    "smooth_iterations": 1,
+    "distance_threshold": 100.0,  # 新增距离阈值
+    "min_weight_threshold": 0.001  # 新增最小权重阈值
+}
+
+def gaussian_rbf_np(distances, sigma):
+    """使用NumPy向量化的高斯RBF计算"""
+    return np.exp(-distances**2 / (2 * sigma**2))
+
+def predict_weight_batch(target_positions, source_positions, source_weights_array, sigma, max_influences):
+    """批量预测权重，使用NumPy优化"""
+    batch_size = len(target_positions)
+    num_sources = len(source_positions)
+    num_influences = source_weights_array.shape[1]
+    
+    # 计算所有距离
+    distances = np.linalg.norm(
+        target_positions[:, np.newaxis, :] - source_positions[np.newaxis, :, :], 
+        axis=2
+    )
+    
+    # 应用高斯RBF
+    weights_rbf = gaussian_rbf_np(distances, sigma)
+    
+    # 计算加权权重
+    weighted_weights = np.zeros((batch_size, num_influences))
+    for i in range(batch_size):
+        # 使用向量化操作计算权重
+        weighted_weights[i] = np.sum(
+            source_weights_array * weights_rbf[i, :, np.newaxis], 
+            axis=0
+        )
+    
+    # 归一化
+    row_sums = np.sum(weighted_weights, axis=1, keepdims=True)
+    row_sums[row_sums == 0] = 1  # 避免除零
+    normalized_weights = weighted_weights / row_sums
+    
+    # 限制最大影响数并重新归一化
+    final_weights = np.zeros_like(normalized_weights)
+    for i in range(batch_size):
+        weights = normalized_weights[i]
+        
+        # 应用最小权重阈值
+        weights[weights < settings["min_weight_threshold"]] = 0
+        
+        # 选择前max_influences个最大的权重
+        if np.count_nonzero(weights) > max_influences:
+            indices = np.argpartition(weights, -max_influences)[-max_influences:]
+            new_weights = np.zeros_like(weights)
+            new_weights[indices] = weights[indices]
+            weights = new_weights
+        
+        # 重新归一化
+        total = np.sum(weights)
+        if total > 0:
+            weights = weights / total
+        
+        final_weights[i] = weights
+    
+    return final_weights
+
+def get_skin_cluster(vertex):
+    """获取皮肤簇，添加缓存优化"""
+    if not hasattr(get_skin_cluster, '_cache'):
+        get_skin_cluster._cache = {}
+    
+    mesh = vertex.split('.')[0]
+    if mesh in get_skin_cluster._cache:
+        return get_skin_cluster._cache[mesh]
+    
+    history = cmds.listHistory(vertex)
+    skin_clusters = cmds.ls(history, type='skinCluster')
+    result = skin_clusters[0] if skin_clusters else None
+    get_skin_cluster._cache[mesh] = result
+    return result
+
+def get_vertex_weights_optimized(vertex, influences):
+    """优化权重获取"""
+    skin_cluster = get_skin_cluster(vertex)
+    if not skin_cluster:
+        return None
+    
+    weights = cmds.skinPercent(skin_cluster, vertex, query=True, value=True)
+    return {infl: weight for infl, weight in zip(influences, weights)}
+
+def prepare_source_data(vertices):
+    """准备源数据为NumPy数组格式"""
+    global source_weights, source_positions, source_influences
+    
+    if not vertices:
+        cmds.inViewMessage(amg="<span style=\"color:#FF0000;\">No vertices selected!</span>", pos='midCenter', fade=True)
+        return False
+    
+    # 获取第一个顶点的皮肤簇和影响
+    skin_cluster = get_skin_cluster(vertices[0])
+    if not skin_cluster:
+        cmds.inViewMessage(amg="<span style=\"color:#FF0000;\">No skin cluster found!</span>", pos='midCenter', fade=True)
+        return False
+    
+    source_influences = cmds.skinCluster(skin_cluster, query=True, influence=True)
+    influence_index_map = {infl: idx for idx, infl in enumerate(source_influences)}
+    num_influences = len(source_influences)
+    
+    # 收集位置和权重
+    positions = []
+    weights_list = []
+    
+    for vertex in vertices:
+        try:
+            pos = cmds.xform(vertex, query=True, translation=True, worldSpace=True)
+            weights = get_vertex_weights_optimized(vertex, source_influences)
+            
+            if weights:
+                positions.append(pos)
+                weight_array = np.zeros(num_influences)
+                for infl, weight in weights.items():
+                    weight_array[influence_index_map[infl]] = weight
+                weights_list.append(weight_array)
+        except Exception as e:
+            print(f"Warning: Failed to process vertex {vertex}: {e}")
+    
+    if not positions:
+        cmds.inViewMessage(amg="<span style=\"color:#FF0000;\">No valid weights found!</span>", pos='midCenter', fade=True)
+        return False
+    
+    source_positions = np.array(positions)
+    source_weights_array = np.array(weights_list)
+    
+    # 存储为字典格式（向后兼容）
+    source_weights.clear()
+    for i, pos in enumerate(positions):
+        source_weights[tuple(pos)] = {
+            infl: source_weights_array[i, j] 
+            for j, infl in enumerate(source_influences) 
+            if source_weights_array[i, j] > 0
+        }
+    
+    return True
+
+def save_weights(*_):
+    """保存权重 - 优化版本"""
+    global source_weights, source_positions, source_influences
+    
+    selected_vertices = cmds.ls(selection=True, flatten=True)
+    
+    if prepare_source_data(selected_vertices):
+        cmds.inViewMessage(
+            amg="Saved weights from <span style=\"color:#00FF00;\">{}</span> vertices with <span style=\"color:#00FF00;\">{}</span> influences".format(
+                len(selected_vertices), len(source_influences)
+            ), 
+            pos='midCenter', 
+            fade=True
+        )
+    else:
+        cmds.inViewMessage(amg="<span style=\"color:#FF0000;\">Failed to save weights!</span>", pos='midCenter', fade=True)
+
+def apply_weights(*_):
+    """应用权重 - 优化版本"""
+    global source_weights, source_positions, source_influences
+    
+    if source_positions.size == 0:
+        cmds.inViewMessage(amg="<span style=\"color:#FF0000;\">No source weights saved!</span>", pos='midCenter', fade=True)
+        return
+    
+    selected_vertices = cmds.ls(selection=True, flatten=True)
+    if not selected_vertices:
+        cmds.inViewMessage(amg="<span style=\"color:#FF0000;\">No target vertices selected!</span>", pos='midCenter', fade=True)
+        return
+    
+    # 准备目标顶点位置
+    target_positions = []
+    valid_vertices = []
+    
+    for vertex in selected_vertices:
+        try:
+            pos = cmds.xform(vertex, query=True, translation=True, worldSpace=True)
+            target_positions.append(pos)
+            valid_vertices.append(vertex)
+        except Exception as e:
+            print(f"Warning: Failed to process target vertex {vertex}: {e}")
+    
+    if not target_positions:
+        cmds.inViewMessage(amg="<span style=\"color:#FF0000;\">No valid target vertices!</span>", pos='midCenter', fade=True)
+        return
+    
+    target_positions = np.array(target_positions)
+    
+    # 准备源权重数组
+    influence_index_map = {infl: idx for idx, infl in enumerate(source_influences)}
+    num_influences = len(source_influences)
+    
+    source_weights_array = np.zeros((len(source_positions), num_influences))
+    for i, pos in enumerate(source_weights.keys()):
+        weights_dict = source_weights[pos]
+        for infl, weight in weights_dict.items():
+            source_weights_array[i, influence_index_map[infl]] = weight
+    
+    # 批量预测权重
+    cmds.progressWindow(title="Applying Weights", progress=0, status="Predicting weights...", isInterruptable=True)
+    
+    try:
+        # 分批处理以避免内存问题
+        batch_size = 1000
+        total_vertices = len(valid_vertices)
+        
+        for i in range(0, total_vertices, batch_size):
+            if cmds.progressWindow(query=True, isCancelled=True):
+                break
+                
+            batch_vertices = valid_vertices[i:i+batch_size]
+            batch_positions = target_positions[i:i+batch_size]
+            
+            # 预测权重
+            predicted_weights = predict_weight_batch(
+                batch_positions, 
+                source_positions, 
+                source_weights_array, 
+                settings["sigma"], 
+                settings["max_influences"]
+            )
+            
+            # 应用权重
+            for j, vertex in enumerate(batch_vertices):
+                vertex_weights = predicted_weights[j]
+                weight_dict = {
+                    source_influences[k]: vertex_weights[k] 
+                    for k in range(num_influences) 
+                    if vertex_weights[k] > settings["min_weight_threshold"]
+                }
+                
+                if weight_dict:
+                    skin_cluster = get_skin_cluster(vertex)
+                    if skin_cluster:
+                        try:
+                            cmds.skinPercent(
+                                skin_cluster, 
+                                vertex, 
+                                transformValue=list(weight_dict.items())
+                            )
+                        except Exception as e:
+                            print(f"Warning: Failed to set weights for {vertex}: {e}")
+            
+            progress = min((i + batch_size) / total_vertices * 100, 100)
+            cmds.progressWindow(edit=True, progress=progress, status=f"Processed {min(i+batch_size, total_vertices)}/{total_vertices} vertices")
+    
+    finally:
+        cmds.progressWindow(endProgress=True)
+    
+    # 平滑权重
+    if settings["smooth_iterations"] > 0 and valid_vertices:
+        skin_cluster = get_skin_cluster(valid_vertices[0])
+        if skin_cluster:
+            for _ in range(settings["smooth_iterations"]):
+                cmds.skinCluster(
+                    skin_cluster, 
+                    edit=True, 
+                    smoothWeights=0.5, 
+                    smoothWeightsMaxIterations=1
+                )
+    
+    cmds.inViewMessage(
+        amg="Applied weights to <span style=\"color:#00FF00;\">{}</span> vertices".format(len(valid_vertices)), 
+        pos='midCenter', 
+        fade=True
+    )
+
+def save_settings(*_):
+    file_path = cmds.fileDialog2(fileMode=0, caption="Save Settings", fileFilter="JSON Files (*.json)")
+    if file_path:
+        with open(file_path[0], 'w') as f:
+            json.dump(settings, f, indent=4)
+        cmds.inViewMessage(amg="Settings saved to <span style=\"color:#00FF00;\">{}</span>".format(file_path[0]), pos='midCenter', fade=True)
+
+def load_settings(*_):
+    file_path = cmds.fileDialog2(fileMode=1, caption="Load Settings", fileFilter="JSON Files (*.json)")
+    if file_path:
+        with open(file_path[0], 'r') as f:
+            loaded_settings = json.load(f)
+        settings.update(loaded_settings)
+        update_ui_from_settings()
+        cmds.inViewMessage(amg="Settings loaded from <span style=\"color:#00FF00;\">{}</span>".format(file_path[0]), pos='midCenter', fade=True)
+
+def update_ui_from_settings():
+    """更新UI设置"""
+    cmds.floatSliderGrp("sigmaSlider", edit=True, value=settings["sigma"])
+    cmds.intSliderGrp("maxInfluencesSlider", edit=True, value=settings["max_influences"])
+    cmds.intSliderGrp("smoothIterationsSlider", edit=True, value=settings["smooth_iterations"])
+    cmds.floatSliderGrp("distanceThresholdSlider", edit=True, value=settings["distance_threshold"])
+    cmds.floatSliderGrp("minWeightThresholdSlider", edit=True, value=settings["min_weight_threshold"])
+
+def update_settings_from_ui(*_):
+    """从UI更新设置"""
+    settings["sigma"] = cmds.floatSliderGrp("sigmaSlider", query=True, value=True)
+    settings["max_influences"] = cmds.intSliderGrp("maxInfluencesSlider", query=True, value=True)
+    settings["smooth_iterations"] = cmds.intSliderGrp("smoothIterationsSlider", query=True, value=True)
+    settings["distance_threshold"] = cmds.floatSliderGrp("distanceThresholdSlider", query=True, value=True)
+    settings["min_weight_threshold"] = cmds.floatSliderGrp("minWeightThresholdSlider", query=True, value=True)
+
+def warp_ui():
+    """创建UI"""
+    if cmds.window("warpUI", exists=True):
+        cmds.deleteUI("warpUI", window=True)
+    
+    window = cmds.window("warpUI", title="Weight Warp Tool by pitaya37 - Optimized", widthHeight=(350, 500))
+    
+    main_layout = cmds.scrollLayout(verticalScrollBarThickness=16)
+    form_layout = cmds.formLayout(parent=main_layout)
+    
+    # Main Operations
+    main_frame = cmds.frameLayout(
+        label="Main Operations", 
+        collapsable=True, 
+        marginHeight=5, 
+        marginWidth=5, 
+        parent=form_layout
+    )
+    main_col = cmds.columnLayout(adjustableColumn=True, parent=main_frame)
+    cmds.button(label="Save Weights", command=save_weights, backgroundColor=[0.3, 0.5, 0.3], parent=main_col)
+    cmds.button(label="Apply Weights", command=apply_weights, backgroundColor=[0.5, 0.3, 0.3], parent=main_col)
+    cmds.setParent('..')
+    cmds.setParent('..')
+    
+    # Settings
+    settings_frame = cmds.frameLayout(
+        label="Settings", 
+        collapsable=True, 
+        marginHeight=5, 
+        marginWidth=5, 
+        parent=form_layout
+    )
+    settings_col = cmds.columnLayout(adjustableColumn=True, parent=settings_frame)
+    cmds.floatSliderGrp("sigmaSlider", label="Sigma", field=True, minValue=0.1, maxValue=10.0, value=settings["sigma"], changeCommand=update_settings_from_ui, parent=settings_col)
+    cmds.intSliderGrp("maxInfluencesSlider", label="Max Influences", field=True, minValue=1, maxValue=12, value=settings["max_influences"], changeCommand=update_settings_from_ui, parent=settings_col)
+    cmds.intSliderGrp("smoothIterationsSlider", label="Smooth Iterations", field=True, minValue=0, maxValue=10, value=settings["smooth_iterations"], changeCommand=update_settings_from_ui, parent=settings_col)
+    cmds.floatSliderGrp("distanceThresholdSlider", label="Distance Threshold", field=True, minValue=0.1, maxValue=1000.0, value=settings["distance_threshold"], changeCommand=update_settings_from_ui, parent=settings_col)
+    cmds.floatSliderGrp("minWeightThresholdSlider", label="Min Weight Threshold", field=True, minValue=0.0, maxValue=0.1, value=settings["min_weight_threshold"], changeCommand=update_settings_from_ui, parent=settings_col)
+    cmds.setParent('..')
+    cmds.setParent('..')
+    
+    # Save/Load Settings
+    io_frame = cmds.frameLayout(
+        label="Save/Load Settings", 
+        collapsable=True, 
+        marginHeight=5, 
+        marginWidth=5, 
+        parent=form_layout
+    )
+    io_col = cmds.columnLayout(adjustableColumn=True, parent=io_frame)
+    cmds.button(label="Save Settings", command=save_settings, backgroundColor=[0.3, 0.3, 0.5], parent=io_col)
+    cmds.button(label="Load Settings", command=load_settings, backgroundColor=[0.5, 0.5, 0.3], parent=io_col)
+    cmds.setParent('..')
+    cmds.setParent('..')
+    
+    # Layout positioning
+    cmds.formLayout(
+        form_layout, 
+        edit=True,
+        attachForm=[
+            (main_frame, 'top', 5),
+            (main_frame, 'left', 5),
+            (main_frame, 'right', 5),
+            (settings_frame, 'left', 5),
+            (settings_frame, 'right', 5),
+            (io_frame, 'left', 5),
+            (io_frame, 'right', 5),
+            (io_frame, 'bottom', 5)
+        ],
+        attachControl=[
+            (settings_frame, 'top', 5, main_frame),
+            (io_frame, 'top', 5, settings_frame)
+        ]
+    )
+    
+    cmds.showWindow(window)
+
+# 运行UI
+warp_ui()

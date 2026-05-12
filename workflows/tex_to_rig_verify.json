@@ -1,0 +1,35 @@
+{
+  "workflow_id": "tex_to_rig_verify",
+  "name": "贴图资产 → 绑定校验",
+  "description": "Blender 采集 tex info → Maya 采集 rig info → compare_asset 对比（跨 DCC）",
+  "steps": [
+    {
+      "step_id": "build_tex_info",
+      "skill_id": "blender_build_asset_info",
+      "parameters": {
+        "info_path": "{{input.info_dir}}/{{input.source_path | stem}}_info.json",
+        "cache_group": "{{config.stages.tex.geom_roots.0}}"
+      }
+    },
+    {
+      "step_id": "build_rig_info",
+      "skill_id": "maya_build_asset_info",
+      "source_path": "{{input.rig_path}}",
+      "parameters": {
+        "info_path": "{{input.info_dir}}/{{input.rig_path | stem}}_info.json",
+        "cache_group": "{{config.stages.rig.geom_roots.0}}"
+      }
+    },
+    {
+      "step_id": "compare",
+      "skill_id": "pipeline_compare_asset",
+      "parameters": {
+        "input_source": "{{outputs.build_tex_info.output_path}}",
+        "input_target": "{{outputs.build_rig_info.output_path}}",
+        "output_path": "{{input.info_dir}}/{{input.source_path | stem}}_vs_{{input.rig_path | stem}}_compare_result.json",
+        "label_source": "tex",
+        "label_target": "rig"
+      }
+    }
+  ]
+}
