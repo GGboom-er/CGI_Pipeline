@@ -173,6 +173,6 @@ save_scene
 
 ## 7. 后续风险点
 
-- `maya_sync_rig_incremental` 仍需要专项治理：拆执行流、异常语义、失败回执、单测覆盖。
+- `maya_sync_rig_incremental` 已完成第一轮专项治理：输入/compare_result 契约层、失败阶段、回执语义和普通 Python 单测已补齐；后续可继续细拆权重/BS 投射大函数。
 - 文档归档文件和历史方案需要单独治理，避免旧方案被误当权威。
 - 还需要更多资产巡航覆盖，例如结构不同、隐藏 mesh 较多、缺 Orig 的绑定文件。

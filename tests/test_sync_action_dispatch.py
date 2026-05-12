@@ -8,7 +8,7 @@ maya_sync_rig_incremental 依赖 maya.cmds 无法在 mayapy 外直接跑，但�
   1. compare 产出的 4 个 group action，sync 决策树都有明确分支
   2. 老标签（MODIFIED/MERGE/SPLIT/NEW/DELETE 作为 sync 决策分支）已不存在
   3. 死标签（AUTO_SAFE/SPATIAL_VOTING/REVIEW/REORDER/PARTIAL_MATCH）仍被清理
-  4. sync 消费 pairing_groups 的核心字段（action/abc_dags/rig_dags/layer_name）
+  4. sync 通过 sync_contract 消费 pairing_groups 的核心字段（action/abc_dags/rig_dags/layer_name）
   5. 关键 helper 存在：_relocate_rig_mesh / _check_sync_already_done / _scan_hardcoded_refs
 """
 import sys, os, re
@@ -40,14 +40,16 @@ def test_sync_consumes_pairing_groups():
     """sync 应消费 pairing_groups 字段（从 compare report 读取），而不是旧 instructions。"""
     print("\n=== Test 1: sync 消费 pairing_groups ===")
     source = _read_sync_source()
-    _ok('pairing_groups = report.get("pairing_groups"' in source,
-        'sync 从 report 读取 pairing_groups')
-    _ok('target_only_dags = report.get("target_only_dags"' in source,
-        'sync 从 report 读取 target_only_dags')
-    _ok('compare_result_path = params.get("compare_result"' in source,
-        'sync 声明 compare_result 输入')
-    _ok('缺少必填参数: compare_result' in source,
-        'sync 要求前置 compare_result')
+    _ok('from skills.maya_sync_rig_incremental.sync_contract import' in source,
+        'sync 使用纯契约层')
+    _ok('pairing_groups = report["pairing_groups"]' in source,
+        'sync 从契约校验后的 report 读取 pairing_groups')
+    _ok('target_only_dags = report["target_only_dags"]' in source,
+        'sync 从契约校验后的 report 读取 target_only_dags')
+    _ok('parse_sync_inputs(payload)' in source,
+        'sync 通过契约层解析输入')
+    _ok('validate_sync_inputs(sync_inputs)' in source,
+        'sync 要求前置 compare_result/source 数据/source_path')
     _ok('instructions = report.get("instructions"' not in source,
         'sync 不再读 instructions 旧字段')
 
@@ -164,6 +166,17 @@ def test_sync_layer_organization():
     _ok('group_records' in source, 'sync 维护 group_records 结构')
 
 
+def test_sync_failure_boundaries():
+    """入口/契约/执行阶段应有可定位的失败边界。"""
+    print("\n=== Test 9: 失败边界 ===")
+    source = _read_sync_source()
+    for phase in ("input_contract", "input_files", "compare_result_contract",
+                  "source_load", "target_collect", "compare_target_match", "execute"):
+        _ok(phase in source, f'sync 有 {phase} 失败阶段')
+    _ok('未识别 action=' not in source, 'sync 不再把非法 action 静默降级')
+    _ok('format_action_summary(action_counts)' in source, 'sync 成功摘要来自统一统计函数')
+
+
 if __name__ == "__main__":
     test_sync_consumes_pairing_groups()
     test_sync_handles_all_group_actions()
@@ -173,4 +186,5 @@ if __name__ == "__main__":
     test_unpaired_group_contract()
     test_sync_layer_helper_exists()
     test_sync_layer_organization()
+    test_sync_failure_boundaries()
     print("\nALL SYNC DISPATCH TESTS PASSED!")

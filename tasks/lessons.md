@@ -21,6 +21,7 @@
 ## Worker 与服务管理
 
 - [Maya commandPort 阻塞与静默崩溃] → [在 echoOutput=False 模式下强行通过 socket 发送超长字符串脚本，极易导致端口句柄卡死且无法捕获异常] → [放弃原生 socket 强压，改为使用 commandPort 仅发送单行 Base64 引导脚本，从而拉起独立的 RPyC (Remote Python Call) 服务端接管后续通信] → [必须利用 RPyC 代理机制结合 executeInMainThreadWithResult，彻底解决跨进程大对象回传与多线程安全问题]
+- [多Maya误连] → [foreground省略端口会落到默认或首个端口] → [强制显式foreground_port] → [多端口场景禁隐式选择]
 - [新技能 CHAIN_ABORTED "混合多个DCC类型"] → [长驻 Worker 进程的 skill_registry 快照过期，新技能 get_skill_dcc 返回默认值 'maya'] → [在 tasks.py 三处关键位置注入 _reload_skill_registry()：链DCC校验前、单技能执行前、工作流分段前] → [任何依赖注册表的判断逻辑前，必须先热重载，因为 Worker 可能运行数天]
 - [shutdown_all() 无法杀旧Worker] → [只遍历 _managed_procs（空列表，因为 Worker 由其他进程启动）] → [增加 PID 文件扫描逻辑，根据 pidfile 内容 os.kill] → [进程管理不能只依赖内存中的句柄，必须有持久化的 PID 文件作为兜底]
 - [DCC启动延迟] → [冷启动耗时5-8s] → [实现WarmWorkerProxy常驻池] → [高频任务用常驻池，50次自动重启]
@@ -42,6 +43,7 @@
 - [拼装漂移] → [sync重算对比] → [前置compare_result] → [拼装不独立对比]
 - [Maya采集复用] → [core禁DCC] → [放dccs/maya] → [DCC API不进core]
 - [新建mesh空几何] → [无历史不产Orig] → [sync补标准Orig] → [采集器不兜底]
+- [sync难单测] → [Maya执行和契约混写] → [纯Python契约层] → [DCC大函数外置可测边界]
 
 ## 技能开发
 

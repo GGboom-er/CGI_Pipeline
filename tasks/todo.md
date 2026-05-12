@@ -62,7 +62,9 @@
 - [x] 2026-05-11 对比-同步契约：`pipeline_compare_asset` 输出 `compare_result`，`maya_sync_rig_incremental` 消费前置结果，workflow 保留 pre/post 两次对比
 - [x] 2026-05-11 mihouwang 巡航测试 PASS：pre compare_result 驱动 sync，post 阻断差异 0，输出沙盒升版本 ma
 - [x] 2026-05-11 巡航输出整理：根目录只留源备份、最终产物和唯一报告，ABC/JSON/audit 统一归档 `.info`
-- [ ] 专项治理 `maya_sync_rig_incremental`：拆执行流、异常语义、失败回执、单测覆盖，禁止机械替换
+- [x] 专项治理 `maya_sync_rig_incremental` 第一轮：拆出纯契约层、收紧 compare_result/action 校验、统一失败阶段与回执、补单测覆盖
+- [x] 2026-05-12 sync 专项巡航复测：mihouwang 全链路 PASS，post 阻断差异 0，输出沙盒升版本 ma
 - [x] 2026-05-12 对比/拼装拆分重构：公共 Maya rig 采集、场景内对比 skill、sync 消费 compare_result、主 workflow 线路优化
 - [x] 2026-05-12 对比/拼装真实 DCC 验证：Maya/Blender 巡航 PASS，post 阻断差异 0，沙盒升版本保存
 - [x] 对齐 `pipeline_manifest.json` 中 Ai_pub 表述与当前任务沙盒事实
+- [x] 2026-05-12 MCP 前台多端口安全门：foreground 调用必须显式传 `foreground_port`，省略端口时返回可用端口列表并阻止误连。

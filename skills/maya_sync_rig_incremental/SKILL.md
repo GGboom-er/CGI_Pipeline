@@ -49,6 +49,7 @@ category: "sync"
 - **source_abc vs source_info**: `source_abc` 推荐保留；`PAIRED/UNPAIRED` 分支需要 ABC 的完整拓扑与 UV 来重建 mesh。新版 `compare_result` 不嵌入 `source_info`，所以必须同时提供 `source_abc` 或 `source_info`。
 - **target 采集统一**: rig 侧运行时信息使用 `dccs.maya.asset_info_collector.collect_scene_info(..., include_topology=True)`，与 `maya_build_asset_info` / `maya_compare_asset_in_scene` 同源。
 - **action 决策树**: sync 消费 `compare_result.compare.pairing_groups` 的 4 个 group action（`IDENTICAL` / `ORIG_INJECT` / `PAIRED` / `UNPAIRED`），算法层 7 标签只用于报告细分。
+- **契约先行**: 输入解析、文件存在性、`compare_result.v1` 字段和 action 合法性先由纯 Python 契约层校验；失败时不进入 Maya 改写阶段。
 - **向后兼容**: 老键名 `abc_path / tex_json` 仍被接受；新调用一律用 `compare_result / source_abc / source_info`。
 
 ### 🟢 核心逻辑 (CORE LOGIC)
@@ -60,13 +61,14 @@ category: "sync"
   - `PAIRED` → 多对多配对组进入 voting pool，带候选 rig 源用于定向投射权重
   - `UNPAIRED` → source 独有组进入 `_source_only`，后续用 Chamfer 自动配对或按新 mesh 处理
   - `target_only_dags` → target 独有节点进入 `_target_only`，原位保留供审核
-  - 未识别 action → 兜底进 voting pool，不崩
+  - 未识别 action → 判定为 compare_result 契约错误，阻断执行
 - **Phase 3.5**: voting pool 里**无** `_paired_rig_dag` 的 mesh 用 Chamfer 距离自动找最近源，定向投射权重。
 - **Phase 4**: SuperMesh KDTree 包裹剩余 mesh，从 ABC 纯数据重建几何、传递 UV 和权重。
 - **Phase 5**: 建 Display Layer 便于审核。
 
 ### 🔵 核心代码与扩展 (IMPLEMENTATION & EXTENSION)
 - **底层驱动**: `om.MFnMesh.setPoints()` / `om.MFnMesh.create()`、`scipy.spatial.cKDTree`、`scipy.optimize.linear_sum_assignment`
+- **契约层**: `skills.maya_sync_rig_incremental.sync_contract`，不依赖 Maya，可用普通 Python 单测覆盖。
 - **BlendShape 迁移**: target 原 mesh 若有 BS 靶标，更新主几何的 delta 会同步复刻到每个 BS 靶区，保表情不坏。
 - **Signed Volume 绕序修正**: ABC 纯数据建 mesh 时自动检测法线朝向，反向面自动翻转。
 - **扩展**: `update_joints` 控制流预留给需要重拟合骨骼空间的角色 rig，目前默认关闭。
@@ -87,3 +89,8 @@ receipt.summary / receipt.items / receipt.report_content:
 - `summary.action`: 记录 `IDENTICAL / ORIG_INJECT / PAIRED / UNPAIRED / target_only` 数量。
 - `items[]`: 记录主要执行动作、降级原因与异常引用提示，自动截断到统一上限。
 - `report_content`: 前置 compare_result 的同步摘要，由统一任务 MD 收纳；不额外落散报告。
+
+失败语义:
+- `input_contract` / `input_files` / `compare_result_contract` / `source_load`: 进入 Maya 改写前失败，返回 `ERROR`，不修改场景。
+- `target_collect` / `compare_target_match`: 已进入 undo chunk，但发现 target rig 不满足执行前提，返回 `AUDIT_FAILED` 并撤销本步。
+- `execute`: 执行期异常返回 `ERROR`，关闭 undo chunk 后 `cmds.undo()` 撤销本步，并在 `recovery_hint` 指向最后的 Phase 日志。

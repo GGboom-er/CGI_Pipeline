@@ -15,6 +15,7 @@ import json
 import time
 import gc
 import sys
+import logging
 
 import maya.cmds as cmds
 from maya.api import OpenMaya as om2
@@ -22,6 +23,18 @@ from maya.api import OpenMayaAnim as oma2
 
 from core.bootstrap import PROJECT_ROOT as _PROJECT_ROOT
 from core.receipt import make_receipt, make_item
+from skills.maya_sync_rig_incremental.sync_contract import (
+    SKILL_ID,
+    SyncContractError,
+    format_action_summary,
+    load_compare_result_file,
+    parse_sync_inputs,
+    summarize_sync_actions,
+    validate_input_files,
+    validate_sync_inputs,
+)
+
+logger = logging.getLogger(__name__)
 
 def _plog(msg):
     """行缓冲进度日志（定位卡点用）。"""
@@ -41,20 +54,25 @@ MAX_K_SEARCH = 50           # 法线失败时向下检索备选面的数量
 # ═══════════════════════════════════════════
 
 def _load_compare_result(compare_result_path):
-    with open(compare_result_path, "r", encoding="utf-8") as fp:
-        data = json.load(fp)
-    if data.get("schema_version") != "compare_result.v1":
-        raise ValueError(f"不支持的 compare_result schema: {data.get('schema_version')}")
-    report = data.get("compare")
-    source_info = data.get("source_info") or {"meshes": {}, "textures": {}, "source_file": ""}
-    if not isinstance(report, dict):
-        raise ValueError("compare_result 缺少 compare 字典")
-    if not isinstance(source_info, dict):
-        raise ValueError("compare_result.source_info 类型错误")
-    for field in ("pairing_groups", "target_only_dags"):
-        if field not in report:
-            raise ValueError(f"compare_result.compare 缺少字段: {field}")
-    return data, report, source_info
+    return load_compare_result_file(compare_result_path)
+
+
+def _sync_receipt(status, start_time, phase, error="", items=None,
+                  summary_action="", recovery_hint="", report_content="",
+                  summary_count=0, summary_label="资产同步", outputs=None):
+    if error and phase:
+        error = f"[{phase}] {error}"
+    return make_receipt(
+        SKILL_ID, status, start_time,
+        summary_action=summary_action or (f"{phase} 失败" if status != "SUCCESS" else phase),
+        summary_count=summary_count,
+        summary_label=summary_label,
+        items=items or [],
+        outputs=outputs or {},
+        error=error,
+        recovery_hint=recovery_hint,
+        report_content=report_content,
+    )
 
 
 def _merge_full_source_info(light_info, full_info):
@@ -1193,31 +1211,34 @@ def _derive_report_dir(rig_path: str, tex_src: str) -> str:
 
 def execute(payload: dict) -> dict:
     import numpy as np
-    import trimesh
 
     _plog("sync execute() entered")
     t0 = time.time()
-    params = payload.get("parameters", {})
-    # 节点化命名（推荐）；老键名保持向后兼容
-    abc_path = (params.get("source_abc") or params.get("abc_path", "")).strip()
-    tex_json = (params.get("source_info") or params.get("tex_json", "")).strip()
-    compare_result_path = params.get("compare_result", "")
-    compare_result_path = (compare_result_path or "").strip()
-    cache_group = (params.get("cache_group") or "cache").strip()
-    rig_path = payload.get("source_path", "")
+    sync_inputs = parse_sync_inputs(payload)
+    input_errors = validate_sync_inputs(sync_inputs)
+    if input_errors:
+        return _sync_receipt(
+            "ERROR", t0, "input_contract",
+            error="; ".join(input_errors),
+            recovery_hint="先运行 maya_compare_asset_in_scene 生成 compare_result，并传入 target rig 的 source_path。",
+        )
 
-    if not compare_result_path:
-        return make_receipt("maya_sync_rig_incremental", "ERROR", t0,
-                            error="缺少必填参数: compare_result。请先用 maya_compare_asset_in_scene 或 pipeline_compare_asset 生成对比结果。")
-    if not abc_path and not tex_json:
-        return make_receipt("maya_sync_rig_incremental", "ERROR", t0,
-                            error="缺少必填参数: source_abc 或 source_info。拼装推荐使用 source_abc。")
-    if not rig_path:
-        return make_receipt("maya_sync_rig_incremental", "ERROR", t0,
-                            error="缺少必填参数: source_path（target 侧 rig 场景）")
+    file_errors = validate_input_files(sync_inputs)
+    if file_errors:
+        return _sync_receipt(
+            "ERROR", t0, "input_files",
+            error="; ".join(file_errors),
+            recovery_hint="确认 workflow 段间 output_path 已解析，且 source ABC / compare_result 均位于任务沙盒 .info。",
+        )
+
+    abc_path = sync_inputs.source_abc
+    tex_json = sync_inputs.source_info
+    compare_result_path = sync_inputs.compare_result_path
+    cache_group = sync_inputs.cache_group
+    rig_path = sync_inputs.rig_path
 
     # ── 加载项目 profile（所有算法阈值） ──
-    project = payload.get("project") or params.get("project") or _infer_project_from_path(rig_path)
+    project = sync_inputs.project or _infer_project_from_path(rig_path)
     try:
         from core.config_loader import get_rig_sync_profile
         profile = get_rig_sync_profile(project)
@@ -1233,11 +1254,13 @@ def execute(payload: dict) -> dict:
 
     items = []
     external_report = None
-    compare_result_data = None
+    sync_md_content = ""
+    all_new_nodes = []
+    action_counts = {}
 
     # ── 读取 source 数据 / 外部 compare_result ──
     try:
-        compare_result_data, external_report, light_tex_info = _load_compare_result(compare_result_path)
+        _, external_report, light_tex_info = _load_compare_result(compare_result_path)
         if abc_path:
             from core.abc_reader import read_abc_as_info
             full_tex_info = read_abc_as_info(abc_path)
@@ -1252,8 +1275,14 @@ def execute(payload: dict) -> dict:
             else:
                 tex_info = light_tex_info
         items.append(make_item("CompareResult", f"使用对比结果: {os.path.basename(compare_result_path)}"))
+    except SyncContractError as e:
+        return _sync_receipt(
+            "ERROR", t0, "compare_result_contract",
+            error=str(e),
+            recovery_hint="重新运行前置对比节点，确保 compare_result.v1 由当前版本 compare skill 生成。",
+        )
     except Exception as e:
-        return make_receipt("maya_sync_rig_incremental", "ERROR", t0, error=f"读取源数据失败: {e}")
+        return _sync_receipt("ERROR", t0, "source_load", error=f"读取源数据失败: {e}")
 
     # Sandbox mode: no backup required.
 
@@ -1263,9 +1292,11 @@ def execute(payload: dict) -> dict:
         already_done, done_reason = _check_sync_already_done(cache_group)
         if already_done:
             cmds.undoInfo(closeChunk=True)
-            return make_receipt(
-                "maya_sync_rig_incremental", "ERROR", t0,
-                error=f"场景似乎已被 sync 处理过，请从原始 rig 场景重新开始。原因：{done_reason}"
+            return _sync_receipt(
+                "ERROR", t0, "preflight",
+                error=f"场景似乎已被 sync 处理过，请从原始 rig 场景重新开始。原因：{done_reason}",
+                items=items,
+                recovery_hint="使用沙盒内原始 rig 副本重新执行 workflow；不要在已同步场景上重复运行 sync。",
             )
 
         # ── Phase 0: 扫描硬编码路径引用（只报告，不改写）──
@@ -1284,9 +1315,11 @@ def execute(payload: dict) -> dict:
         cache_node = resolve_cache_group(cache_group)
         if not cache_node:
             cmds.undoInfo(closeChunk=True)
-            return make_receipt(
-                "maya_sync_rig_incremental", "ERROR", t0,
-                error=f"场景中未找到 cache_group: {cache_group}"
+            return _sync_receipt(
+                "ERROR", t0, "target_preflight",
+                error=f"场景中未找到 cache_group: {cache_group}",
+                items=items,
+                recovery_hint="检查 workflow 的 cache_group 是否来自项目配置，并确认 target rig 场景层级未被改名。",
             )
 
         cache_leaf = cache_node.strip("|").split("|")[-1]
@@ -1305,23 +1338,24 @@ def execute(payload: dict) -> dict:
         if empty_rig_dags:
             cmds.undoInfo(closeChunk=True)
             cmds.undo()
-            return make_receipt(
-                "maya_sync_rig_incremental", "AUDIT_FAILED", t0,
+            return _sync_receipt(
+                "AUDIT_FAILED", t0, "target_collect",
                 error=(
                     "target rig 中存在无法采集 ShapeOrig 几何的 mesh，已撤销本步。"
                     f"问题节点: {empty_rig_dags[:20]}"
                 ),
+                items=items,
+                recovery_hint="先运行 Shape/Orig 清理 workflow 或 maya_fix_shape_names，再重新生成 compare_result 后执行 sync。",
             )
 
         # ── 获取同步指令：只消费前置 compare_result ──
-        sync_md_content = ""
-        rig_info = {"meshes": rig_meshes, "textures": {}}
         if external_report is not None:
             report = external_report
         else:
             raise RuntimeError("compare_result 读取失败，缺少外部对比结果。")
-        pairing_groups = report.get("pairing_groups", [])
-        target_only_dags = report.get("target_only_dags", [])
+        pairing_groups = report["pairing_groups"]
+        target_only_dags = report["target_only_dags"]
+        action_counts = summarize_sync_actions(report)
 
         # ── 对比摘要写入 receipt/report_content，不额外落散文件 ──
         items.append(make_item(
@@ -1441,12 +1475,14 @@ def execute(payload: dict) -> dict:
             if missing_rigs:
                 cmds.undoInfo(closeChunk=True)
                 cmds.undo()
-                return make_receipt(
-                    "maya_sync_rig_incremental", "AUDIT_FAILED", t0,
+                return _sync_receipt(
+                    "AUDIT_FAILED", t0, "compare_target_match",
                     error=(
                         "compare_result 与当前 target rig 不匹配，已撤销本步。"
                         f"缺失 rig 引用: {missing_rigs[:20]}"
                     ),
+                    items=items,
+                    recovery_hint="不要复用旧 compare_result；请在当前 target rig 场景上重新运行 maya_compare_asset_in_scene。",
                 )
 
         # ── Phase 3: 按 pairing_groups 分发（4 标签）──
@@ -1567,12 +1603,7 @@ def execute(payload: dict) -> dict:
                 ))
                 continue
 
-            # 未识别兜底
-            items.append(make_item(f"group:{gid}", f"未识别 action={action}，降级 voting pool"))
-            for abc_dag in abc_dags_g:
-                td = tex_meshes.get(abc_dag)
-                if td:
-                    voting_pool_tex[abc_dag] = td
+            raise RuntimeError(f"compare_result action 未被 sync 分发: group={gid}, action={action}")
 
         # ── target_only：rig 独有，原位保留（不删！）──
         for tod in target_only_dags:
@@ -2086,24 +2117,20 @@ def execute(payload: dict) -> dict:
     except Exception as e:
         cmds.undoInfo(closeChunk=True)
         cmds.undo()
-        return make_receipt("maya_sync_rig_incremental", "ERROR", t0, error=f"执行崩溃，已撤销: {e}")
+        return _sync_receipt(
+            "ERROR", t0, "execute",
+            error=f"执行崩溃，已撤销: {e}",
+            items=items,
+            recovery_hint="查看统一任务报告中的 sync items 和 worker 日志，优先定位最后一个 Phase 日志。",
+            report_content=sync_md_content,
+        )
 
     cmds.undoInfo(closeChunk=True)
     _plog("undo chunk closed")
 
-    # receipt 统计按 4 类组 + target_only
-    n_identical   = sum(1 for g in pairing_groups if g["action"] == "IDENTICAL")
-    n_orig_inject = sum(1 for g in pairing_groups if g["action"] == "ORIG_INJECT")
-    n_paired      = sum(1 for g in pairing_groups if g["action"] == "PAIRED")
-    n_unpaired    = sum(1 for g in pairing_groups if g["action"] == "UNPAIRED")
-    n_target_only = len(target_only_dags)
-
     return make_receipt(
-        "maya_sync_rig_incremental", "SUCCESS", t0,
-        summary_action=(
-            f"IDENTICAL: {n_identical} | ORIG_INJECT: {n_orig_inject} | "
-            f"PAIRED: {n_paired} | UNPAIRED: {n_unpaired} | target_only: {n_target_only}"
-        ),
+        SKILL_ID, "SUCCESS", t0,
+        summary_action=format_action_summary(action_counts),
         summary_count=len(all_new_nodes),
         summary_label="资产同步",
         items=items,

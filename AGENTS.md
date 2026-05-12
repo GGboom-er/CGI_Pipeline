@@ -46,6 +46,7 @@ python cli.py run-chain --steps s1,s2,s3 --source-path <file> [--param k=v ...]
 python tests/test_rig_sync_profile.py   # P0 单元测试，不依赖 DCC
 python tests/test_pipeline_compare.py
 python tests/test_compare_result_contract.py
+python tests/test_sync_contract.py
 python tests/test_sync_action_dispatch.py
 python tests/test_abc_reader.py
 ```
