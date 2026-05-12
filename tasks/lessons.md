@@ -39,6 +39,9 @@
 - [对比误报差异导致FAIL] → [绑定中合法的Live BlendShape目标体被认定为源数据中缺失的资产] → [在对比引擎中直接过滤以 _live_ 为标志的合法驱动体] → [管线工具在进行资产对齐验证时，必须能够原生地识别并豁免DCC特有的合法过程节点]
 - [预对比重复] → [sync内重算] → [compare_result驱动] → [节点间传决策数据]
 - [验证误判失败] → [把ORIG_INJECT算阻断] → [看4去向] → [post验证只拦真差异]
+- [拼装漂移] → [sync重算对比] → [前置compare_result] → [拼装不独立对比]
+- [Maya采集复用] → [core禁DCC] → [放dccs/maya] → [DCC API不进core]
+- [新建mesh空几何] → [无历史不产Orig] → [sync补标准Orig] → [采集器不兜底]
 
 ## 技能开发
 

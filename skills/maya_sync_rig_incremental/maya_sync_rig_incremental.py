@@ -50,7 +50,7 @@ def _load_compare_result(compare_result_path):
     if not isinstance(report, dict):
         raise ValueError("compare_result 缺少 compare 字典")
     if not isinstance(source_info, dict):
-        raise ValueError("compare_result 缺少 source_info 字典")
+        raise ValueError("compare_result.source_info 类型错误")
     for field in ("pairing_groups", "target_only_dags"):
         if field not in report:
             raise ValueError(f"compare_result.compare 缺少字段: {field}")
@@ -485,6 +485,80 @@ def _find_orig_shape(rig_dag):
             return s
     return None
 
+
+def _ensure_collectable_shape_orig(transform):
+    """确保新建 mesh 有标准且可被 asset_info_collector 采集的 ShapeOrig。"""
+    from dccs.maya.asset_info_collector import get_shape_orig
+
+    if not transform or not cmds.objExists(transform):
+        return False, "transform 不存在"
+    transform = (cmds.ls(transform, long=True, type="transform") or [transform])[0]
+    transform_name = transform.split("|")[-1]
+    expected_shape = transform_name + "Shape"
+    expected_orig = transform_name + "ShapeOrig"
+
+    shapes = cmds.listRelatives(transform, shapes=True, type="mesh", fullPath=True) or []
+    visible_shapes = [s for s in shapes if not cmds.getAttr(s + ".intermediateObject")]
+    if len(visible_shapes) != 1:
+        return False, f"可见 Shape 数量不是 1: {len(visible_shapes)}"
+
+    visible = visible_shapes[0]
+    if visible.split("|")[-1] != expected_shape:
+        try:
+            visible = cmds.rename(visible, expected_shape)
+            visible = (cmds.ls(visible, long=True) or [visible])[0]
+        except Exception as e:
+            return False, f"重命名 Shape 失败: {e}"
+
+    if get_shape_orig(visible, transform):
+        return True, "exists"
+
+    incoming = cmds.listConnections(
+        visible + ".inMesh",
+        source=True,
+        destination=False,
+        plugs=True,
+    ) or []
+    if incoming:
+        return False, f"可见 Shape 已有 inMesh 输入但缺少标准 Orig: {incoming[:3]}"
+
+    shapes = cmds.listRelatives(transform, shapes=True, type="mesh", fullPath=True) or []
+    orig_candidates = [
+        s for s in shapes
+        if s.split("|")[-1] == expected_orig and cmds.getAttr(s + ".intermediateObject")
+    ]
+    if len(orig_candidates) > 1:
+        return False, f"标准 Orig 候选超过 1 个: {len(orig_candidates)}"
+    orig_shape = orig_candidates[0] if orig_candidates else None
+
+    if not orig_shape:
+        try:
+            orig_shape = cmds.createNode("mesh", name=expected_orig, parent=transform)
+            orig_shape = (cmds.ls(orig_shape, long=True) or [orig_shape])[0]
+        except Exception as e:
+            return False, f"创建 ShapeOrig 失败: {e}"
+
+    try:
+        existing_out = cmds.listConnections(
+            orig_shape + ".outMesh",
+            source=False,
+            destination=True,
+            plugs=True,
+        ) or []
+        if existing_out:
+            return False, f"ShapeOrig 已有输出连接但未通过采集规则: {existing_out[:3]}"
+
+        cmds.connectAttr(visible + ".outMesh", orig_shape + ".inMesh", force=True)
+        cmds.getAttr(orig_shape + ".boundingBoxMin")
+        cmds.disconnectAttr(visible + ".outMesh", orig_shape + ".inMesh")
+        cmds.setAttr(orig_shape + ".intermediateObject", 1)
+        cmds.connectAttr(orig_shape + ".outMesh", visible + ".inMesh", force=True)
+        cmds.getAttr(visible + ".boundingBoxMin")
+    except Exception as e:
+        return False, f"初始化 ShapeOrig 失败: {e}"
+
+    return (True, "created") if get_shape_orig(visible, transform) else (False, "创建后仍不可采集")
+
 def _find_skin_cluster(dag_shape_or_transform):
     node_type = cmds.nodeType(dag_shape_or_transform)
     if node_type == "mesh":
@@ -513,39 +587,16 @@ def _find_skin_cluster(dag_shape_or_transform):
             pass
     return None, None
 
-def _collect_rig_meshes():
-    rig_cache = None
-    for node in cmds.ls(f"{RIG_PREFIX}cache", long=True, type="transform") or []:
-        rig_cache = node
-        break
-    if not rig_cache:
-        return {}
+def _collect_rig_meshes(cache_group=None):
+    """采集已加 RIG_ 前缀的 rig mesh 信息，规则与 maya_build_asset_info 共用。"""
+    from dccs.maya.asset_info_collector import collect_scene_info
 
-    meshes = {}
-    all_meshes = cmds.listRelatives(rig_cache, allDescendents=True, type="mesh", fullPath=True) or []
-    for shape in all_meshes:
-        if cmds.getAttr(shape + ".intermediateObject"):
-            continue
-        orig_node = _find_orig_shape(shape)
-        target_node = orig_node if orig_node else shape
-        
-        sel = om2.MSelectionList()
-        sel.add(target_node)
-        dag = sel.getDagPath(0)
-        fn = om2.MFnMesh(dag)
-        import numpy as _np
-        pts = fn.getPoints(om2.MSpace.kWorld)
-        raw = _np.array([[p.x, p.y, p.z] for p in pts], dtype=_np.float64)
-        _np.around(raw, 6, out=raw)
-        positions = raw.ravel().tolist()
-        fc, fi = fn.getVertices()
-        meshes[shape] = {
-            "vertices": len(pts),
-            "vert_positions": positions,
-            "face_counts": list(fc),
-            "face_indices": list(fi),
-        }
-    return meshes
+    rig_cache_group = cache_group or f"{RIG_PREFIX}cache"
+    return collect_scene_info(
+        rig_cache_group,
+        include_topology=True,
+        precision=4,
+    ).get("meshes", {})
 
 def _get_target_name_and_parent(dag_tex):
     clean = dag_tex.replace("ABC|", "").lstrip("|")
@@ -638,7 +689,7 @@ def _assign_to_layer(layer_name, nodes, reference_nodes=None, group_id=None,
                 pass
 
 
-def _check_sync_already_done():
+def _check_sync_already_done(cache_group="cache"):
     """检测 rig 场景是否已被 sync 处理过。
 
     判据（二选一命中即算已处理）：
@@ -647,7 +698,19 @@ def _check_sync_already_done():
 
     返回 (is_done: bool, reason: str)。
     """
-    for cache_tr in cmds.ls("cache", long=True, type="transform") or []:
+    try:
+        from dccs.maya.asset_info_collector import resolve_cache_group
+        resolved = resolve_cache_group(cache_group)
+        candidates = [resolved] if resolved else []
+    except Exception:
+        candidates = []
+    candidates.extend(cmds.ls("cache", long=True, type="transform") or [])
+
+    seen = set()
+    for cache_tr in candidates:
+        if not cache_tr or cache_tr in seen:
+            continue
+        seen.add(cache_tr)
         if cmds.attributeQuery("_sync_done", node=cache_tr, exists=True):
             try:
                 if cmds.getAttr(f"{cache_tr}._sync_done"):
@@ -1136,14 +1199,19 @@ def execute(payload: dict) -> dict:
     t0 = time.time()
     params = payload.get("parameters", {})
     # 节点化命名（推荐）；老键名保持向后兼容
-    abc_path = params.get("source_abc") or params.get("abc_path", "")
-    tex_json = params.get("source_info") or params.get("tex_json", "")
+    abc_path = (params.get("source_abc") or params.get("abc_path", "")).strip()
+    tex_json = (params.get("source_info") or params.get("tex_json", "")).strip()
     compare_result_path = params.get("compare_result", "")
+    compare_result_path = (compare_result_path or "").strip()
+    cache_group = (params.get("cache_group") or "cache").strip()
     rig_path = payload.get("source_path", "")
 
-    if not compare_result_path and not abc_path and not tex_json:
+    if not compare_result_path:
         return make_receipt("maya_sync_rig_incremental", "ERROR", t0,
-                            error="缺少必填参数: compare_result、source_abc 或 source_info")
+                            error="缺少必填参数: compare_result。请先用 maya_compare_asset_in_scene 或 pipeline_compare_asset 生成对比结果。")
+    if not abc_path and not tex_json:
+        return make_receipt("maya_sync_rig_incremental", "ERROR", t0,
+                            error="缺少必填参数: source_abc 或 source_info。拼装推荐使用 source_abc。")
     if not rig_path:
         return make_receipt("maya_sync_rig_incremental", "ERROR", t0,
                             error="缺少必填参数: source_path（target 侧 rig 场景）")
@@ -1169,26 +1237,21 @@ def execute(payload: dict) -> dict:
 
     # ── 读取 source 数据 / 外部 compare_result ──
     try:
-        if compare_result_path:
-            compare_result_data, external_report, light_tex_info = _load_compare_result(compare_result_path)
-            if abc_path:
-                from core.abc_reader import read_abc_as_info
-                full_tex_info = read_abc_as_info(abc_path)
-                if light_tex_info.get("meshes"):
-                    tex_info = _merge_full_source_info(light_tex_info, full_tex_info)
-                else:
-                    tex_info = full_tex_info
-            else:
-                if not light_tex_info.get("meshes"):
-                    raise ValueError("compare_result 不包含 source_info；请同时提供 source_abc 或 source_info")
-                tex_info = light_tex_info
-            items.append(make_item("CompareResult", f"使用外部对比结果: {os.path.basename(compare_result_path)}"))
-        elif abc_path:
+        compare_result_data, external_report, light_tex_info = _load_compare_result(compare_result_path)
+        if abc_path:
             from core.abc_reader import read_abc_as_info
-            tex_info = read_abc_as_info(abc_path)
+            full_tex_info = read_abc_as_info(abc_path)
+            if light_tex_info.get("meshes"):
+                tex_info = _merge_full_source_info(light_tex_info, full_tex_info)
+            else:
+                tex_info = full_tex_info
         else:
-            with open(tex_json, "r", encoding="utf-8") as f:
-                tex_info = json.load(f)
+            if not light_tex_info.get("meshes"):
+                with open(tex_json, "r", encoding="utf-8") as f:
+                    tex_info = json.load(f)
+            else:
+                tex_info = light_tex_info
+        items.append(make_item("CompareResult", f"使用对比结果: {os.path.basename(compare_result_path)}"))
     except Exception as e:
         return make_receipt("maya_sync_rig_incremental", "ERROR", t0, error=f"读取源数据失败: {e}")
 
@@ -1197,11 +1260,11 @@ def execute(payload: dict) -> dict:
     cmds.undoInfo(openChunk=True, chunkName="sync_rig_incremental_v9")
     try:
         # ── 幂等保护：已跑过直接拒绝 ──
-        already_done, done_reason = _check_sync_already_done()
+        already_done, done_reason = _check_sync_already_done(cache_group)
         if already_done:
             cmds.undoInfo(closeChunk=True)
             return make_receipt(
-                "sync_rig_incremental", "ERROR", t0,
+                "maya_sync_rig_incremental", "ERROR", t0,
                 error=f"场景似乎已被 sync 处理过，请从原始 rig 场景重新开始。原因：{done_reason}"
             )
 
@@ -1217,56 +1280,60 @@ def execute(payload: dict) -> dict:
                 items.append(make_item(f"ref:{node}", f"{kind}: {preview}"))
 
         # ── Phase 1: cache 组加 RIG_ 前缀 ──
-        cache_node = None
-        for node in cmds.ls("cache", long=True, type="transform") or []:
-            if "|cache" in node or node == "cache":
-                cache_node = node
-                break
-        if cache_node:
-            _plog(f"Phase1 start: _add_prefix_recursive on {cache_node}")
-            _add_prefix_recursive(cache_node, rig_prefix)
-            _plog("Phase1 done: prefix added")
+        from dccs.maya.asset_info_collector import resolve_cache_group
+        cache_node = resolve_cache_group(cache_group)
+        if not cache_node:
+            cmds.undoInfo(closeChunk=True)
+            return make_receipt(
+                "maya_sync_rig_incremental", "ERROR", t0,
+                error=f"场景中未找到 cache_group: {cache_group}"
+            )
+
+        cache_leaf = cache_node.strip("|").split("|")[-1]
+        rig_cache_group = cache_leaf if cache_leaf.startswith(rig_prefix) else rig_prefix + cache_leaf
+        _plog(f"Phase1 start: _add_prefix_recursive on {cache_node}")
+        _add_prefix_recursive(cache_node, rig_prefix)
+        _plog("Phase1 done: prefix added")
 
         _plog("Phase2: _collect_rig_meshes start")
-        rig_meshes = _collect_rig_meshes()
+        rig_meshes = _collect_rig_meshes(rig_cache_group)
         _plog(f"Phase2: rig_meshes collected, n={len(rig_meshes)}")
+        empty_rig_dags = [
+            dag for dag, entry in rig_meshes.items()
+            if int(entry.get("vertices") or 0) <= 0 or not entry.get("vert_positions")
+        ]
+        if empty_rig_dags:
+            cmds.undoInfo(closeChunk=True)
+            cmds.undo()
+            return make_receipt(
+                "maya_sync_rig_incremental", "AUDIT_FAILED", t0,
+                error=(
+                    "target rig 中存在无法采集 ShapeOrig 几何的 mesh，已撤销本步。"
+                    f"问题节点: {empty_rig_dags[:20]}"
+                ),
+            )
 
-        # ── 获取同步指令：优先消费外部 compare_result，未提供时内部即时算 ──
+        # ── 获取同步指令：只消费前置 compare_result ──
         sync_md_content = ""
-        pairing_report_data = None
         rig_info = {"meshes": rig_meshes, "textures": {}}
         if external_report is not None:
             report = external_report
         else:
-            from core.asset_info_schema import compare
-            report = compare(tex_info, rig_info, label_a='tex', label_b='rig', profile=profile)
+            raise RuntimeError("compare_result 读取失败，缺少外部对比结果。")
         pairing_groups = report.get("pairing_groups", [])
         target_only_dags = report.get("target_only_dags", [])
 
-        # ── 生成配对分类报告（JSON + MD）──
-        try:
-            from core import pairing_report as _pr
-            report_dir = _derive_report_dir(rig_path, abc_path or tex_json)
-            pairing_report_data = _pr.generate(
-                report, profile,
-                output_dir=report_dir,
-                tag="pairing",
-            )
-            oc = pairing_report_data.get("outcome_summary", {})
-            items.append(make_item(
-                "PairingReport",
-                f"identical={oc.get('identical', 0)} "
-                f"matched_different={oc.get('matched_different', 0)} "
-                f"only_source={oc.get('only_source', 0)} "
-                f"only_target={oc.get('only_target', 0)}"
-            ))
-        except Exception as _pr_err:
-            items.append(make_item("PairingReport", f"跳过置信度报告: {_pr_err}"))
+        # ── 对比摘要写入 receipt/report_content，不额外落散文件 ──
+        items.append(make_item(
+            "PairingResult",
+            f"groups={len(pairing_groups)} target_only={len(target_only_dags)}"
+        ))
 
         try:
-            from skills.pipeline_compare_asset.pipeline_compare_asset import _generate_report
-            sync_md_content = _generate_report(
-                report, tex_json, 'In-Memory', 'tex', 'rig',
+            from core.compare_result_io import generate_report
+            sync_md_content = generate_report(
+                report, abc_path or tex_json, cmds.file(q=True, sn=True) or "current_maya_scene",
+                'tex', 'rig',
                 abc_path or tex_json, cmds.file(q=True, sn=True)
             )
         except Exception as e:
@@ -1329,13 +1396,23 @@ def execute(payload: dict) -> dict:
             parts = full_path.split("|")
             rig_start = -1
             for i, p in enumerate(parts):
-                if p == RIG_PREFIX + "cache":
+                if p == rig_cache_group:
                     rig_start = i
                     break
             if rig_start >= 0:
-                rel_parts = [p[len(RIG_PREFIX):] if p.startswith(RIG_PREFIX) else p
+                rel_parts = [p[len(rig_prefix):] if p.startswith(rig_prefix) else p
                              for p in parts[rig_start:]]
                 rig_dag_lookup["|".join(rel_parts)] = full_path
+
+            all_rel_parts = [
+                p[len(rig_prefix):] if p.startswith(rig_prefix) else p
+                for p in parts
+                if p
+            ]
+            if all_rel_parts:
+                all_rel_key = "|".join(all_rel_parts)
+                rig_dag_lookup[all_rel_key] = full_path
+                rig_dag_lookup["|" + all_rel_key] = full_path
 
         reused_rig_dags = set()
         voting_pool_tex = {}
@@ -1431,7 +1508,7 @@ def execute(payload: dict) -> dict:
                         continue
 
                 new_transform = _relocate_rig_mesh(
-                    rig_full, target_name, parent_path, RIG_PREFIX, inject_points=inject_pts
+                    rig_full, target_name, parent_path, rig_prefix, inject_points=inject_pts
                 )
                 if new_transform:
                     reused_rig_dags.add(rig_full)
@@ -1918,6 +1995,28 @@ def execute(payload: dict) -> dict:
                             items.append(make_item(target_name, f"  BS: {bs_transferred} targets transferred"))
                 except Exception as e:
                     items.append(make_item(target_name, f"GLOBAL WRAP FAILED: {str(e)[:80]}"))
+
+        # 新建的 ABC mesh 必须补齐标准 ShapeOrig，确保后置 compare 仍按严格采集规则工作。
+        created_mesh_nodes = []
+        for rec in group_records.values():
+            created_mesh_nodes.extend(rec.get("abc_nodes", []))
+        created_mesh_nodes.extend(unpaired_nodes)
+        created_mesh_nodes = sorted({n for n in created_mesh_nodes if n and cmds.objExists(n)})
+        orig_init_errors = []
+        orig_created = 0
+        for node in created_mesh_nodes:
+            ok, detail = _ensure_collectable_shape_orig(node)
+            if not ok:
+                orig_init_errors.append(f"{node}: {detail}")
+            elif detail == "created":
+                orig_created += 1
+        if orig_init_errors:
+            raise RuntimeError(
+                "新建 mesh ShapeOrig 初始化失败: "
+                + "; ".join(orig_init_errors[:20])
+            )
+        if orig_created:
+            items.append(make_item("ShapeOrig 初始化", f"为 {orig_created} 个新建 mesh 补齐可采集 ShapeOrig"))
         # ── Phase 5: Layer 分配（按 pairing_groups 组织）──
         _plog(f"Phase5: assign layers, {len(group_records)} groups")
         # 一组一 layer（IDENTICAL 不建）、UNPAIRED 统一进 _source_only、target_only 统一进 _target_only
@@ -1953,7 +2052,7 @@ def execute(payload: dict) -> dict:
                              reason="rig 独有（abc 侧已无对应）")
 
         # ── 清理 RIG_ 前缀残留空组（被搬走后可能留空的中间层级）──
-        for rc in cmds.ls("RIG_cache", long=True, type="transform") or []:
+        for rc in cmds.ls(rig_cache_group, long=True, type="transform") or []:
             if cmds.objExists(rc):
                 live = [m for m in (cmds.listRelatives(rc, allDescendents=True, type="mesh", fullPath=True) or [])
                         if not cmds.getAttr(m + ".intermediateObject")]
@@ -2000,7 +2099,7 @@ def execute(payload: dict) -> dict:
     n_target_only = len(target_only_dags)
 
     return make_receipt(
-        "sync_rig_incremental", "SUCCESS", t0,
+        "maya_sync_rig_incremental", "SUCCESS", t0,
         summary_action=(
             f"IDENTICAL: {n_identical} | ORIG_INJECT: {n_orig_inject} | "
             f"PAIRED: {n_paired} | UNPAIRED: {n_unpaired} | target_only: {n_target_only}"
@@ -2008,14 +2107,6 @@ def execute(payload: dict) -> dict:
         summary_count=len(all_new_nodes),
         summary_label="资产同步",
         items=items,
-        outputs={
-            "IDENTICAL":   n_identical,
-            "ORIG_INJECT": n_orig_inject,
-            "PAIRED":      n_paired,
-            "UNPAIRED":    n_unpaired,
-            "target_only": n_target_only,
-            "group_layers_created": n_group_layers,
-            "hardcoded_refs_detected": len(hardcoded_refs),
-        },
+        outputs={},
         report_content=sync_md_content,
     )

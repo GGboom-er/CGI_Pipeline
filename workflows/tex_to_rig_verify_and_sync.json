@@ -1,7 +1,7 @@
 {
   "workflow_id": "tex_to_rig_verify_and_sync",
   "name": "贴图资产 → 绑定校验 + ABC拼装 + 材质赋予 + 升版本",
-  "description": "Blender 导出 ABC + 抽材质 → Maya 采集 rig info → 生成 compare_result → 按 compare_result 增量拼装 → 采集同步后 rig info → 后置对比验证 → 升版本。",
+  "description": "Blender 导出 ABC + 抽材质 → Maya 打开 rig 一次 → 场景内对比生成 compare_result → 按 compare_result 增量拼装 → 后置场景内对比验证 → 升版本。",
   "steps": [
     {
       "step_id": "export_abc",
@@ -20,21 +20,13 @@
       }
     },
     {
-      "step_id": "build_rig_info",
-      "skill_id": "maya_build_asset_info",
+      "step_id": "compare_pre",
+      "skill_id": "maya_compare_asset_in_scene",
       "source_path": "{{input.rig_path}}",
       "parameters": {
-        "info_path": "{{input.info_dir}}/{{input.rig_path | stem}}_pre_sync.json",
-        "cache_group": "{{config.stages.rig.geom_roots.0}}"
-      }
-    },
-    {
-      "step_id": "compare",
-      "skill_id": "pipeline_compare_asset",
-      "parameters": {
         "input_source": "{{outputs.export_abc.output_path}}",
-        "input_target": "{{outputs.build_rig_info.output_path}}",
         "output_path": "{{input.info_dir}}/{{input.rig_path | stem}}_pre_compare_result.json",
+        "cache_group": "{{config.stages.rig.geom_roots.0}}",
         "label_source": "tex",
         "label_target": "rig"
       }
@@ -45,7 +37,8 @@
       "source_path": "{{input.rig_path}}",
       "parameters": {
         "source_abc": "{{outputs.export_abc.output_path}}",
-        "compare_result": "{{outputs.compare.output_path}}"
+        "compare_result": "{{outputs.compare_pre.output_path}}",
+        "cache_group": "{{config.stages.rig.geom_roots.0}}"
       }
     },
     {
@@ -64,28 +57,20 @@
       }
     },
     {
-      "step_id": "build_rig_info_post",
-      "skill_id": "maya_build_asset_info",
+      "step_id": "verify",
+      "skill_id": "maya_compare_asset_in_scene",
       "parameters": {
-        "info_path": "{{input.info_dir}}/{{input.rig_path | stem}}_post_sync.json",
-        "cache_group": "{{config.stages.rig.geom_roots.0}}"
+        "input_source": "{{outputs.export_abc.output_path}}",
+        "output_path": "{{input.info_dir}}/{{input.rig_path | stem}}_post_compare_result.json",
+        "cache_group": "{{config.stages.rig.geom_roots.0}}",
+        "label_source": "tex",
+        "label_target": "rig_post"
       }
     },
     {
       "step_id": "save",
       "skill_id": "save_scene",
       "parameters": {}
-    },
-    {
-      "step_id": "verify",
-      "skill_id": "pipeline_compare_asset",
-      "parameters": {
-        "input_source": "{{outputs.export_abc.output_path}}",
-        "input_target": "{{outputs.build_rig_info_post.output_path}}",
-        "output_path": "{{input.info_dir}}/{{input.rig_path | stem}}_post_compare_result.json",
-        "label_source": "tex",
-        "label_target": "rig_synced"
-      }
     }
   ]
 }

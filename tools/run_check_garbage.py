@@ -1,8 +1,8 @@
-"""检查 synced 文件中的垃圾节点"""
+"""检查最新巡航输出 Maya 文件中的垃圾节点。"""
 import sys, os, time, json, logging
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 import core.service_manager as _sm
@@ -26,7 +26,15 @@ sandboxes = sorted(
     key=lambda x: x.name, reverse=True
 )
 sandbox = sandboxes[0]
-synced_file = sandbox / "ysj_chr_mihouwang_rig_rigMaster_v002_synced.ma"
+maya_outputs = sorted(
+    [p for p in sandbox.glob("*.ma") if p.is_file()],
+    key=lambda p: p.stat().st_mtime,
+    reverse=True,
+)
+if not maya_outputs:
+    logger.error(f"未在巡航沙盒中找到 Maya 输出: {sandbox}")
+    sys.exit(1)
+output_file = maya_outputs[0]
 
 VERIFY_CODE = r'''
 import maya.cmds as cmds
@@ -156,7 +164,7 @@ def submit_maya_chain(source_path, chain):
     return _submit_chain(payload)
 
 logger.info("提交垃圾检测任务...")
-res = submit_maya_chain(str(synced_file), [
+res = submit_maya_chain(str(output_file), [
     {'skill_id': 'exec_code', 'parameters': {'code': VERIFY_CODE, 'description': '垃圾节点检测'}}
 ])
 

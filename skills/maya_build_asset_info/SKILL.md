@@ -40,6 +40,7 @@ category: "inspect"
 - 定位 `cache_group` → 枚举所有直接带 mesh shape 子物体的 transform → 在每个 transform 下验证标准 shape 唯一且名为 `{transform}Shape` → 以 shape 的绝对 DAG 路径作为 JSON key → 优先用 `cmds.deformableShape(shape, originalGeometry=True)` 查找同 transform 下 `{transform}ShapeOrig` → 兜底查找同 transform 下唯一有 `outMesh` 下游连接的 `{transform}ShapeOrig` → 找到则采 Orig 顶点，找不到则写空几何 → 汇编 asset_info dict。
 
 ### 🔵 核心代码与扩展 (IMPLEMENTATION & EXTENSION)
+- **公共采集器**: `dccs.maya.asset_info_collector.collect_scene_info()`；`maya_compare_asset_in_scene` 和 `maya_sync_rig_incremental` 也复用同一套采集逻辑。
 - **底层驱动**: `om.MSelectionList`, `om.MFnMesh.getPoints(om.MSpace.kWorld)`
 - **输出路径推导**: 优先 `parameters.info_path`，其次 `parameters.info_dir` / `payload.extra_params.info_dir`，最后 `payload.run_dir/.info` 或 `task_id` 对应任务沙盒 `.info`。
 - **数据精度**: 坐标通过 `round(x, 4)` 严格约束为 4 位小数（0.0001cm 容差对齐）。

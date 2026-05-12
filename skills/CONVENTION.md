@@ -141,14 +141,13 @@ def execute(payload: dict) -> dict:
 | `output_path` | `str` | 技能产出了文件 | 主要产出文件的绝对路径，**唯一路径 key** |
 | `report_path` | `str` | 技能生成了报告 | MD 报告路径 |
 | `result` | `dict` | `exec_code` 类技能 | 代码执行结果（非文件） |
-| 其他机器契约 key | `int/str/dict` | 确有下游消费时 | 如 `total_issues`, `synced`, `matched_different` 等 |
 
 ### 规则
 
 1. **产出文件路径只用 `output_path`**，不得自创 `abc_path`、`saved_path` 等
 2. **报告路径只用 `report_path`**
 3. `report_content` 是 `make_receipt()` 的顶层参数，不放入 `outputs`
-4. 单纯统计数量优先写 `summary_count` / `summary_label`，不要放进 `outputs`
+4. `outputs` 只允许 `output_path` / `report_path` / `result`；统计、分类数量和执行摘要写 `summary` / `items` / `report_content`
 5. 无文件产出的技能可以不设 `output_path`，但必须有 `outputs={}`
 
 ### items 字段（受影响对象清单）

@@ -58,8 +58,10 @@
 - [x] 2026-05-11 异常处理小修：只读查询、UDIM 材质、UV 精简、任务报告的小型吞异常点改为显式降级或 warning
 - [x] 2026-05-11 后台 workflow 契约修复：移除人工 hold 主路径，统一 `AUDIT_FAILED` 失败态，取消 DCC IPC 硬超时
 - [x] 2026-05-11 工作流门禁：新增 `tools/verify_mcp_contract.py`，覆盖参数契约、模板 replace、硬超时、旧导入与失败段恢复顺序
-- [x] 2026-05-11 对比-同步契约：`pipeline_compare_asset` 输出 `compare_result`，`maya_sync_rig_incremental` 优先消费外部结果，workflow 保留 pre/post 两次对比
-- [x] 2026-05-11 mihouwang 巡航测试 PASS：pre compare_result 驱动 sync，post 阻断差异 0，输出沙盒 synced.ma
+- [x] 2026-05-11 对比-同步契约：`pipeline_compare_asset` 输出 `compare_result`，`maya_sync_rig_incremental` 消费前置结果，workflow 保留 pre/post 两次对比
+- [x] 2026-05-11 mihouwang 巡航测试 PASS：pre compare_result 驱动 sync，post 阻断差异 0，输出沙盒升版本 ma
 - [x] 2026-05-11 巡航输出整理：根目录只留源备份、最终产物和唯一报告，ABC/JSON/audit 统一归档 `.info`
 - [ ] 专项治理 `maya_sync_rig_incremental`：拆执行流、异常语义、失败回执、单测覆盖，禁止机械替换
+- [x] 2026-05-12 对比/拼装拆分重构：公共 Maya rig 采集、场景内对比 skill、sync 消费 compare_result、主 workflow 线路优化
+- [x] 2026-05-12 对比/拼装真实 DCC 验证：Maya/Blender 巡航 PASS，post 阻断差异 0，沙盒升版本保存
 - [x] 对齐 `pipeline_manifest.json` 中 Ai_pub 表述与当前任务沙盒事实

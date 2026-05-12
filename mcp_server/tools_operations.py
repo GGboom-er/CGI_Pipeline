@@ -38,7 +38,8 @@ def register_operation_tools(mcp):
     
     # 排除一些特殊技能，它们有专属 Tool 或不适合作为独立 Tool 暴露
     EXCLUDED_DYNAMIC_SKILLS = {
-        'ping', 'copy_files', 'pipeline_compare_asset', 'pipeline_export_abc_auto'
+        'ping', 'copy_files', 'pipeline_compare_asset', 'pipeline_export_abc_auto',
+        'maya_sync_rig_incremental',
     }
     
     for skill in get_all_skills():
@@ -319,22 +320,23 @@ def register_operation_tools(mcp):
         }
     )
     async def maya_sync_rig_incremental(params: SyncRigAssetInput) -> dict:
-        """在 target rig 场景里用 source 资产增量重建/更新 mesh。
+        """在 target rig 场景里按 compare_result 增量重建/更新 mesh。
 
         异步执行（Maya 链），返回 task_id。
         `source_path` 是 Celery 框架层键名——这里承载 **target 侧 rig 场景**。
+        `compare_result` 必须来自前置对比 skill。
         `source_abc` 或 `source_info` 至少填一个；同时提供时优先 ABC。
-        内部自动对比 source vs target 并分类，无需前置 pipeline_compare_asset。
         操作包裹在 undo chunk 中。
-        dry_run=true（默认）仅输出报告不修改文件。
         """
         return _submit_to_celery('maya_sync_rig_incremental', {
             'project': params.project,
             'asset_name': params.asset_name,
             'source_path': params.source_path,
             'parameters': {
+                'compare_result': params.compare_result,
                 'source_abc': params.source_abc,
                 'source_info': params.source_info,
+                'cache_group': params.cache_group,
                 'dry_run': params.dry_run,
             },
         })

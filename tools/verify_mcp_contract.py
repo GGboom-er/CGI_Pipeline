@@ -209,14 +209,11 @@ def check_workflow_internal_outputs(errors: list[str]) -> None:
         "tex_to_rig_verify_and_sync.json": {
             "export_abc": ("abc_path", ".abc"),
             "extract_materials": ("output_path", "_materials.json"),
-            "build_rig_info": ("info_path", "_pre_sync.json"),
-            "compare": ("output_path", "_pre_compare_result.json"),
-            "build_rig_info_post": ("info_path", "_post_sync.json"),
+            "compare_pre": ("output_path", "_pre_compare_result.json"),
             "verify": ("output_path", "_post_compare_result.json"),
         },
         "tex_to_rig_verify.json": {
-            "build_tex_info": ("info_path", "_info.json"),
-            "build_rig_info": ("info_path", "_info.json"),
+            "export_abc": ("abc_path", ".abc"),
             "compare": ("output_path", "_compare_result.json"),
         },
         "blender_tex_export.json": {
@@ -245,7 +242,12 @@ def check_workflow_internal_outputs(errors: list[str]) -> None:
 
         for step in workflow.get("steps", []):
             params = step.get("parameters") or {}
-            if step.get("skill_id") in ("blender_build_asset_info", "maya_build_asset_info"):
+            if step.get("skill_id") in (
+                "blender_build_asset_info",
+                "maya_build_asset_info",
+                "maya_compare_asset_in_scene",
+                "maya_sync_rig_incremental",
+            ):
                 cache_group = params.get("cache_group", "")
                 if "{{config." not in cache_group:
                     errors.append(

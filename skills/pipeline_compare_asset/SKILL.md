@@ -46,7 +46,7 @@ category: "inspect"
 - **只读场景**: 仅读 `_info.json` 或 `.abc`，不打开也不修改任何 DCC 场景；会写出标准 `compare_result.json` 到 `output_path`。
 - **对比方向**: `input_source` 是参考方（新资产），`input_target` 是被对比方（现有绑定）。所有输出按此方向描述。
 - **路径规则**: workflow/单技能调用必须显式传 `output_path` 或 `info_dir`，结果必须位于任务沙盒 `.info`；无法确定 `.info` 输出路径时返回 `ERROR`，不回退输入文件同目录。
-- **职责边界**: 本 skill 只做独立对比与结果输出；拼装类 skill 应复用同一套 `core.asset_info_schema.compare()` 内存结果继续执行，不依赖本 skill 输出驱动拼装。
+- **职责边界**: 本 skill 只做独立对比与结果输出；当 source/target 都已有 JSON/ABC 数据时，它也可以作为 `maya_sync_rig_incremental` 的前置 compare_result 生产者。
 - **向后兼容**: 旧键名 `input_a / input_b / label_a / label_b` 仍被接受，但新 workflow/调用一律用 `*_source / *_target`。
 
 ### 🟢 核心逻辑 (CORE LOGIC)

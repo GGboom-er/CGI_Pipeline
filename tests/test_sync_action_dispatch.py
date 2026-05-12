@@ -46,8 +46,8 @@ def test_sync_consumes_pairing_groups():
         'sync 从 report 读取 target_only_dags')
     _ok('compare_result_path = params.get("compare_result"' in source,
         'sync 声明 compare_result 输入')
-    _ok('external_report is not None' in source,
-        'sync 优先消费外部 compare_result')
+    _ok('缺少必填参数: compare_result' in source,
+        'sync 要求前置 compare_result')
     _ok('instructions = report.get("instructions"' not in source,
         'sync 不再读 instructions 旧字段')
 
@@ -139,6 +139,10 @@ def test_sync_layer_helper_exists():
     source = _read_sync_source()
     _ok('def _relocate_rig_mesh(' in source,
         'sync 有 _relocate_rig_mesh（IDENTICAL/ORIG_INJECT 搬运路径）')
+    _ok('def _ensure_collectable_shape_orig(' in source,
+        'sync 有新建 mesh ShapeOrig 可采集性补齐')
+    _ok('_ensure_collectable_shape_orig(node)' in source,
+        'sync 会对新建 mesh 执行 ShapeOrig 可采集性补齐')
     _ok('def _check_sync_already_done(' in source,
         'sync 有 _check_sync_already_done（幂等保护）')
     _ok('def _scan_hardcoded_refs(' in source,

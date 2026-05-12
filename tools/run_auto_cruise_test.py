@@ -4,10 +4,7 @@ CGI Pipeline 全链路自动巡航测试 v3
 
 完整链路：
   Phase 1 (Blender):  导出 ABC（几何真值源）+ 提取材质信息
-  Phase 2 (Maya):     打开 rig → 采集 rig 信息 JSON
-  Phase 3 (Pipeline): 对比 ABC vs rig_json → 生成 compare_result JSON
-  Phase 4 (Maya):     打开 rig → 同步拼装(消费 compare_result) → 修形 → 材质 → 采集 → 存盘
-  Phase 5 (Pipeline): 再次对比 → 校验差异是否清零
+  Phase 2 (Maya):     打开 rig 一次 → 场景内对比 → 同步拼装 → 修形 → 材质 → 后置场景内对比 → 存盘
 
 输出结构：
   - 沙盒根目录只保留源备份、最终产出和唯一 MD 报告
@@ -65,19 +62,12 @@ def compute_poll_timeout(file_path: str, factor: float = 1.0) -> int:
 
 
 def clean_old_sandboxes():
-    logger.info("\n正在清理历史沙盒文件...")
+    logger.info("\n历史沙盒检查（只读，不自动删除）...")
     sandbox_dir = PROJECT_ROOT / "projects" / PROJECT
     if not sandbox_dir.exists():
         return
-    count = 0
-    for d in sandbox_dir.iterdir():
-        if d.is_dir() and "cruise_test" in d.name:
-            try:
-                shutil.rmtree(d)
-                count += 1
-            except Exception as e:
-                logger.warning(f"  清理失败 {d.name}: {e}")
-    logger.info(f"  清理完成，共删除 {count} 个历史沙盒。")
+    count = sum(1 for d in sandbox_dir.iterdir() if d.is_dir() and "cruise_test" in d.name)
+    logger.info(f"  发现 {count} 个历史巡航沙盒，本次保留。")
 
 
 def create_sandbox() -> Path:
@@ -306,20 +296,18 @@ def write_final_report(
         "| 阶段 | 结果 |",
         "|---|---|",
         f"| Blender 导出 | ABC `{rel(local_abc)}`，材质 {materials.get('material_count', '?')} 个，面赋予记录 {materials.get('face_assignments', '?')} 条 |",
-        f"| 同步前 rig 信息 | {pre_info.get('mesh_count', '?')} mesh，{pre_info.get('texture_count', '?')} 贴图 |",
-        f"| 同步前对比 | paired={pre_compare.get('paired', pre_outputs.get('paired', '?'))}，matched_different={pre_compare.get('matched_different', pre_outputs.get('matched_different', '?'))}，only_source={pre_compare.get('only_source', pre_outputs.get('only_source', '?'))}，only_target={pre_compare.get('only_target', pre_outputs.get('only_target', '?'))} |",
+        f"| 同步前对比 | paired={pre_compare.get('paired', '?')}，matched_different={pre_compare.get('matched_different', '?')}，only_source={pre_compare.get('only_source', '?')}，only_target={pre_compare.get('only_target', '?')} |",
         f"| 同步拼装 | IDENTICAL={sync.get('IDENTICAL', '?')}，ORIG_INJECT={sync.get('ORIG_INJECT', '?')}，PAIRED={sync.get('PAIRED', '?')}，UNPAIRED={sync.get('UNPAIRED', '?')}，target_only={sync.get('target_only', '?')} |",
-        f"| 同步后 rig 信息 | {post_info.get('mesh_count', '?')} mesh，ShapeOrig warning={post_info.get('orig_warning_count', '?')} |",
-        f"| 最终验证 | paired={post_compare.get('paired', post_outputs.get('paired', '?'))}，阻断差异={post_compare.get('blocking', '?')} |",
+        f"| 最终验证 | paired={post_compare.get('paired', '?')}，阻断差异={post_compare.get('blocking', '?')} |",
         "",
         "## 最终对比",
         "",
         "| 指标 | 数量 |",
         "|---|---:|",
-        f"| identical | {post_compare.get('identical', post_outputs.get('identical', '?'))} |",
-        f"| matched_different | {post_compare.get('matched_different', post_outputs.get('matched_different', '?'))} |",
-        f"| only_source | {post_compare.get('only_source', post_outputs.get('only_source', '?'))} |",
-        f"| only_target | {post_compare.get('only_target', post_outputs.get('only_target', '?'))} |",
+        f"| identical | {post_compare.get('identical', '?')} |",
+        f"| matched_different | {post_compare.get('matched_different', '?')} |",
+        f"| only_source | {post_compare.get('only_source', '?')} |",
+        f"| only_target | {post_compare.get('only_target', '?')} |",
         f"| MODIFIED | {post_compare.get('actions', {}).get('MODIFIED', '?')} |",
         f"| MERGE | {post_compare.get('actions', {}).get('MERGE', '?')} |",
         f"| SPLIT | {post_compare.get('actions', {}).get('SPLIT', '?')} |",
@@ -373,83 +361,68 @@ def run_test():
         return False
     archive_audit(res["task_id"], info_dir)
 
-    logger.info("\nPhase 2: Maya 采集 rig 资产信息")
-    rig_info_pre_path = str(info_dir / f"{rig_stem}_pre_sync.json")
-    res = submit_chain(local_rig, [
-        {"skill_id": "maya_build_asset_info", "parameters": {"info_path": rig_info_pre_path, "cache_group": rig_group}},
-    ], run_dir=str(sandbox), suppress_report=True)
-    if "task_id" not in res:
-        logger.error(f"  Maya 提交失败: {res}")
-        return False
-    result = poll_task(res["task_id"], timeout=compute_poll_timeout(local_rig))
-    if result.get("status") not in SUCCESS_STATUSES:
-        logger.error(f"  Phase 2 失败: {result}")
-        return False
-    archive_audit(res["task_id"], info_dir)
-
-    logger.info("\nPhase 3: Pipeline 预对比")
+    logger.info("\nPhase 2: Maya 场景内对比 + 同步拼装 + 后置验证 + 存盘")
+    rig_info_pre_path = ""
+    rig_info_post_path = ""
     compare_result_path = str(info_dir / f"{rig_stem}_pre_compare_result.json")
-    result = run_pipeline_skill_sync("pipeline_compare_asset", {
-        "input_source": local_abc,
-        "input_target": rig_info_pre_path,
-        "output_path": compare_result_path,
-        "label_source": "tex",
-        "label_target": "rig",
-    })
-    if result.get("status") != "SUCCESS":
-        logger.error(f"  Phase 3 失败: {result.get('error', result)}")
-        return False
-    pre_outputs = result.get("outputs", {})
-    compare_result_path = pre_outputs.get("output_path", compare_result_path)
-
-    logger.info("\nPhase 4: Maya 同步拼装 + 修形 + 材质 + 采集 + 存盘")
-    save_path = str(sandbox / f"{rig_stem}_synced.ma")
-    rig_info_post_path = str(info_dir / f"{rig_stem}_post_sync.json")
+    post_compare_path = str(info_dir / f"{rig_stem}_post_compare_result.json")
+    save_path = ""
     res = submit_chain(local_rig, [
-        {"skill_id": "maya_sync_rig_incremental", "parameters": {"source_abc": local_abc, "compare_result": compare_result_path}},
+        {
+            "skill_id": "maya_compare_asset_in_scene",
+            "parameters": {
+                "input_source": local_abc,
+                "output_path": compare_result_path,
+                "cache_group": rig_group,
+                "label_source": "tex",
+                "label_target": "rig",
+            },
+        },
+        {
+            "skill_id": "maya_sync_rig_incremental",
+            "parameters": {
+                "source_abc": local_abc,
+                "compare_result": compare_result_path,
+                "cache_group": rig_group,
+            },
+        },
         {"skill_id": "maya_fix_shape_names", "parameters": {"target_group": rig_group}},
         {"skill_id": "maya_apply_materials", "parameters": {"materials_path": materials_path, "target_group": rig_group}},
-        {"skill_id": "maya_build_asset_info", "parameters": {"info_path": rig_info_post_path, "cache_group": rig_group, "allow_missing_orig": True}},
-        {"skill_id": "save_scene", "parameters": {"save_path": save_path}},
+        {
+            "skill_id": "maya_compare_asset_in_scene",
+            "parameters": {
+                "input_source": local_abc,
+                "output_path": post_compare_path,
+                "cache_group": rig_group,
+                "label_source": "tex",
+                "label_target": "rig_post",
+            },
+        },
+        {"skill_id": "save_scene", "parameters": {}},
     ], run_dir=str(sandbox), suppress_report=True)
     if "task_id" not in res:
-        logger.error(f"  Phase 4 提交失败: {res}")
+        logger.error(f"  Phase 2 提交失败: {res}")
         return False
-    phase4_result = poll_task(res["task_id"], timeout=compute_poll_timeout(local_rig, factor=1.5))
-    if phase4_result.get("status") not in SUCCESS_STATUSES:
-        logger.error(f"  Phase 4 失败: {phase4_result}")
+    phase2_result = poll_task(res["task_id"], timeout=compute_poll_timeout(local_rig, factor=1.5))
+    if phase2_result.get("status") not in SUCCESS_STATUSES:
+        logger.error(f"  Phase 2 失败: {phase2_result}")
         return False
     archive_audit(res["task_id"], info_dir)
-    sync_outputs = _chain_step_outputs(phase4_result, "maya_sync_rig_incremental")
+    sync_outputs = _chain_step_outputs(phase2_result, "maya_sync_rig_incremental")
+    save_outputs = _chain_step_outputs(phase2_result, "save_scene")
+    save_path = save_outputs.get("output_path", "")
+    pre_outputs = {"output_path": compare_result_path}
+    post_outputs = {"output_path": post_compare_path}
 
-    logger.info("\nPhase 5: Pipeline 最终验证对比")
-    post_compare_path = str(info_dir / f"{rig_stem}_post_compare_result.json")
-    if not os.path.exists(rig_info_post_path):
-        report_path = write_final_report(
-            sandbox, info_dir, local_rig, local_blend, save_path, local_abc,
-            materials_path, rig_info_pre_path, compare_result_path,
-            rig_info_post_path, post_compare_path, pre_outputs, {}, sync_outputs, False,
-        )
-        logger.error(f"  缺少 post rig info，唯一报告: {report_path}")
+    if not os.path.exists(compare_result_path) or not os.path.exists(post_compare_path):
+        logger.error("  缺少场景内 compare_result 输出")
+        return False
+    if not save_path or not os.path.exists(save_path):
+        logger.error(f"  缺少升版本后的 Maya 输出: {save_outputs}")
         return False
 
-    result = run_pipeline_skill_sync("pipeline_compare_asset", {
-        "input_source": local_abc,
-        "input_target": rig_info_post_path,
-        "output_path": post_compare_path,
-        "label_source": "tex",
-        "label_target": "rig_synced",
-    })
-    if result.get("status") != "SUCCESS":
-        logger.error(f"  Phase 5 失败: {result.get('error', result)}")
-        return False
-
-    post_outputs = result.get("outputs", {})
-    post_blocking_issues = (
-        int(post_outputs.get("matched_different", 0))
-        + int(post_outputs.get("only_source", 0))
-        + int(post_outputs.get("only_target", 0))
-    )
+    post_compare_summary = _compare_summary(post_compare_path)
+    post_blocking_issues = int(post_compare_summary.get("blocking", 0) or 0)
     passed = post_blocking_issues == 0
     report_path = write_final_report(
         sandbox, info_dir, local_rig, local_blend, save_path, local_abc,
