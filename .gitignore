@@ -18,6 +18,12 @@ assets/
 *.stackdump
 *.pdb
 
+# ── 本地草稿 / 外部参考（禁止提交新增内容）──
+.agents/task.md
+md_list*.txt
+app/
+research/
+
 # ── 备份文件 ──
 *.bak_*
 
