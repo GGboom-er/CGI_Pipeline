@@ -171,8 +171,8 @@ def test_report_sections_use_action_labels():
     for title in ("IDENTICAL", "ORIG_INJECT", "PAIRED", "UNPAIRED", "target_only"):
         _ok(title in titles, f"包含同步章节: {title}")
     overview = next((section for section in sections if section.get("title") == "ACTION_SUMMARY"), {})
-    content = overview.get("content", "")
-    _ok("IDENTICAL" in content and "target_only" in content, "同步概览使用 action 标签")
+    actions = [item.get("action") for item in overview.get("items", [])]
+    _ok("IDENTICAL" in actions and "target_only" in actions, "同步概览使用 action 标签")
 
 
 def load_compare_result_file_from_dict(data):

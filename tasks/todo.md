@@ -109,4 +109,6 @@
 - [x] 2026-05-13 新增 `maya_deformation_inherit_skin`：将 owner-filtered Skin 继承固化为 Maya skill，支持 diagnose_only/apply_skin、missing_only/all、诊断 NPZ/JSON 输出。
 - [x] 2026-05-13 `maya_deformation_inherit_skin` 真实资产验证：cdfBaiXingG 21 mesh 诊断成功，5 个缺 Skin mesh 写回并重开复验，写回权重与预测权重 0 误差。
 - [x] 2026-05-13 Split/Merge 极端测试：单源 body 拆 6 个目标 mesh 全部 PASS；多语义合并单 mesh 触发 EXPECTED_LIMITATION，证明下一步需要 patch-level ownership。
+- [x] 2026-05-13 `maya_deformation_inherit_skin` component ownership：同一 target mesh 内 disconnected component 分别求 owner；Split/Merge 复测两项均 PASS。
 - [x] 2026-05-13 运行时报告重构：step 全局编号、英文清晰 skill 名、Input/Output/Details 块、compare/sync 明细按 action 折叠展示。
+- [x] 2026-05-13 报告折叠块细化：compare/sync 明细移除 vtx/match/reason 冗余列，details 内表格改为 HTML table，真实 cdfBaiXingG workflow PASS。

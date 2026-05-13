@@ -203,7 +203,6 @@ def _group_item(group: dict) -> dict:
         "source": ", ".join(_short_dag(x) for x in abc_dags[:3]),
         "target": ", ".join(_short_dag(x) for x in rig_dags[:3]),
         "layer": group.get("layer_name", ""),
-        "reason": group.get("reason", ""),
     }
 
 
@@ -221,30 +220,27 @@ def build_sync_report_sections(report: dict, counts: dict[str, int],
         if action in groups_by_action:
             groups_by_action[action].append(group)
 
-    overview = [
-        "| action | count |",
-        "|---|---|",
-    ]
+    overview = []
     for action in VALID_GROUP_ACTIONS:
-        overview.append(f"| {_action_label(action)} | {counts.get(action, 0)} |")
-    overview.append(f"| {_action_label('target_only')} | {counts.get('target_only', 0)} |")
+        overview.append({"action": _action_label(action), "count": counts.get(action, 0)})
+    overview.append({"action": _action_label("target_only"), "count": counts.get("target_only", 0)})
 
     source_lines = [
-        f"- **source_abc**: `{source_abc or '-'}`",
-        f"- **source_info**: `{source_info or '-'}`",
-        f"- **cache_group**: `{cache_group or '-'}`",
+        {"input": "source_abc", "value": source_abc or "-"},
+        {"input": "source_info", "value": source_info or "-"},
+        {"input": "cache_group", "value": cache_group or "-"},
     ]
 
     sections = [
         {
             "title": "SYNC_INPUT",
             "summary": f"groups={counts.get('groups', len(groups))} target_only={counts.get('target_only', 0)}",
-            "content": "\n".join(source_lines),
+            "items": source_lines,
         },
         {
             "title": "ACTION_SUMMARY",
             "summary": format_action_summary(counts),
-            "content": "\n".join(overview),
+            "items": overview,
         },
     ]
 

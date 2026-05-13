@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import contextlib
 import datetime
+import html
 import json
 import os
 import re
@@ -263,11 +264,34 @@ def _render_markdown_table(headers: List[str], rows: List[List[Any]]) -> List[st
     return lines
 
 
+def _html_cell(value: Any) -> str:
+    if value is None:
+        return ""
+    text = str(value).replace("\r\n", " / ").replace("\n", " / ")
+    if _looks_like_path(text):
+        return f"<code>{html.escape(text)}</code>"
+    return html.escape(text)
+
+
+def _render_html_table(headers: List[str], rows: List[List[Any]]) -> List[str]:
+    lines = ["<table>", "<thead>", "<tr>"]
+    for header in headers:
+        lines.append(f"<th>{html.escape(str(header))}</th>")
+    lines.extend(["</tr>", "</thead>", "<tbody>"])
+    for row in rows:
+        lines.append("<tr>")
+        for value in row:
+            lines.append(f"<td>{_html_cell(value)}</td>")
+        lines.append("</tr>")
+    lines.extend(["</tbody>", "</table>"])
+    return lines
+
+
 def _detail_block(summary: str, body_lines: List[str], open_by_default: bool = False) -> List[str]:
     attr = " open" if open_by_default else ""
     return [
         "",
-        f"<details{attr}>",
+        f"<details markdown=\"1\"{attr}>",
         f"<summary>{_escape_md(summary)}</summary>",
         "",
         *body_lines,
@@ -290,56 +314,7 @@ def _render_compare_group_details(compare_payload: Dict[str, Any]) -> List[str]:
 
     lines: List[str] = []
     paired = report.get("paired") if isinstance(report.get("paired"), list) else []
-    paired_by_pair: Dict[tuple[str, str], Dict[str, Any]] = {}
-    paired_by_source: Dict[str, List[Dict[str, Any]]] = {}
-    for pair in paired:
-        if not isinstance(pair, dict):
-            continue
-        dag_a = str(pair.get("dag_a") or "")
-        dag_b = str(pair.get("dag_b") or "")
-        if dag_a or dag_b:
-            paired_by_pair[(dag_a, dag_b)] = pair
-        if dag_a:
-            paired_by_source.setdefault(dag_a, []).append(pair)
     only_source = report.get("only_a") if isinstance(report.get("only_a"), list) else []
-    only_source_by_dag = {
-        str(entry.get("dag") or ""): entry
-        for entry in only_source
-        if isinstance(entry, dict)
-    }
-
-    def _group_metrics(group: Dict[str, Any]) -> List[Dict[str, Any]]:
-        metrics: List[Dict[str, Any]] = []
-        seen: set[int] = set()
-        abc_dags = [str(dag) for dag in (group.get("abc_dags") or [])]
-        rig_dags = [str(dag) for dag in (group.get("rig_dags") or [])]
-        for abc_dag in abc_dags:
-            for rig_dag in rig_dags:
-                metric = paired_by_pair.get((abc_dag, rig_dag))
-                if metric is not None and id(metric) not in seen:
-                    metrics.append(metric)
-                    seen.add(id(metric))
-            for metric in paired_by_source.get(abc_dag, []):
-                if id(metric) not in seen:
-                    metrics.append(metric)
-                    seen.add(id(metric))
-            if abc_dag in only_source_by_dag:
-                metric = only_source_by_dag[abc_dag]
-                if id(metric) not in seen:
-                    metrics.append(metric)
-                    seen.add(id(metric))
-        return metrics
-
-    def _join_metric(metrics: List[Dict[str, Any]], key: str) -> str:
-        values = []
-        for metric in metrics:
-            value = metric.get(key)
-            if value in (None, ""):
-                continue
-            text = str(value)
-            if text not in values:
-                values.append(text)
-        return ", ".join(values)
 
     groups = report.get("pairing_groups") if isinstance(report.get("pairing_groups"), list) else []
     if groups:
@@ -355,39 +330,29 @@ def _render_compare_group_details(compare_payload: Dict[str, Any]) -> List[str]:
                 continue
             rows = []
             for group in action_groups:
-                metrics = _group_metrics(group)
                 rows.append([
                     group.get("group_id", ""),
                     _mesh_names_from_dags(group.get("abc_dags") or []),
                     _mesh_names_from_dags(group.get("rig_dags") or []),
                     group.get("layer_name", ""),
-                    _join_metric(metrics, "vtx_a") or _join_metric(metrics, "vtx"),
-                    _join_metric(metrics, "vtx_b"),
-                    _join_metric(metrics, "match_pct_loose") or _join_metric(metrics, "match_pct_exact"),
-                    group.get("reason", ""),
                 ])
-            body = _render_markdown_table(
-                ["group", "abc_mesh", "rig_mesh", "layer", "abc_vtx", "rig_vtx", "match", "reason"],
+            body = _render_html_table(
+                ["group", "abc_mesh", "rig_mesh", "layer"],
                 rows,
             )
             lines.extend(_detail_block(f"{action} ({len(action_groups)})", body))
         for action, action_groups in sorted(by_action.items()):
             rows = []
             for group in action_groups:
-                metrics = _group_metrics(group)
                 rows.append([
                     group.get("group_id", ""),
                     _mesh_names_from_dags(group.get("abc_dags") or []),
                     _mesh_names_from_dags(group.get("rig_dags") or []),
                     group.get("layer_name", ""),
-                    _join_metric(metrics, "vtx_a") or _join_metric(metrics, "vtx"),
-                    _join_metric(metrics, "vtx_b"),
-                    _join_metric(metrics, "match_pct_loose") or _join_metric(metrics, "match_pct_exact"),
-                    group.get("reason", ""),
                 ])
             lines.extend(_detail_block(
                 f"{action} ({len(action_groups)})",
-                _render_markdown_table(["group", "abc_mesh", "rig_mesh", "layer", "abc_vtx", "rig_vtx", "match", "reason"], rows),
+                _render_html_table(["group", "abc_mesh", "rig_mesh", "layer"], rows),
             ))
 
     if not groups and paired:
@@ -404,34 +369,31 @@ def _render_compare_group_details(compare_payload: Dict[str, Any]) -> List[str]:
             rows = [[
                 pair.get("name_a") or _short_dag(pair.get("dag_a")),
                 pair.get("name_b") or _short_dag(pair.get("dag_b")),
-                pair.get("vtx_a", ""),
-                pair.get("vtx_b", ""),
-                pair.get("match_pct_loose") or pair.get("match_pct_exact") or "",
             ] for pair in pairs]
             lines.extend(_detail_block(
                 f"{action} ({len(pairs)})",
-                _render_markdown_table(["abc_mesh", "rig_mesh", "abc_vtx", "rig_vtx", "match"], rows),
+                _render_html_table(["abc_mesh", "rig_mesh"], rows),
             ))
 
     if not groups and only_source:
-        rows = [[entry.get("name") or _short_dag(entry.get("dag")), entry.get("dag", ""), entry.get("vtx", entry.get("vertices", ""))]
+        rows = [[entry.get("name") or _short_dag(entry.get("dag")), entry.get("dag", "")]
                 for entry in only_source if isinstance(entry, dict)]
         lines.extend(_detail_block(
             f"UNPAIRED ({len(rows)})",
-            _render_markdown_table(["abc_mesh", "dag", "vertices"], rows),
+            _render_html_table(["abc_mesh", "dag"], rows),
         ))
 
     only_target = report.get("only_b") if isinstance(report.get("only_b"), list) else []
     target_only_dags = report.get("target_only_dags") if isinstance(report.get("target_only_dags"), list) else []
     if only_target:
-        rows = [[entry.get("name") or _short_dag(entry.get("dag")), entry.get("dag", ""), entry.get("vtx", entry.get("vertices", ""))]
+        rows = [[entry.get("name") or _short_dag(entry.get("dag")), entry.get("dag", "")]
                 for entry in only_target if isinstance(entry, dict)]
     else:
-        rows = [[_short_dag(dag), dag, ""] for dag in target_only_dags]
+        rows = [[_short_dag(dag), dag] for dag in target_only_dags]
     if rows:
         lines.extend(_detail_block(
             f"TARGET_ONLY ({len(rows)})",
-            _render_markdown_table(["rig_mesh", "dag", "vertices"], rows),
+            _render_html_table(["rig_mesh", "dag"], rows),
         ))
     return lines
 
@@ -461,7 +423,7 @@ def _render_structured_sections(sections: Any) -> List[str]:
                     for key in item.keys():
                         if key not in keys:
                             keys.append(key)
-                body.extend(_render_markdown_table(keys, [[item.get(key, "") for key in keys] for item in items]))
+                body.extend(_render_html_table(keys, [[item.get(key, "") for key in keys] for item in items]))
             else:
                 body.extend(f"- {_escape_md(item)}" for item in items)
         if not body:
@@ -485,7 +447,7 @@ def _render_items_details(items: Any) -> List[str]:
             rows.append([str(item), "", ""])
     return _detail_block(
         f"ITEMS ({len(rows)})",
-        _render_markdown_table(["name", "detail", "elapsed"], rows),
+        _render_html_table(["name", "detail", "elapsed"], rows),
     )
 
 
@@ -501,7 +463,7 @@ def _render_output_field_details(outputs: Dict[str, Any]) -> List[str]:
                         if item_key not in keys:
                             keys.append(item_key)
                 rows = [[item.get(item_key, "") for item_key in keys] for item in value]
-                body = _render_markdown_table(keys, rows)
+                body = _render_html_table(keys, rows)
             else:
                 body = [f"- {_format_report_scalar(item)}" for item in value]
             lines.extend(_detail_block(f"{key} ({len(value)})", body))
@@ -509,7 +471,7 @@ def _render_output_field_details(outputs: Dict[str, Any]) -> List[str]:
             rows = [[sub_key, _format_report_value(sub_value)] for sub_key, sub_value in value.items()]
             lines.extend(_detail_block(
                 f"{key} ({len(value)} fields)",
-                _render_markdown_table(["field", "value"], rows),
+                _render_html_table(["field", "value"], rows),
             ))
     return lines
 
