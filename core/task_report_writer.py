@@ -312,6 +312,17 @@ def _detail_block(summary: str, body_lines: List[str], open_by_default: bool = F
     ]
 
 
+def _wrap_summary_body(summary_line: str, body_lines: List[str]) -> str:
+    return "\n".join([
+        "<details>",
+        f"<summary>{html.escape(summary_line)}</summary>",
+        "",
+        *body_lines,
+        "",
+        "</details>",
+    ])
+
+
 def _render_compare_group_details(compare_payload: Dict[str, Any]) -> List[str]:
     return []
 
@@ -640,9 +651,7 @@ def _role_node_param(record: Dict[str, Any]) -> tuple[str, str]:
 
 def render_file_staged(records: Iterable[Dict[str, Any]]) -> str:
     records = list(records or [])
-    lines = [
-        "## File Staging",
-        "",
+    body_lines = [
         f"{len(records)} file/path records.",
         "",
         "| Node | Param | Input | Output | Status | Elapsed |",
@@ -660,7 +669,7 @@ def render_file_staged(records: Iterable[Dict[str, Any]]) -> str:
             state = "ERROR"
         else:
             state = "STAGED"
-        lines.append(
+        body_lines.append(
             f"| {_escape_cell(node)} | "
             f"`{_escape_cell(param)}` | "
             f"{_fmt_cell_path(rec.get('input', rec.get('origin', '')))} | "
@@ -668,8 +677,8 @@ def render_file_staged(records: Iterable[Dict[str, Any]]) -> str:
             f"{_escape_cell(state)} | "
             f"{_fmt_elapsed_sec(rec.get('elapsed_sec'))} |"
         )
-    lines.extend(["", _data_marker("file_staged", records)])
-    return "\n".join(lines)
+    body_lines.extend(["", _data_marker("file_staged", records)])
+    return _wrap_summary_body(f"File Staging | {len(records)} records", body_lines)
 
 
 def upsert_file_staged(report_path: str | Path, records: Iterable[Dict[str, Any]]) -> None:
@@ -692,9 +701,7 @@ def _open_scene_node(source_path: str) -> str:
 
 def render_open_scenes(records: Iterable[Dict[str, Any]]) -> str:
     records = list(records or [])
-    lines = [
-        "## Open Scene",
-        "",
+    body_lines = [
         f"{len(records)} DCC scene open records.",
         "",
         "| Node | Input | Output | Status | Elapsed |",
@@ -704,7 +711,7 @@ def render_open_scenes(records: Iterable[Dict[str, Any]]) -> str:
     for rec in records:
         source_path = str(rec.get("source_path") or "")
         status = str(rec.get("status") or "UNKNOWN")
-        lines.append(
+        body_lines.append(
             f"| {_escape_cell(_open_scene_node(source_path))} | "
             f"{_fmt_cell_path(source_path)} | current_dcc_session | "
             f"{_status_icon(status)} {status} | {_fmt_elapsed_sec(rec.get('elapsed_sec'))} |"
@@ -712,7 +719,7 @@ def render_open_scenes(records: Iterable[Dict[str, Any]]) -> str:
         if rec.get("error"):
             errors.append((source_path, str(rec.get("error"))))
     for source_path, error in errors:
-        lines.extend([
+        body_lines.extend([
             "",
             f"**Open failed: {_escape_md(source_path)}**",
             "",
@@ -720,8 +727,8 @@ def render_open_scenes(records: Iterable[Dict[str, Any]]) -> str:
             error,
             "```",
         ])
-    lines.extend(["", _data_marker("open_scene", records)])
-    return "\n".join(lines)
+    body_lines.extend(["", _data_marker("open_scene", records)])
+    return _wrap_summary_body(f"Open Scene | {len(records)} records", body_lines)
 
 
 def render_open_scene(source_path: str, status: str,
@@ -764,19 +771,18 @@ def render_step_started(step_context: Dict[str, Any]) -> str:
     total = step_context.get("step_total") or "-"
     skill_id = step_context.get("skill_id", "unknown")
     label = _skill_label(skill_id)
-    lines = [
-        f"## Step {idx}/{total} | {label} | RUNNING | -",
-        "",
+    summary_line = f"Step {idx}/{total} | {label} | RUNNING | -"
+    body_lines = [
         f"- `skill_id`: `{_escape_md(skill_id)}`",
         "- `status`: RUNNING",
     ]
     if step_context.get("segment") not in (None, "", -1):
-        lines.append(f"- `segment`: {step_context.get('segment')}")
+        body_lines.append(f"- `segment`: {step_context.get('segment')}")
     if step_context.get("source_path"):
-        lines.append(f"- `source_path`: {_fmt_path(step_context.get('source_path'))}")
+        body_lines.append(f"- `source_path`: {_fmt_path(step_context.get('source_path'))}")
     params = step_context.get("parameters", {}) or {}
-    lines.extend(_render_io_list("Input", params, "input"))
-    return "\n".join(lines)
+    body_lines.extend(_render_io_list("Input", params, "input"))
+    return _wrap_summary_body(summary_line, body_lines)
 
 
 def upsert_step_started(report_path: str | Path, step_context: Dict[str, Any]) -> None:
@@ -811,18 +817,16 @@ def render_step_finished(step_context: Dict[str, Any], receipt: Dict[str, Any],
     if outputs is None:
         outputs = receipt.get("outputs", {}) or {}
     summary_line = f"Step {idx}/{total} | {label} | {status} | {elapsed_text}"
-    lines = [
-        f"## {summary_line}",
-        "",
+    body_lines = [
         f"- `skill_id`: `{_escape_md(skill_id)}`",
         f"- `status`: {_status_icon(status)} {status}",
         f"- `elapsed`: {elapsed_text}",
     ]
     if memory_gb is not None and memory_gb >= 0:
-        lines.append(f"- `memory_gb`: {memory_gb:.2f}")
+        body_lines.append(f"- `memory_gb`: {memory_gb:.2f}")
 
-    lines.extend(_render_io_list("Input", standard_input, "input"))
-    lines.extend(_render_io_list("Output", outputs, "output"))
+    body_lines.extend(_render_io_list("Input", standard_input, "input"))
+    body_lines.extend(_render_io_list("Output", outputs, "output"))
 
     detail_lines: List[str] = []
     has_report_sections = isinstance(receipt.get("report_sections"), list) and bool(receipt.get("report_sections"))
@@ -835,22 +839,22 @@ def render_step_finished(step_context: Dict[str, Any], receipt: Dict[str, Any],
     if not has_report_sections and not detail_lines:
         detail_lines.extend(_render_items_details(receipt.get("items")))
     if detail_lines:
-        lines.extend(["", "**Details**"])
-        lines.extend(detail_lines)
+        body_lines.extend(["", "**Details**"])
+        body_lines.extend(detail_lines)
 
     error = receipt.get("error", "")
     tb = receipt.get("traceback", "") or receipt.get("traceback_text", "")
     if error or tb or (status not in ("SUCCESS", "RUNNING") and raw_detail):
-        lines.extend(["", "**Error Detail**", ""])
+        body_lines.extend(["", "**Error Detail**", ""])
         if error:
-            lines.extend(["```text", str(error), "```", ""])
+            body_lines.extend(["```text", str(error), "```", ""])
         if tb:
-            lines.extend(["**Traceback**", "", "```text", str(tb), "```", ""])
+            body_lines.extend(["**Traceback**", "", "```text", str(tb), "```", ""])
         elif raw_detail and status != "SUCCESS":
-            lines.extend(["**Raw Detail**", "", "```text", str(raw_detail), "```", ""])
+            body_lines.extend(["**Raw Detail**", "", "```text", str(raw_detail), "```", ""])
 
     if raw_detail and not receipt.get("_parsed", True) and status == "SUCCESS":
-        lines.extend([
+        body_lines.extend([
             "",
             "**Raw Detail**",
             "",
@@ -859,7 +863,7 @@ def render_step_finished(step_context: Dict[str, Any], receipt: Dict[str, Any],
             "```",
         ])
 
-    return "\n".join(lines)
+    return _wrap_summary_body(summary_line, body_lines)
 
 
 def upsert_step_finished(report_path: str | Path, step_context: Dict[str, Any],

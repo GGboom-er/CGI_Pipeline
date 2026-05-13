@@ -56,7 +56,9 @@ def test_step_upsert_no_duplicate():
     step_block = step_block.split("report:block:end step:main:0:pipeline_compare_asset", 1)[0]
     assert "RUNNING" not in step_block, text
     assert "SUCCESS" in text
-    assert "## Step 1/1 | pipeline_compare_geometry_sources | SUCCESS" in text
+    assert "<summary>Step 1/1 | pipeline_compare_geometry_sources | SUCCESS" in text
+    assert "## Step 1/1 | pipeline_compare_geometry_sources | SUCCESS" not in text
+    assert "\n<details>\n<summary>Step 1/1 | pipeline_compare_geometry_sources | SUCCESS" in step_block
     assert "**Input**" in text
     assert "**Output**" in text
     assert "compare_result.json" in text
@@ -228,6 +230,8 @@ def test_file_flow_table_has_io_status_elapsed():
         },
     ])
     text = report.read_text(encoding="utf-8")
+    assert "<summary>File Staging | 2 records</summary>" in text
+    assert "## File Staging" not in text
     assert "| Node | Param | Input | Output | Status | Elapsed |" in text
     assert "资产路径解析" in text
     assert "pipeline_stage_file_to_sandbox" in text
@@ -311,6 +315,8 @@ def test_open_scene_merges_across_segments():
     writer.upsert_open_scene(report, maya, "RUNNING")
     writer.upsert_open_scene(report, maya, "SUCCESS", elapsed_sec=2.0)
     text = report.read_text(encoding="utf-8")
+    assert "<summary>Open Scene | 2 records</summary>" in text
+    assert "## Open Scene" not in text
     assert "blender_open_scene" in text
     assert "maya_open_scene" in text
     assert "demo.blend" in text
