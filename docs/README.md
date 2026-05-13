@@ -2,19 +2,20 @@
 
 本文档目录只保留当前可执行规范和稳定参考。历史方案、备份文件、临时代码片段已归档到 `archive/`，不得作为当前实现依据。
 
-## 权威规范
+## 唯一入口
 
 | 文档 | 用途 |
 |---|---|
-| `pipeline_runtime_contract_v1.md` | 运行时总规范。AI、CLI、Dashboard、自动任务共同遵守的唯一运行时契约。 |
-| `skill_development_guide.md` | 新增 skill 的开发入口说明。硬契约以 `skills/CONVENTION.md` 为准。 |
-| `runtime_task_report.md` | 唯一 `REPORT.md` 运行中报告机制。 |
-| `compare_and_assembly_pipeline_plan.md` | 资产对比、场景内 compare、ABC 拼装、材质赋予和 sync 的专项规范。 |
-| `mesh_pairing_phased_logic.md` | 当前三步漏斗配对逻辑说明。 |
+| `../skills/build_pipeline_skill/SKILL.md` | **唯一 skill 规范文档**。生成、更新、整理、审查 skill 只看这里。 |
+| `architecture/pipeline_runtime_contract_v1.md` | 运行时总规范。只说明 AI、CLI、Dashboard、workflow、sandbox 的整体规则。 |
+| `architecture/runtime_task_report.md` | `REPORT.md` 运行中报告机制。报告字段仍以 `../skills/build_pipeline_skill/SKILL.md` 的标准执行记录为准。 |
+| `architecture/compare_and_assembly_pipeline_plan.md` | 资产对比、场景内 compare、ABC 拼装、材质赋予和 sync 的专项规范。 |
+| `architecture/mesh_pairing_phased_logic.md` | 当前三步漏斗配对逻辑说明。 |
+| `standards/` | 项目与 DCC 生产规范，例如 Maya QC 与 YSJ Maya 文件规范。 |
 
 ## Skill 拆解
 
-`docs/skills/` 保留已落地节点的职责边界、输入输出契约和验证点。具体 skill 的实时参数仍以 `skills/{skill_id}/SKILL.md` 为准。
+`archive/skills/` 保存已落地节点的拆解说明和历史决策，不作为通用 skill 规范。具体 skill 的实时参数以 `skills/{skill_id}/SKILL.md` 为准；通用规则以 `../skills/build_pipeline_skill/SKILL.md` 为准。
 
 ## 参考资料
 

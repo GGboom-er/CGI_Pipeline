@@ -18,7 +18,7 @@ ABC 导出类节点负责把 DCC 场景中的几何数据导出为 Alembic `.abc
 
 - 读取当前已打开的沙盒场景
 - 导出 `.abc` 到任务沙盒 `.info`
-- 返回 `outputs.output_path` 供下游读取
+- 返回标准执行记录 `output.output_path` 供下游读取
 
 不是：
 
@@ -93,7 +93,7 @@ pipeline_export_abc_auto
 {sandbox}/.info/{source_stem}.abc
 ```
 
-receipt.outputs：
+标准执行记录 `output`：
 
 ```json
 {

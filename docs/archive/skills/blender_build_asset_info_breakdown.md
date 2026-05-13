@@ -79,15 +79,16 @@ Blender 侧查找时会取 `cache_group` 最后一段，例如 `|Group|cache` �
 {sandbox}/.info/{source_stem}_info.json
 ```
 
-receipt.outputs：
+标准执行记录 `output`：
 
 ```json
 {
-  "output_path": ".../_info.json"
+  "output_path": ".../_info.json",
+  "mesh_count": 25
 }
 ```
 
-`output_path` 是下游唯一引用路径。mesh 数量写入 `summary_count`，不作为 workflow 段间数据传递。
+`output_path` 是下游唯一引用路径。mesh 数量直接写入 `output.mesh_count`。
 
 ## 5. `_info.json` 数据内容
 

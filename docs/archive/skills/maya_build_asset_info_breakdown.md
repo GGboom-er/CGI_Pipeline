@@ -94,15 +94,16 @@ Maya rig scene + source ABC
 {sandbox}/.info/{scene_stem}_info.json
 ```
 
-receipt.outputs：
+标准执行记录 `output`：
 
 ```json
 {
-  "output_path": ".../_info.json"
+  "output_path": ".../_info.json",
+  "mesh_count": 25
 }
 ```
 
-`output_path` 是下游唯一引用路径。mesh 数量写入 `summary_count`，不作为 workflow 段间数据传递。
+`output_path` 是下游唯一引用路径。mesh 数量直接写入 `output.mesh_count`。
 
 ## 5. `_info.json` 数据内容
 
@@ -177,7 +178,7 @@ receipt.outputs：
 - 不再返回 `AUDIT_FAILED` 作为 ShapeOrig 门禁。
 - 不再接受 `allow_missing_orig` 参数。
 - 缺失、命名不规范或无法唯一定位标准 Orig 的 mesh 输出 `vertices: 0`、`vert_positions: []`。
-- receipt.outputs 只保留 `output_path`。
+- 标准执行记录 `output` 至少包含 `output_path`。
 
 ## 9. 验证点
 

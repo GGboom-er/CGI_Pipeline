@@ -85,7 +85,7 @@ AI (Codex/MCP) ──► mcp_server/ (FastMCP)
 
 ### 技能契约
 
-每个技能是 `skills/{skill_id}/{skill_id}.py`，暴露 `execute(payload) -> dict`。**返回值必须用 `core.receipt.make_receipt(...)` 构造** —— 其他格式一律不算合法回执（dashboard、审计账本、workflow 段间传递都依赖这个约定）。完整规范见 `skills/CONVENTION.md`。
+每个技能是 `skills/{skill_id}/{skill_id}.py`，暴露 `execute(payload) -> dict`。**返回值必须用 `core.receipt.make_receipt(...)` 构造** —— 其他格式一律不算合法回执（dashboard、审计账本、workflow 段间传递都依赖这个约定）。完整构建规则见 `skills/build_pipeline_skill/SKILL.md`。
 
 ```python
 def execute(payload: dict) -> dict:
@@ -93,14 +93,17 @@ def execute(payload: dict) -> dict:
     params = payload.get('parameters', {})
     # ...
     return make_receipt(
-        skill_id='xxx', status='SUCCESS', start_time=t0,
-        outputs={'output_path': ..., 'report_path': ...},  # 路径 key 只能用这两个
+        skill_id='xxx',
+        status='SUCCESS',
+        start_time=t0,
+        input={'source_path': payload.get('source_path'), **params},
+        output={'output_path': ..., 'mesh_count': ...},
     )
 ```
 
 状态码：`SUCCESS / ERROR / BLOCKED / TIMEOUT / CHAIN_ABORTED / AUDIT_FAILED / CHAIN_AUDIT_FAILED / WORKFLOW_AUDIT_FAILED`。后台 pipeline 不等待人工决策；质检或契约不通过时返回 `AUDIT_FAILED` 并生成报告。
 
-三个合法的输出 key：`output_path`（单个产出文件）、`report_path`（MD 报告）、`result`（结构化机器输出）。**不要自创 `abc_path` / `saved_path` / `top_nodes` 之类的顶层 key** —— 多字段或特殊参数统一走 `outputs.result.xxx`。
+标准执行记录固定为 `skill/input/output/status/elapsed_sec`。`input` 写实际生效参数，`output` 写实际产物；文件产物统一为 `output.output_path`，多字段结构化输出直接放在 `output`。不再返回或渲染 `summary/items/report_content/report_sections/recovery_hint`。
 
 ### 节点化参数命名规范（SOP）
 
@@ -129,14 +132,14 @@ def execute(payload: dict) -> dict:
 
 | 模块 | 职责 |
 |---|---|
-| `asset_info_schema.py` | `compare(a_dict, b_dict, profile)` —— 三步漏斗（路径匹配 → 同点数池 → 空间分析）。算法层保留 7 种 `actionability` 标签（IDENTICAL/ORIG_INJECT/MODIFIED/MERGE/SPLIT/NEW/DELETE），用户视角层由 `pairing_report` 聚合成 4 种 `outcomes`（identical / matched_different / only_source / only_target）。**两层共存，不是新旧替换**——MERGE/SPLIT 的拓扑关系对下游权重传递必需。**输入是 dict 对 dict，JSON 是可选的。** |
+| `asset_info_schema.py` | `compare(a_dict, b_dict, profile)` —— 三步漏斗（路径匹配 → 同点数池 → 空间分析）。算法层保留 7 种 `actionability` 标签（IDENTICAL/ORIG_INJECT/MODIFIED/MERGE/SPLIT/NEW/DELETE），标准记录层聚合为 4 类（matched_same / matched_different / only_source / only_target）。**两层共存，不是新旧替换**——MERGE/SPLIT 的拓扑关系对下游权重传递必需。**输入是 dict 对 dict，JSON 是可选的。** |
 | `abc_reader.py` | `read_abc_as_info(abc_path)` —— PyAlembic → 同一份 asset_info dict |
-| `compare_result_io.py` | compare_result.v1 写出、读取 `_info.json`/ABC、Markdown 摘要生成、`.info` 输出路径推导 |
-| `pairing_report.py` | dict → MD 报告：主视角是 source 侧 4 种事实去向，算法层 7 标签作为附录 |
+| `compare_result_io.py` | compare_result.v1 写出、读取 `_info.json`/ABC、`.info` 输出路径推导；机器 JSON 可保留内部 `paired/only_a/only_b/actionability` |
+| `pairing_report.py` | 将 compare_result 聚合为 source 侧 4 种事实去向，供标准执行记录和审计使用 |
 | `spatial_transfer.py` / `deformation_field.py` / `laplacian_diffuse.py` / `biharmonic_diffuse.py` / `non_rigid_registration.py` / `unified_deformation_field.py` | 权重/BlendShape 投射的底层算法，`maya_sync_rig_incremental` 调用 |
 | `config_loader.py` | 配置金字塔：`pipeline_manifest.json` → `{project}_config.json` → 技能默认值 → `.env` |
 | `path_guard.py` | 拦截到 `readonly_drives`（默认 `X:`）和 manifest 声明的 UNC 前缀的写入 |
-| `receipt.py` | 唯一合法的回执构造器，列表自动截断到 `MAX_ITEMS = 20` |
+| `receipt.py` | 唯一合法的标准执行记录构造器 |
 | `run_archive.py` | 按任务隔离的沙盒（`runs/`），带 manifest 持久化 |
 | `service_manager.py` | Dashboard 启动时自动拉起 Redis 和对应 worker |
 
@@ -188,12 +191,12 @@ save_scene -> 沙盒内按版本递增保存
 
 ## 红线（运行时强制）
 
-来自 `AI_ONBOARDING.md`：
+运行时强制规则：
 
 1. **不许吞异常**（`except: pass`）。要通过 `make_receipt(status='ERROR', error=...)` 翻译上报。未捕获的 DCC 异常会让 worker 卡死。
 2. **不许写受保护根目录**（默认 `X:`）。`path_guard` 会拦截，`cmds.file(save=...)` / `bpy.ops.wm.save_as_mainfile()` 指向保护路径会被 block。写入必须落 `runs/` 或沙盒。
 3. **不许加硬超时**。几 GB 的 ABC、千万面的 rig 是常态。用 `internals._submit_to_celery` 拿 `task_id` 无限期轮询。
-4. **列表超 20 条必须截断**（`... 其他 N 个`）。否则 dashboard 和日志查看器会 OOM。
+4. **标准执行记录不做展示层截断**；超大机器数据应落 JSON/ABC 文件，并在 `output.output_path` 暴露路径。
 5. **`save_scene` 是破坏性链的最后一步**，不能放中间。
 6. **DCC 操作全是异步的** —— `execute_skill/chain/workflow` 之后必须用 `query_task_status` 轮询（每 3-5 秒一次）。
 
@@ -203,8 +206,13 @@ save_scene -> 沙盒内按版本递增保存
 - 禁止使用旧 `maya-live`、默认 commandPort 或省略 `foreground_port` 去连 Maya。多 Maya 会话同时存在时，省略端口会被 MCP 返回 `NEEDS_ATTENTION` 拦截；端口未知时先调用 `maya_list_foreground_sessions` 或询问用户。
 - 通过原始 Python MCP Client 手动 `call_tool` 时，FastMCP 入参需要外层 `{"params": {...}}`；不要把 `code/execution_mode/foreground_port` 平铺到顶层。
 - Maya 端口推荐开启命令：`cmds.commandPort(name=":7009", sourceType="python", echoOutput=True)`；调试/长任务必须保留 `echoOutput=True`，不要关输出。
-- 用户说"写一个新技能"时**不要直接写代码**。打开 `skills/build_pipeline_skill/SKILL.md` 走构建协议（意图捕获 → 蓝图 → 脚手架 → 注册）。
+- 用户说"写一个新技能"或要求整理/修改 skill 规范时**不要直接写代码**。打开 `skills/build_pipeline_skill/SKILL.md` 走唯一构建规则（意图捕获 → 蓝图 → 生成/修改 → 契约检查）。
 - 技能代码放在各自文件夹里（`skills/{id}/{id}.py`），不能放 `skills/` 根目录。`__init__.py` 负责 re-export `execute`。
 - `exec_code` / `blender_exec_code` 传了 `source_path` 时，Celery 会**自动打开文件**再跑代码 —— 别在代码片段里再调 `cmds.file(open=...)`。
 - 链式执行已经打开了初始 `source_path`，第一步别再打开一次。
-- 跨 DCC workflow 的段间数据走文件（前一段的 `output_path` → 下一段的输入），在 `workflows/*.json` 里用 `{{outputs.step_id.output_path}}` 表达；JSON/ABC/materials/compare_result 等机器中间产物统一写任务沙盒 `.info`。
+- 跨 DCC workflow 的段间数据走标准执行记录 `output` 字段，在 `workflows/*.json` 里用 `{{outputs.step_id.output_path}}` 或 `{{outputs.step_id.rig_path}}` 表达；JSON/ABC/materials/compare_result 等机器中间产物统一写任务沙盒 `.info`。
+
+## 第三方及研究资料隔离 (Vendor & Research Exclusion)
+
+- 本仓库中的 `research/` 和 `vendor/` 目录包含大量第三方库或前沿算法原生资料。
+- 全局搜索、规范重构或文档清理时默认跳过这些目录，避免破坏外部依赖库的原始结构。

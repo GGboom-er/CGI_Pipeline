@@ -13,7 +13,7 @@
 - 读取 source 与 target 的 `_info.json` 或 `.abc`
 - 执行三步漏斗配对
 - 输出标准 `compare_result.json`
-- 返回可嵌入统一 Markdown 报告的 `report_content`
+- 返回标准执行记录 `output`，供报告系统直接渲染
 
 不是：
 
@@ -93,15 +93,20 @@ source.abc + Maya 当前 rig 场景
 {sandbox}/.info/{rig_stem}_post_compare_result.json
 ```
 
-receipt.outputs：
+标准执行记录 `output`：
 
 ```json
 {
-  "output_path": "..._compare_result.json"
+  "output_path": "..._compare_result.json",
+  "matched_total": 25,
+  "matched_same": [],
+  "matched_different": [],
+  "only_source": [],
+  "only_target": []
 }
 ```
 
-`output_path` 是独立对比结果文件。统计信息进入 `summary_count`、`report_content` 和 `compare_result.json`，不放入 `receipt.outputs`。
+`output_path` 是独立对比结果文件。报告展示字段直接进入标准执行记录 `output`。
 
 ## 5. compare_result JSON
 
@@ -136,7 +141,7 @@ receipt.outputs：
 
 用户视角 4 去向：
 
-- `identical` = `IDENTICAL + ORIG_INJECT`
+- `matched_same` = `IDENTICAL + ORIG_INJECT`
 - `matched_different` = `MODIFIED + MERGE + SPLIT`
 - `only_source` = source 独有
 - `only_target` = target 独有
@@ -157,9 +162,9 @@ target 独有项单独走 `target_only_dags`。
 - 无法推导沙盒 `.info` 时返回 `ERROR`。
 - 不允许回退到 source 或 target 输入文件同目录。
 - `compare_result.json` 只保留输入记录和 `compare` 结果，不嵌入 `source_info`。
-- `receipt.outputs` 只保留 `output_path`。
+- 标准执行记录 `output` 包含 `output_path` 和四类对比结果。
 - 空几何作为合法事实参与对比，不在本 skill 额外诊断或修复。
-- Markdown 只走 `report_content`，最终由统一任务报告插入。
+- Markdown 报告只渲染标准执行记录，不消费旧正文块。
 - 主拼装 workflow 使用 `maya_compare_asset_in_scene` 在 Maya 场景内生成 pre/post compare_result。
 - `maya_sync_rig_incremental` 必须消费前置 compare_result，不再内部重算对比。
 
@@ -179,7 +184,7 @@ target 独有项单独走 `target_only_dags`。
 - 未传 `output_path` 且无法解析沙盒时，返回 `ERROR`。
 - 删除输入同目录默认输出策略。
 - `compare_result.json` 不再写入 `source_info`。
-- `receipt.outputs` 不再写入展示统计字段。
+- 旧展示统计迁移到标准执行记录 `output`。
 - 静态门禁阻断旧 fallback 逻辑回归。
 
 ## 9. 验证点

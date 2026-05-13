@@ -111,24 +111,48 @@ ysj_chr_mihouwang_rig_rigMaster_v007.ma
 
 保存只发生在沙盒内。正式发布到服务器由独立 `publish_asset` 类节点负责，不混入处理 workflow。
 
-## 5. 报告规则
+## 5. 标准执行记录与报告规则
 
 任务成功和失败都属于任务结果，必须进入同一份 Markdown 报告。
 
 禁止把 traceback、debug txt、临时报告散落在沙盒外或沙盒内多个文件中。
 
-报告按模块化结构组织，每个模块至少包含：
+从本规范开始，报告不再重新理解业务、不再重组自然语言结论、不再消费 `report_content` / `report_sections`。每个 skill 只返回一条标准执行记录，报告只按记录顺序渲染。
 
-- skill / step 名称
-- 输入
-- 执行动作
-- 输出
-- 状态
-- 耗时
-- 错误内容
-- 恢复建议或下一步建议
+标准执行记录固定为 5 个字段：
 
-失败时完整错误内容写入对应模块，保证后续 debug 能从单个报告回放任务事实。
+```json
+{
+  "skill": "save_scene",
+  "input": {
+    "source_path": "Y:/.../ysj_chr_maYouA_rig_rigMaster_v001.ma"
+  },
+  "output": {
+    "output_path": "Y:/.../ysj_chr_maYouA_rig_rigMaster_v002.ma"
+  },
+  "status": "SUCCESS",
+  "elapsed_sec": 21.0
+}
+```
+
+字段含义：
+
+| 字段 | 规则 |
+|---|---|
+| `skill` | 执行的 skill_id |
+| `input` | 本次 skill 实际收到的业务参数；路径必须是完整路径，不写 `A vs B`、`A + B` 这类拼接描述 |
+| `output` | 本次 skill 实际产出的内容；文件产物必须写完整路径，统计和分组结果也放这里 |
+| `status` | 框架根据是否执行到最后、是否异常、输出是否符合 schema 判定 |
+| `elapsed_sec` | 实际执行耗时，单位秒 |
+
+报告渲染规则：
+
+- 标题显示 `skill`、`status`、`elapsed_sec`。
+- `input` 渲染为参数表。
+- `output` 渲染为输出表。
+- `output` 中的数组或分组对象按字段名渲染为明细表。
+- 报告层不生成业务结论，不从旧文本里反推统计，不展示 traceback/recovery hint。
+- 错误堆栈和调试信息保留在 audit / worker log；主报告只展示标准记录。
 
 ## 6. 机器数据与人工报告分离
 
@@ -143,87 +167,26 @@ ysj_chr_mihouwang_rig_rigMaster_v007.ma
 人工消费的数据：
 
 - Markdown 报告
-- receipt 摘要
+- 标准执行记录
 
 原则：
 
 - 下游 skill 不读 Markdown 报告。
 - 报告不承担机器数据传递职责。
-- `compare_result.json` 是机器契约，不是报告。
-- `receipt.outputs` 只放稳定字段，不放长篇正文。
-- 长篇说明进入 `report_content`，由统一报告系统渲染。
+- `compare_result.json` 是机器契约，不是报告正文。
+- Workflow 下游只消费上游标准记录的 `output` 字段。
+- 例如 `{{outputs.compare_pre.output_path}}` 指向的是 `compare_pre` 记录里的 `output.output_path`。
+- 报告只渲染标准记录；不再消费 `summary`、`items`、`report_content`、`report_sections`。
 
 ## 7. Skill 运行时契约
 
-每个 skill 是一个原子 Pipeline 节点，目录结构固定：
+完整 skill 构建规则只维护在 `skills/build_pipeline_skill/SKILL.md`。本运行时总规范不再复制 skill 文件结构、`SKILL.md`、`execute(payload)`、标准执行记录、DCC 约束等细节。
 
-```text
-skills/{skill_id}/
-  SKILL.md
-  {skill_id}.py
-  __init__.py
-```
+运行时只认三条边界：
 
-代码入口固定：
-
-```python
-def execute(payload: dict) -> dict:
-    ...
-    return make_receipt(...)
-```
-
-### 7.1 输入
-
-Skill 从两个位置读取输入：
-
-- `payload.source_path`: 框架层打开的 DCC 场景或主源文件
-- `payload.parameters`: skill 自己声明的参数
-
-`source_path` 是框架层字段，不必然等于算法意义上的 source。若语义不同，必须在 `SKILL.md` 的核心限制里明确说明。
-
-### 7.2 输出
-
-所有 skill 必须使用：
-
-```python
-core.receipt.make_receipt(...)
-```
-
-文件路径输出统一使用：
-
-```python
-outputs={"output_path": "..."}
-```
-
-`outputs` 只允许稳定机器契约字段：`output_path`、`report_path`、`result`。纯展示统计、分类数量和执行摘要写入 `summary`、`items` 或 `report_content`；需要被下游节点连接的结构化字段放入 `outputs.result.xxx`。
-
-### 7.3 状态
-
-常用状态：
-
-- `SUCCESS`: 成功
-- `ERROR`: 执行失败
-- `BLOCKED`: 路径或权限保护阻断
-- `AUDIT_FAILED`: 任务完成但质量门禁不通过
-- `CHAIN_ABORTED`: 链中断
-- `WORKFLOW_AUDIT_FAILED`: 工作流审计失败
-- `WORKFLOW_ERROR`: 工作流异常
-
-后台任务不进入人工 hold，不依赖 `NEEDS_ATTENTION` 继续执行。
-
-### 7.4 异常
-
-禁止吞异常后继续伪成功。
-
-异常必须转成标准 receipt，并在报告模块中保留完整错误内容。
-
-### 7.5 DCC 修改
-
-Maya 修改类 skill 必须包裹 `cmds.undoInfo` undo chunk。
-
-Blender 修改类 skill 必须支持 Undo / Redo 或在结束时恢复临时修改。
-
-只读采集类 skill 不得修改场景状态。
+- skill 必须按 `skills/build_pipeline_skill/SKILL.md` 返回标准执行记录。
+- workflow 只读取上游标准执行记录的 `output` 字段。
+- 报告只渲染标准执行记录，不读取 Markdown 作为机器数据。
 
 ## 8. Workflow 编排契约
 
@@ -238,10 +201,10 @@ Workflow 用 JSON 声明步骤：
 {
   "step_id": "compare_pre",
   "skill_id": "maya_compare_asset_in_scene",
-  "source_path": "{{outputs.resolve_files.result.rig_path}}",
+  "source_path": "{{outputs.resolve_files.rig_path}}",
   "parameters": {
     "input_source": "{{outputs.export_abc.output_path}}",
-    "output_path": "{{input.info_dir}}/{{outputs.resolve_files.result.rig_stem}}_pre_compare_result.json",
+    "output_path": "{{input.info_dir}}/{{outputs.resolve_files.rig_stem}}_pre_compare_result.json",
     "cache_group": "{{config.stages.rig.geom_roots.0}}",
     "label_source": "tex",
     "label_target": "rig"
@@ -257,7 +220,7 @@ Workflow 用 JSON 声明步骤：
 - DCC 根节点、项目路径、组名等项目差异使用 `{{config...}}`。
 - 中间产物路径使用 `{{input.info_dir}}`。
 - 上游产物通过 `{{outputs.step_id.output_path}}` 传递。
-- 多字段结构化输出通过 `outputs.result` 传递，例如 `{{outputs.resolve_files.result.source_path}}`。
+- 多字段结构化输出直接通过上游记录的 `output` 传递，例如 `{{outputs.resolve_files.source_path}}`。
 - 主对比/拼装 workflow 必须先执行 `resolve_asset_files`，只传资产名时由该节点查服务器最新 tex/rig；显式传 `source_path` / `extra_params.rig_path` 时由该节点校验后透传。
 - 未显式传中间产物输出路径时，skill 只能从任务沙盒 `.info` 推导；不能回退输入文件同目录。
 
@@ -303,6 +266,62 @@ updated target rig
   -> post_compare_result.json
   -> version-up scene
 ```
+
+`maya_compare_asset_in_scene` 必须继续输出 `compare_result.json`。原因是该文件是 `maya_sync_rig_incremental` 的机器输入，记录完整 DAG、配对关系和动作类型；它不是给人工报告直接阅读的正文。
+
+`compare_result.json` 内部可以继续保留算法字段，例如 `paired`、`only_a`、`only_b`、`actionability`。这些字段服务于同步和审计，不作为主报告字段名。报告只展示标准执行记录 `output` 中整理后的四类字段。
+
+对比 skill 的标准执行记录中，`output` 只展示可读且可串联的核心字段：
+
+```json
+{
+  "skill": "maya_compare_asset_in_scene",
+  "input": {
+    "source_path": "Y:/.../ysj_chr_maYouA_rig_rigMaster_v001.ma",
+    "input_source": "Y:/.../.info/ysj_chr_maYouA_tex_texMaster_v001.abc",
+    "output_path": "Y:/.../.info/ysj_chr_maYouA_rig_rigMaster_v001_pre_compare_result.json",
+    "cache_group": "|Group|Geometry|cache;|*|geo",
+    "label_source": "tex",
+    "label_target": "rig"
+  },
+  "output": {
+    "output_path": "Y:/.../.info/ysj_chr_maYouA_rig_rigMaster_v001_pre_compare_result.json",
+    "matched_total": 25,
+    "matched_same": [
+      {
+        "source": "maYouA_M_eyebrow1Shape",
+        "target": "eyebrow_mshShape",
+        "action": "ORIG_INJECT"
+      }
+    ],
+    "matched_different": [],
+    "only_source": [],
+    "only_target": []
+  },
+  "status": "SUCCESS",
+  "elapsed_sec": 1.2
+}
+```
+
+四类对比输出定义：
+
+| 字段 | 含义 |
+|---|---|
+| `matched_same` | source 在 target 中找到可接受配对；包含 `IDENTICAL` 和 `ORIG_INJECT`，不算阻断问题 |
+| `matched_different` | source 在 target 中找到配对，但几何不同，需要后续处理或审查 |
+| `only_source` | 只存在于 source，target 中没有对应对象 |
+| `only_target` | 只存在于 target，source 中没有对应对象 |
+
+`matched_total` 只是 `matched_same + matched_different` 的数量。不要在报告里使用含义模糊的 `paired` / `identical` 作为主字段。
+
+旧字段解释：
+
+| 旧字段 | 实际含义 | 新报告字段 |
+|---|---|---|
+| `paired` | source 与 target 成功建立配对的总数；例如 `paired: 25` 表示 25 个 source mesh 找到了 target mesh | `matched_total` |
+| `identical` | 已配对且几何可直接接受的对象列表；包含算法层 `IDENTICAL` 和 `ORIG_INJECT` | `matched_same` |
+| `only_a` | 只在 source 侧存在 | `only_source` |
+| `only_b` | 只在 target 侧存在 | `only_target` |
 
 文件位置：
 
@@ -357,4 +376,4 @@ sandbox/
 - 最终输出按版本递增保存到沙盒根目录
 - 成功或失败均写入统一 Markdown 报告
 - `manifest.json` 能索引本次任务的输入、输出、状态
-- 下游 skill 只消费 JSON/ABC/receipt outputs，不消费 Markdown
+- 下游 skill 只消费上游标准执行记录 `output`、JSON、ABC，不消费 Markdown

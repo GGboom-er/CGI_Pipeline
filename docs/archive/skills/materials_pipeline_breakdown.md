@@ -94,15 +94,17 @@ Maya 无来源信息时的 UV 象限推断仍归 `maya_assign_udim_materials` / 
 {sandbox}/.info/{source_stem}_materials.json
 ```
 
-receipt.outputs：
+标准执行记录 `output`：
 
 ```json
 {
-  "output_path": "..._materials.json"
+  "output_path": "..._materials.json",
+  "material_count": 19,
+  "assignment_count": 28
 }
 ```
 
-`maya_apply_materials` 修改当前 Maya 沙盒场景，不产出文件路径。
+`maya_apply_materials` 修改当前 Maya 沙盒场景，不产出文件路径；输出使用 `scene`、`material_count`、`assignment_count` 等结构化字段。
 
 ## 5. `_materials.json` 数据内容
 

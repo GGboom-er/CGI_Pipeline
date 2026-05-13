@@ -10,7 +10,7 @@
 > 真相参考：
 > - 代码：`core/asset_info_schema.py::compare()` 及其三步漏斗
 > - skill：`skills/pipeline_compare_asset/SKILL.md`
-> - 全局：`CLAUDE.md`
+> - 全局：`AGENTS.md`
 >
 > 保留本文是因为推导过程与分类哲学仍有参考价值。新工作请以代码和上述
 > SKILL.md 为准。

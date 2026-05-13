@@ -7,7 +7,7 @@
 > REORDER 等）以及 `subset_mapping / free_vertices` 指令已在当前
 > compare 引擎中合并/重命名。
 >
-> 真相以 `core/asset_info_schema.py` 与 `CLAUDE.md` 为准。保留本文
+> 真相以 `core/asset_info_schema.py` 与 `AGENTS.md` 为准。保留本文
 > 供回顾设计思路。
 
 本方案旨在结合 `research` 目录下的高端学术算法，构建一条能够自动化抵御各类恶劣美术输入的"拓扑无关绑定迁移管线"。

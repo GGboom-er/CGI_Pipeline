@@ -49,7 +49,7 @@ cmds.commandPort(name=":7009", sourceType="python", echoOutput=True)
 
 工作流引擎 (`execute_chain` / `execute_workflow`) 按 skill 的 `dcc` 属性自动分段：
 - 同 DCC 的连续步骤合并为一段（共享 DCC 会话）
-- 段间通过 `{{outputs.step_id.output_path}}` 或 `{{outputs.step_id.result.xxx}}` 模板变量传递数据
+- 段间通过 `{{outputs.step_id.field}}` 模板变量读取上游标准执行记录的 `output.field`
 - 支持断点恢复（Redis 持久化已完成段 + outputs）
 
 ## 快速开始
