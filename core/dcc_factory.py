@@ -52,6 +52,14 @@ class WarmWorkerProxy:
         self.real_worker = pool_entry['worker']
         pool_entry['task_count'] += 1
         self.worker_id = self.real_worker.worker_id
+
+    def start(self):
+        """兼容旧调用方。
+
+        WarmWorkerProxy 在 __init__ 中已经确保真实 DCC worker 启动；
+        CLI 和旧测试仍可能显式调用 start()，这里保持幂等 no-op。
+        """
+        return True
         
     def run_skill(self, payload):
         return self.real_worker.run_skill(payload)

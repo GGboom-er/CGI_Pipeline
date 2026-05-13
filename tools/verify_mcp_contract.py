@@ -283,6 +283,94 @@ def check_workflow_internal_outputs(errors: list[str]) -> None:
                     )
 
 
+def check_tex_to_rig_hierarchy_presync(errors: list[str]) -> None:
+    """把旧 |*|geo 预同步归一化链路固化到总门禁。"""
+    wf_path = ROOT / "workflows" / "tex_to_rig_verify_and_sync.json"
+    workflow = json.loads(_read_text(wf_path))
+    steps = workflow.get("steps", [])
+    order = {step.get("step_id"): index for index, step in enumerate(steps)}
+
+    required_steps = [
+        "check_hierarchy_pre",
+        "fix_hierarchy_pre",
+        "check_hierarchy_ready",
+        "compare_pre",
+        "sync",
+        "check_hierarchy_post",
+    ]
+    missing = [step_id for step_id in required_steps if step_id not in order]
+    if missing:
+        errors.append(f"{wf_path.name}: 缺少层级预同步步骤 {missing}")
+        return
+
+    if not (order["check_hierarchy_pre"] < order["fix_hierarchy_pre"] < order["check_hierarchy_ready"] < order["compare_pre"] < order["sync"]):
+        errors.append(f"{wf_path.name}: 层级 check/fix/check 必须发生在 compare/sync 之前")
+
+    step_map = {step.get("step_id"): step for step in steps}
+    check_pre = step_map["check_hierarchy_pre"]
+    if check_pre.get("source_path") != "{{outputs.resolve_files.result.rig_path}}":
+        errors.append(f"{wf_path.name}: check_hierarchy_pre 必须负责打开 rig 沙盒副本")
+
+    for step_id in ("check_hierarchy_pre", "check_hierarchy_ready", "check_hierarchy_post"):
+        params = step_map[step_id].get("parameters") or {}
+        if params.get("block_extra_top_nodes") is not False:
+            errors.append(f"{wf_path.name} {step_id}: 额外非空顶层节点默认只能报告，不能阻断")
+
+    expected_active = "{{outputs.fix_hierarchy_pre.result.active_rig_root}};{{config.stages.rig.geom_roots.0}}"
+    if (step_map["compare_pre"].get("parameters") or {}).get("cache_group") != expected_active:
+        errors.append(f"{wf_path.name}: compare_pre 必须优先读取 fix 输出 active_rig_root")
+    if (step_map["sync"].get("parameters") or {}).get("cache_group") != expected_active:
+        errors.append(f"{wf_path.name}: sync 必须与 compare_pre 使用同一个 active_rig_root")
+    if (step_map["sync"].get("parameters") or {}).get("compare_result") != "{{outputs.compare_pre.compare_result}}":
+        errors.append(f"{wf_path.name}: sync 必须直传 compare_pre.compare_result，避免再读盘漂移")
+
+    check_text = _read_text(ROOT / "skills" / "maya_check_asset_hierarchy" / "maya_check_asset_hierarchy.py")
+    for needle in (
+        "legacy_geo_roots",
+        "active_rig_root",
+        "active_rig_mesh_count",
+        "block_extra_top_nodes",
+        'phase == "pre_sync"',
+    ):
+        if needle not in check_text:
+            errors.append(f"maya_check_asset_hierarchy: 缺少预同步事实字段/判定 {needle}")
+
+    fix_text = _read_text(ROOT / "skills" / "maya_fix_asset_hierarchy" / "maya_fix_asset_hierarchy.py")
+    normalize_idx = fix_text.find("normalized_roots, normalized_created, renamed_tops, preserved_tops = _normalize_legacy_geo_roots")
+    ensure_idx = fix_text.find("required_root, created_groups = _ensure_transform_path(required_root)")
+    if normalize_idx < 0 or ensure_idx < 0 or normalize_idx > ensure_idx:
+        errors.append("maya_fix_asset_hierarchy: 必须先归一旧 |*|geo，再创建标准 cache 容器")
+    for needle in ('"RIG_geo"', '_as_bool(params.get("delete_extra_top_nodes"), False)', '_safe_delete_top_nodes(check_result)'):
+        if needle not in fix_text:
+            errors.append(f"maya_fix_asset_hierarchy: 缺少绑定保护逻辑 {needle}")
+    if 'check_result.get("extra_top_nodes") or []' in fix_text:
+        errors.append("maya_fix_asset_hierarchy: 禁止按 extra_top_nodes 删除顶层节点")
+
+    sync_text = _read_text(ROOT / "skills" / "maya_sync_rig_incremental" / "maya_sync_rig_incremental.py")
+    for needle in (
+        'cmds.objExists("|Group")',
+        'cmds.ls("|Group|Geometry"',
+        "def _register_rig_lookup",
+        "def _strip_rig_parts",
+        "keep_abs_index=rig_start",
+    ):
+        if needle not in sync_text:
+            errors.append(f"maya_sync_rig_incremental: 缺少 RIG_geo/root DAG 防回归逻辑 {needle}")
+    if 'cmds.ls("Geometry", long=True' in sync_text:
+        errors.append("maya_sync_rig_incremental: 禁止随便选择任意 Geometry 节点创建 cache")
+
+
+def check_cli_worker_interface(errors: list[str]) -> None:
+    """CLI 仍会显式 start worker，所有 create_worker 返回值必须支持该接口。"""
+    text = _read_text(ROOT / "core" / "dcc_factory.py")
+    if "class WarmWorkerProxy" not in text:
+        errors.append("core/dcc_factory.py: 缺少 WarmWorkerProxy")
+        return
+    warm_start = re.search(r"class WarmWorkerProxy:.*?\n    def start\(self\):", text, re.S)
+    if not warm_start:
+        errors.append("core/dcc_factory.py: WarmWorkerProxy 必须提供 start() 兼容旧 CLI/测试入口")
+
+
 def check_default_output_fallbacks(errors: list[str]) -> None:
     """默认输出路径不得回退到输入文件同目录。"""
     checks = {
@@ -379,6 +467,8 @@ def main() -> int:
     check_text_patterns(errors)
     check_workflow_resume_order(errors)
     check_workflow_internal_outputs(errors)
+    check_tex_to_rig_hierarchy_presync(errors)
+    check_cli_worker_interface(errors)
     check_default_output_fallbacks(errors)
     check_receipt_output_contract(errors)
     if errors:

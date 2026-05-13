@@ -57,7 +57,7 @@ category: "inspect"
 - 读取 `input_source/source_abc/source_info`。
 - 从当前 Maya 场景的 `cache_group` 采集 target rig ShapeOrig 几何。
 - 调用 `core.asset_info_schema.compare(source, target)`。
-- 写出标准 `compare_result.v1` JSON，并通过 `report_sections` 返回结构化折叠章节。
+- 写出标准 `compare_result.v1` JSON，并在标准执行记录 `output` 中返回可读的对比分类。
 
 ### 🔵 核心代码与扩展 (IMPLEMENTATION)
 - `execute()` 位于 `skills/maya_compare_asset_in_scene/maya_compare_asset_in_scene.py`。
@@ -74,12 +74,23 @@ category: "inspect"
 - `label_source` (string): 选填 | 自动推断 | source 标签。
 - `label_target` (string): 选填 | `rig` | target 标签。
 
-### 🟣 输出字段 (OUTPUTS)
-receipt.outputs:
-- `output_path` (str): `compare_result.json` 绝对路径。
+### 🟣 输入输出记录 (RECORD)
 
-receipt.report_sections:
-- 当前对比的结构化折叠章节：对比来源、对比概览、通过配对、几何差异、源侧独有、目标独有。
+标准执行记录 `input`:
+- `source_path` (str): 当前已打开的 target rig Maya 场景完整路径。
+- `input_source` (str): source 侧 ABC 或 `_info.json` 完整路径。
+- `output_path` (str): `compare_result.json` 目标完整路径。
+- `cache_group` (str): target rig 场景中的几何根组。
+- `label_source` (str): source 标签。
+- `label_target` (str): target 标签。
 
-receipt.report_content:
-- 当前对比的旧 Markdown 摘要，保留用于兼容；新报告优先消费 `report_sections`。
+标准执行记录 `output`:
+- `output_path` (str): `compare_result.json` 绝对路径，供 `maya_sync_rig_incremental` 消费。
+- `matched_same` (int): source 在 target 中找到可接受配对的数量；包含算法层 `IDENTICAL` 和 `ORIG_INJECT`。
+- `matched_different` (int): source 在 target 中找到配对但几何不同的数量。
+- `only_source` (int): 只存在于 source 的对象数量。
+- `only_target` (int): 只存在于 target 的对象数量。
+- `blocking` (bool): 是否存在会阻断后续同步的差异。
+- `compare_result` (dict): 标准 `compare_result.v1` 机器字典，供 workflow 直接传给 `maya_sync_rig_incremental`。
+
+`compare_result.json` 内部可以继续保留算法字段 `paired`、`only_a`、`only_b`、`actionability`。这些字段给同步执行器和审计使用，不直接作为主报告字段。

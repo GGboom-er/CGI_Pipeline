@@ -57,7 +57,7 @@ def test_step_upsert_no_duplicate():
     step_block = step_block.split("report:block:end step:main:0:pipeline_compare_asset", 1)[0]
     assert "RUNNING" not in step_block, text
     assert "SUCCESS" in text
-    assert "| 节点 | Skill | 输入 | 输出 | 状态 | 耗时 |" in text
+    assert "| Skill | 输入 | 输出 | 状态 | 耗时 |" in text
     assert "compare_result.json" in text
     print(f"✓ test_step_upsert_no_duplicate → {report}")
 
@@ -83,10 +83,10 @@ def test_error_block_contains_full_detail():
 
     text = report.read_text(encoding="utf-8")
     assert "<details" not in text
-    assert "#### 错误与恢复建议" in text
+    assert "#### 错误信息" in text
     assert "绑定目标缺少 ShapeOrig" in text
     assert "Traceback line 2" in text
-    assert "先运行命名修复" in text
+    assert "先运行命名修复" not in text
     print(f"✓ test_error_block_contains_full_detail → {report}")
 
 
@@ -109,9 +109,12 @@ def test_sections_and_report_content():
         "report_content": "旧格式完整对比报告",
     })
     text = report.read_text(encoding="utf-8")
-    assert "通过配对 | 73 项" in text
-    assert "bodyShape" in text
-    assert "几何差异 | 0 项" in text
+    assert "#### 标准执行记录" in text
+    assert "#### input" in text
+    assert "#### output" in text
+    assert "通过配对 | 73 项" not in text
+    assert "bodyShape" not in text
+    assert "几何差异 | 0 项" not in text
     assert "旧格式完整对比报告" not in text
     print(f"✓ test_sections_and_report_content → {report}")
 
@@ -143,6 +146,35 @@ def test_file_flow_table_has_io_status_elapsed():
     assert "ciweiguai" in text
     assert "已备份" in text
     print(f"✓ test_file_flow_table_has_io_status_elapsed → {report}")
+
+
+def test_internal_chain_history_hidden_from_step_input():
+    sbx = _sandbox("internal_history")
+    report = sbx / "REPORT.md"
+    writer.init_report(report, {"task_id": "task-history", "asset_name": "demo", "run_dir": str(sbx)})
+    step_ctx = {
+        "step_index": 0,
+        "step_total": 1,
+        "skill_id": "save_scene",
+        "source_path": str(sbx / "demo.ma"),
+        "parameters": {
+            "_chain_history": [{"detail": '{"compare_result": {"schema_version": "compare_result.v1"}}'}],
+            "_open_elapsed_sec": 2.0,
+        },
+    }
+    writer.upsert_step_finished(report, step_ctx, {
+        "skill_id": "save_scene",
+        "status": "SUCCESS",
+        "elapsed_sec": 1.0,
+        "input": {},
+        "output": {"output_path": str(sbx / "demo_v002.ma")},
+    })
+    text = report.read_text(encoding="utf-8")
+    assert "_chain_history" not in text
+    assert "compare_result" not in text
+    assert "source_path" in text
+    assert "demo_v002.ma" in text
+    print(f"✓ test_internal_chain_history_hidden_from_step_input → {report}")
 
 
 def test_file_flow_merges_across_segments():
@@ -206,6 +238,7 @@ if __name__ == "__main__":
     test_error_block_contains_full_detail()
     test_sections_and_report_content()
     test_file_flow_table_has_io_status_elapsed()
+    test_internal_chain_history_hidden_from_step_input()
     test_file_flow_merges_across_segments()
     test_open_scene_merges_across_segments()
     print("\n✅ all pass")

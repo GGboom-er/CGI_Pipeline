@@ -5,7 +5,6 @@ from pathlib import Path
 from core.bootstrap import cfg as _cfg
 
 MAX_ITEMS = 20
-ALLOWED_OUTPUT_KEYS = {'output_path', 'report_path', 'result'}
 
 PROJECT_ROOT = Path(_cfg.PROJECT_ROOT)
 REPORTS_DIR = PROJECT_ROOT / 'reports'
@@ -27,6 +26,8 @@ def make_receipt(
     skill_id: str,
     status: str,
     start_time: float,
+    input: dict = None,
+    output: dict = None,
     summary_input: str = '',
     summary_action: str = '',
     summary_count: int = 0,
@@ -38,19 +39,27 @@ def make_receipt(
     report_content: str = '',
     report_sections: list = None,
 ) -> dict:
-    outputs = outputs or {}
-    if not isinstance(outputs, dict):
-        raise TypeError('receipt.outputs 必须是 dict')
-    extra_output_keys = sorted(set(outputs) - ALLOWED_OUTPUT_KEYS)
-    if extra_output_keys:
-        raise ValueError(
-            'receipt.outputs 只能包含 output_path/report_path/result，'
-            f'非法字段: {extra_output_keys}'
-        )
+    if output is None:
+        output = outputs or {}
+    elif outputs:
+        merged = dict(outputs)
+        merged.update(output)
+        output = merged
+    if input is None:
+        input = {}
+    if not isinstance(input, dict):
+        raise TypeError('receipt.input 必须是 dict')
+    if not isinstance(output, dict):
+        raise TypeError('receipt.output 必须是 dict')
 
-    elapsed_min = _sec_to_min(time.time() - start_time)
+    elapsed_sec = round(time.time() - start_time, 3)
+    elapsed_min = _sec_to_min(elapsed_sec)
     receipt = {
+        'skill': skill_id,
+        'input': input,
+        'output': output,
         'status': status,
+        'elapsed_sec': elapsed_sec,
         'skill_id': skill_id,
         'elapsed_min': elapsed_min,
         'summary': {
@@ -60,7 +69,7 @@ def make_receipt(
             'output_label': summary_label,
         },
         'items': (items or [])[:MAX_ITEMS],
-        'outputs': outputs,
+        'outputs': output,
     }
     if error:
         receipt['error'] = error

@@ -69,7 +69,12 @@ def test_compare_result_output_contract():
         report = data.get("compare", {})
         _ok("pairing_groups" in report, "包含 pairing_groups")
         _ok("target_only_dags" in report, "包含 target_only_dags")
-        _ok(set(receipt["outputs"].keys()) == {"output_path"}, "receipt.outputs 只包含 output_path")
+        outputs = receipt["outputs"]
+        _ok(outputs.get("output_path") == output_path, "receipt.outputs 保留 output_path")
+        _ok(outputs.get("compare_result", {}).get("schema_version") == "compare_result.v1",
+            "receipt.outputs 直接暴露 compare_result dict")
+        for key in ("matched_same", "matched_different", "only_source", "only_target"):
+            _ok(key in outputs, f"receipt.outputs 包含报告字段: {key}")
         sections = receipt.get("report_sections") or []
         section_titles = [section.get("title") for section in sections]
         overview = next((section for section in sections if section.get("title") == "对比概览"), {})
@@ -107,6 +112,8 @@ def test_compare_result_defaults_to_info_dir():
         expected = os.path.join(info_dir, "source_info_vs_target_info_compare_result.json")
         _ok(receipt["status"] == "SUCCESS", "compare skill 成功")
         _ok(receipt["outputs"].get("output_path") == expected, "默认 output_path 位于 info_dir")
+        _ok(receipt["outputs"].get("compare_result", {}).get("schema_version") == "compare_result.v1",
+            "默认路径模式也返回 compare_result dict")
         _ok(os.path.isfile(expected), "默认 compare_result 文件存在")
 
 

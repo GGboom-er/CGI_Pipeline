@@ -179,7 +179,7 @@ class SyncRigAssetInput(BaseModel):
     project: str = Field(default="default", description="项目代号")
     asset_name: str = Field(default="untitled", description="资产名称")
     source_path: str = Field(..., description="target 侧 rig 场景路径（Celery 框架约定键名，本 skill 里是被修改的目标场景）")
-    compare_result: str = Field(default="", description="前置对比生成的 compare_result.json。拼装必须依据该结果执行")
+    compare_result: Any = Field(default="", description="前置对比生成的 compare_result.json 路径，或 workflow 上游传入的 output.compare_result 字典。拼装必须依据该结果执行")
     source_abc: str = Field(default="", description="source 侧 ABC 路径，推荐。能重建 NEW mesh")
     source_info: str = Field(default="", description="source 侧 _info.json 路径（无 ABC 时的降级路径）")
     cache_group: str = Field(default="cache", description="target rig 几何根组，由项目配置传入")

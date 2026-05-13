@@ -21,6 +21,7 @@ class SyncContractError(ValueError):
 @dataclass(frozen=True)
 class SyncInputs:
     compare_result_path: str
+    compare_result_data: dict
     source_abc: str
     source_info: str
     cache_group: str
@@ -42,8 +43,11 @@ def parse_sync_inputs(payload: dict) -> SyncInputs:
     params = payload.get("parameters") or {}
     if not isinstance(params, dict):
         params = {}
+    compare_result = params.get("compare_result")
+    compare_result_data = compare_result if isinstance(compare_result, dict) else {}
     return SyncInputs(
-        compare_result_path=_text(params.get("compare_result")),
+        compare_result_path="" if compare_result_data else _text(compare_result),
+        compare_result_data=compare_result_data,
         source_abc=_text(params.get("source_abc") or params.get("abc_path")),
         source_info=_text(params.get("source_info") or params.get("tex_json")),
         cache_group=_candidate_text(params.get("cache_group")) or "cache",
@@ -54,7 +58,7 @@ def parse_sync_inputs(payload: dict) -> SyncInputs:
 
 def validate_sync_inputs(inputs: SyncInputs) -> list[str]:
     errors = []
-    if not inputs.compare_result_path:
+    if not inputs.compare_result_path and not inputs.compare_result_data:
         errors.append(
             "缺少必填参数: compare_result。请先用 maya_compare_asset_in_scene 或 pipeline_compare_asset 生成对比结果。"
         )
@@ -69,9 +73,9 @@ def validate_sync_inputs(inputs: SyncInputs) -> list[str]:
 
 def validate_input_files(inputs: SyncInputs) -> list[str]:
     errors = []
-    required_paths = [
-        ("compare_result", inputs.compare_result_path),
-    ]
+    required_paths = []
+    if inputs.compare_result_path:
+        required_paths.append(("compare_result", inputs.compare_result_path))
     if inputs.source_abc:
         required_paths.append(("source_abc", inputs.source_abc))
     elif inputs.source_info:
@@ -150,6 +154,13 @@ def load_compare_result_file(compare_result_path: str) -> tuple[dict, dict, dict
         data = json.load(fp)
     report, legacy_source_info = validate_compare_result_payload(data)
     return data, report, legacy_source_info
+
+
+def load_compare_result_value(compare_result: Any) -> tuple[dict, dict, dict]:
+    if isinstance(compare_result, dict):
+        report, legacy_source_info = validate_compare_result_payload(compare_result)
+        return compare_result, report, legacy_source_info
+    return load_compare_result_file(_text(compare_result))
 
 
 def summarize_sync_actions(report: dict) -> dict[str, int]:

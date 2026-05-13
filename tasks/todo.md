@@ -83,3 +83,14 @@
 - [x] 2026-05-13 旧 API 残留修复：Dashboard 技能列表改动态 registry，`rename_asset` 移除 `suggest_ai_publish_path` 依赖
 - [x] 2026-05-13 workflow 多占位符修复：同一字符串内多个 `{{config...}}` 正确解析，ciweiguai/maYouB 资产名入口 workflow PASS。
 - [x] 2026-05-13 运行时报告聚合修复：跨 DCC segment 文件流转与打开场景不再互相覆盖，对比摘要改为用户视角问题数。
+- [x] 2026-05-13 maYouB 同步层级核查：新 mesh 生成于绑定内 `Group/Geometry/cache`，旧 `geo` 被保留为 `RIG_geo`。
+- [x] 2026-05-13 新增 `maya_check_asset_hierarchy`：按项目配置检查 required root、顶层散落节点和 cache 有效 mesh。
+- [x] 2026-05-13 标准执行记录规范：报告只渲染 skill/input/output/status/elapsed_sec，对比字段改为 matched_same 等四类。
+- [x] 2026-05-13 skill 规范收敛：`skills/CONVENTION.md` 成为唯一规范，开发指南和运行时总规范只保留引用。
+- [x] 2026-05-13 skill 构建规则最终收敛：`build_pipeline_skill` 成为唯一规则入口，`CONVENTION.md` 仅保留兼容跳转。
+- [x] 2026-05-13 skill 规范单文档化：删除跳转页，唯一规范正文固定为 `skills/build_pipeline_skill/SKILL.md`。
+- [x] 2026-05-13 新增 `maya_fix_asset_hierarchy`：创建标准几何根、迁移非标准 cache 内容，并清理顶层 Group 以外锁定节点。
+- [x] 2026-05-13 层级修复链路收紧：`maya_fix_asset_hierarchy` 改为消费 `maya_check_asset_hierarchy.outputs.result`，不再自行二次发现修复目标。
+- [x] 2026-05-13 两分支合并：标准执行记录、compare_result 直传、层级 check/fix 已合入 `tex_to_rig_verify_and_sync`，maYouB workflow 巡航 PASS。
+- [x] 2026-05-13 旧 `|*|geo` 预同步归一：`|MaYou_B|geo` 改为 `|Group|Geometry|RIG_geo`，同步输出 `|Group|Geometry|cache`，maYouB workflow PASS。
+- [x] 2026-05-13 问题塌陷到代码：层级预同步顺序、RIG_geo DAG 映射、额外顶层非阻断、CLI WarmWorkerProxy.start 兼容均进入总门禁/测试。

@@ -1,142 +1,291 @@
 ---
 skill_id: "build_pipeline_skill"
-name: "技能构建向导"
+name: "Skill 生成与更新规范"
 dcc: "pipeline"
-description: "Meta-Skill，专门用于引导大模型（AI）自动化、规范化地创建 CGI Pipeline 的新技能。"
+description: "唯一的 CGI Pipeline skill 生成与更新规范文档。当用户要求新增、修改、整理、规范化 skill 时，必须先使用本 skill。"
 parameters: {}
 io:
   inputs: []
   outputs:
-    - name: "protocol"
+    - name: "output_path"
       type: "report"
-      label: "构建协议"
+      label: "Skill 生成与更新规范"
 category: "system"
 ---
 
-# 🤖 [AI 专属向导] 技能构建协议 (Skill Builder Protocol)
+# Skill 生成与更新规范
 
-> [!IMPORTANT]
-> **致 AI 代理（包括 Claude, Gemini 等）**：
-> 当用户明确要求“创建新技能”或“写一个新功能放入管线”时，你必须**立即停止直接输出代码**，并严格遵守本指南进入【技能构建向导模式】。
+本文档是 CGI Pipeline 中 **生成、更新、整理、审查 skill 的唯一规范和标准**。
 
-本技能是一个交互式的 Meta-Skill，旨在确保你写出的代码 100% 符合 `CGI Pipeline v2` 架构与 `CONVENTION.md` 规范。
+用户说“写一个新 skill / 新增技能 / 改造 skill / 统一 skill 规范 / 整理 skill 输出”时，AI 必须先读取本文件，再执行后续工作。
 
----
+其它文档不得另写一套 skill 规范。
 
-### 🔴 核心限制 (CRITICAL CONSTRAINTS)
-这是 AI 构建协议，不负责直接修改 DCC 场景。用户要求创建新技能时，应先输出蓝图并等待确认。
+## 🔴 核心限制 (CRITICAL CONSTRAINTS)
 
-### 🟢 核心功能 (CORE FUNCTION)
-引导 AI 按 CGI Pipeline v2 规范创建新技能，覆盖意图捕获、蓝图、代码生成和交付检查。
+- 不允许直接写散装脚本到 `skills/` 根目录。
+- 不允许新增第二套返回结构。
+- 不允许继续扩展旧字段：`summary`、`items`、`report_content`、`report_sections`、`recovery_hint`。
+- 不允许把 Markdown 报告当作下游机器数据。
+- 不允许让 sync 类 skill 只能消费临时 JSON 路径；能直接传 dict 时，应支持 dict 直连。
+- 修改 DCC 场景的 skill 必须只处理沙盒副本，不能覆盖源资产或发布目录。
+- 需要用户决策的设计变更，先给蓝图，不直接写代码。
 
-### 🔵 核心代码与扩展 (IMPLEMENTATION)
-执行文件仅返回协议说明 receipt；真正的脚手架生成应由 AI 按本文件约束创建 `skills/{skill_id}/`。
+## 🟢 核心功能 (CORE FUNCTION)
 
-### 🟡 参数规则 (PARAMETERS)
-无运行时参数。
+本 skill 规定一个确定流程：
 
-## 阶段一：意图捕获 (Discovery Phase)
+```text
+意图捕获 -> 蓝图确认 -> 生成/修改 skill -> 契约检查 -> 报告输出 -> 经验沉淀
+```
 
-向用户发送一条清晰的消息，要求确认以下必填项（如果用户尚未提供）：
-1. **技能 ID (Skill ID)**：如 `maya_clean_skinweights`。
-2. **目标执行环境 (DCC)**：`maya` / `blender` / `pipeline`（纯系统级）？
-3. **核心功能与危险等级**：该技能会不会破坏文件？是否需要强制存入任务沙盒？
-4. **所需参数 (Parameters)**：需要用户在面板上填入什么变量？（例如阈值、开关、特定节点名字等）。
+最终产物必须是一个可注册、可调用、可串联的 CGI Pipeline skill。
 
-*（在用户给出明确答复前，不得进入下一阶段！）*
+## 🔵 核心代码与扩展 (IMPLEMENTATION)
 
----
+skill 文件结构固定：
 
-## 阶段二：输出技能蓝图 (Blueprinting Phase)
+```text
+skills/{skill_id}/
+├── {skill_id}.py
+├── SKILL.md
+└── __init__.py
+```
 
-根据收集到的信息，严格按照以下“四段式”结构向用户展示 `SKILL.md` 的初稿供其审核：
+Python 入口固定：
+
+```python
+def execute(payload: dict) -> dict:
+```
+
+必须通过 `core.receipt.make_receipt(...)` 返回标准执行记录。当前代码迁移期间如果底层 receipt 仍保留兼容字段，新增/改造 skill 的对外设计仍必须按本文标准记录设计。
+
+## 🟡 参数规则 (PARAMETERS)
+
+本 meta-skill 无运行时参数。它约束 AI 的创建流程，不直接处理 DCC 场景。
+
+## 🟣 标准执行记录 (RECORD)
+
+所有业务 skill 对外只允许一条标准执行记录：
+
+```json
+{
+  "skill": "save_scene",
+  "input": {
+    "source_path": "Y:/.../rig_v001.ma"
+  },
+  "output": {
+    "output_path": "Y:/.../rig_v002.ma"
+  },
+  "status": "SUCCESS",
+  "elapsed_sec": 0.5
+}
+```
+
+字段规则：
+
+| 字段 | 规则 |
+|---|---|
+| `skill` | 必须等于 `skill_id` |
+| `input` | 本次实际生效的输入参数 |
+| `output` | 本次实际产物和可传给下游的数据 |
+| `status` | 执行框架判定的状态 |
+| `elapsed_sec` | 实际执行秒数 |
+
+### input
+
+- 只记录实际参与执行的参数。
+- 路径必须是完整路径。
+- 不写 `A vs B`、`A + B`、`当前文件` 这类拼接描述。
+- 如果框架用 `payload.source_path` 打开文件，必须写入 `input.source_path`。
+- `payload.parameters` 中实际参与执行的字段按原参数名写入 `input`。
+
+### output
+
+- 文件产物统一写 `output.output_path`，必须是完整路径。
+- 无文件产物但修改当前 DCC 场景时，写 `output.scene = "current_maya_scene"` 或 `output.scene = "current_blender_scene"`。
+- 数量统计直接写在 `output`，例如 `mesh_count`、`failed_count`、`material_count`。
+- 业务明细按清晰字段命名写入 `output`。
+- 机器对象可以直接写入 `output`，例如 `compare_result` dict；报告渲染器只能显示摘要，不展开为噪声正文。
+- 超大数据优先落 `.info` 文件，并用 `output.output_path` 暴露路径。
+
+## 1. 意图捕获
+
+开始创建或改造 skill 前，必须确认：
+
+| 决策项 | 必须明确的内容 |
+|---|---|
+| `skill_id` | 文件夹名、Python 文件名、frontmatter 必须一致 |
+| `dcc` | `maya` / `blender` / `pipeline` |
+| 职责边界 | 做什么、不做什么 |
+| 输入参数 | 参数名、类型、是否必填、默认值 |
+| 输出字段 | `output` 中会暴露哪些字段，哪些给下游消费 |
+| 文件产物 | 是否落 `.info`，是否需要 `output_path` |
+| 风险等级 | 只读 / 修改沙盒场景 / 破坏性 |
+| 验证方式 | 普通 Python 测试、DCC 测试或真实资产测试 |
+
+信息不足时先问用户，不得猜。
+
+## 2. 蓝图格式
+
+写代码前必须先给用户蓝图：
 
 ```markdown
+## Skill 蓝图
+
+- skill_id:
+- dcc:
+- category:
+- 职责:
+- 不负责:
+- input:
+- output:
+- workflow 连接:
+- 风险:
+- 验证:
+```
+
+用户确认后再改文件。
+
+## 3. SKILL.md 规则
+
+frontmatter 必填：
+
+```yaml
 ---
-skill_id: "{skill_id}"
-name: "描述"
-dcc: "{dcc}"
-category: "process"
-description: "{用一两句话简明扼要地描述}"
+skill_id: "xxx"
+name: "中文显示名"
+dcc: "maya"
+description: "一句话说明什么时候使用这个 skill。"
 parameters:
   param_name:
     type: "string"
-    description: "说明"
+    default: ""
+    description: "参数说明"
+io:
+  inputs:
+    - name: "scene"
+      type: "scene_file"
+      label: "Maya 场景"
+  outputs:
+    - name: "output_path"
+      type: "json_file"
+      label: "输出文件"
+category: "inspect"
 ---
-
-### 🔴 核心限制 (CRITICAL CONSTRAINTS)
-- 列出防线，例如：不可逆操作、禁止使用硬编码路径、需在 undo chunk 内。
-
-### 🟢 核心逻辑 (CORE LOGIC)
-- 说明代码如何运作。
-
-### 🔵 核心代码与扩展 (IMPLEMENTATION)
-- 列出关键的依赖模块或代码片段。
-
-### 🟡 参数规则 (PARAMETERS)
-- `param_name` (type): 说明。默认值。
 ```
 
-*（必须询问用户：“这份架构设计是否符合您的预期？可以开始生成代码了吗？”）*
+正文必须包含：
 
----
+- `🔴 核心限制 (CRITICAL CONSTRAINTS)`
+- `🟢 核心功能 (CORE FUNCTION)`
+- `🔵 核心代码与扩展 (IMPLEMENTATION)`
+- `🟡 参数规则 (PARAMETERS)`
+- `🟣 标准执行记录 (RECORD)`
 
-## 阶段三：严格生成代码 (Execution Phase)
+## 4. 参数命名
 
-一旦用户批准，生成代码必须严格遵守以下契约，**绝不允许犯这些常见错误**：
+- 对比类双入口：`input_source` / `input_target`，`label_source` / `label_target`。
+- 同步类 source 数据：`source_abc` / `source_info`。
+- 机器对比结果：`compare_result`，优先允许 dict，兼容路径由 skill 自己判断。
+- 文件产物目标路径：`output_path`。
+- ABC 导出目标路径：`abc_path`。
+- asset info 输出路径：`info_path`。
+- 材质 JSON：`materials_path`。
 
-1. **入口函数**：必须且只能暴露 `def execute(payload: dict) -> dict:`。
-2. **标准收据**：必须引用 `from core.receipt import make_receipt`，并在结尾返回该字典。
-3. **异常处理**：
-   - 绝不允许 `try: ... except Exception: pass`！
-   - 发生错误必须通过 `make_receipt(status='ERROR', error="明确的业务级报错文字")` 返回。
-4. **日志与信息爆炸防范**：
-   - 如果技能需要在 `receipt` 中注入 `report_content`（Markdown格式的长列表），必须强制进行截断。
-   - 规则：`MAX_DETAIL_ITEMS = 20`，如果超过 20 条，追加一句 `- *...及其他 N 个*`。
-5. **路径安全**：
-   - 获取项目配置必须使用 `from core.config_loader import load_project_config`。
-   - 不要试图在 Maya 中直接 `cmds.file(save=True)` 覆盖源文件；输出只能落在当前任务沙盒，非法路径必须返回 `BLOCKED`。
-   - 后台技能不得设计成人工暂停后继续；数据契约或 QC 不通过时返回 `AUDIT_FAILED` 并给出 `recovery_hint`。
+禁止新增 `input_a/input_b`、`tex_json`、`abcPath` 这类不清晰或旧式参数。
 
-### 代码模板参考：
-```python
-import time
-import traceback
-from core.receipt import make_receipt
+## 5. Workflow 串联
 
-def execute(payload: dict) -> dict:
-    t0 = time.time()
-    try:
-        project = payload.get('project')
-        params = payload.get('parameters', {})
-        
-        # ... 业务逻辑 ...
-        
-        return make_receipt(
-            skill_id='{skill_id}',
-            status='SUCCESS',
-            start_time=t0,
-            summary_input='输入对象',
-            summary_action='执行了什么',
-            summary_count=1,
-            summary_label='项',
-            outputs={}  # 若产出文件，使用 'output_path'
-        )
-    except Exception as e:
-        return make_receipt(
-            skill_id='{skill_id}',
-            status='ERROR',
-            start_time=t0,
-            error=f"执行失败: {str(e)}\n{traceback.format_exc()}"
-        )
+workflow 只读取上游 `output`：
+
+```json
+{
+  "parameters": {
+    "source_abc": "{{outputs.export_abc.output_path}}",
+    "compare_result": "{{outputs.compare_pre.compare_result}}"
+  }
+}
 ```
 
----
+规则：
 
-## 阶段四：打包与交付 (Packaging Phase)
+- `{{outputs.step_id.field}}` 等于上游 `output.field`。
+- 整串只有一个模板时保留原类型，dict/list 可以直接传给下游。
+- 模板和普通文本混写时转成字符串。
+- 下游 skill 不读 Markdown。
 
-1. 使用 `write_to_file` 工具创建以下文件：
-   - `skills/{skill_id}/SKILL.md`
-   - `skills/{skill_id}/{skill_id}.py`
-   - `skills/{skill_id}/__init__.py` (内容: `from .{skill_id} import execute`)
-2. 向用户发送交付报告，并提醒用户在 Dashboard 或调用链中进行首次测试。
+## 6. 对比类输出
+
+对比类 skill 统一输出：
+
+| 字段 | 含义 |
+|---|---|
+| `matched_total` | `matched_same + matched_different` 数量 |
+| `matched_same` | source 在 target 中找到可接受配对，包含 `IDENTICAL` 和 `ORIG_INJECT` |
+| `matched_different` | source 在 target 中找到配对，但几何不同 |
+| `only_source` | 只存在于 source |
+| `only_target` | 只存在于 target |
+
+推荐：
+
+```json
+{
+  "output": {
+    "compare_result": {
+      "schema_version": "compare_result.v1",
+      "compare": {}
+    },
+    "output_path": "Y:/.../.info/pre_compare_result.json",
+    "matched_total": 25,
+    "matched_same": [],
+    "matched_different": [],
+    "only_source": [],
+    "only_target": []
+  }
+}
+```
+
+`compare_result` 是机器对象，可以直接传给 sync；`output_path` 只是审计落盘路径。
+
+## 7. DCC 约束
+
+Maya：
+
+- 修改类操作必须包裹 undo chunk。
+- 优先 OpenMaya API 2.0。
+- 禁止直接覆盖源文件。
+- 当前场景由框架打开，skill 内不要重复打开。
+
+Blender：
+
+- 后台模式禁止依赖 UI context。
+- 修改类操作必须支持 Undo / Redo 或只改沙盒副本。
+
+Pipeline：
+
+- 不依赖 DCC。
+- 适合路径解析、JSON 处理、文件系统和报告重建。
+
+## 8. 禁止事项
+
+- 禁止返回 `summary/items/report_content/report_sections/recovery_hint` 作为新契约。
+- 禁止业务 skill 写 Markdown 报告。
+- 禁止业务 skill 写 audit。
+- 禁止写源文件同目录 fallback。
+- 禁止吞异常后返回成功。
+- 禁止为了兼容旧字段继续扩大输入输出形态。
+
+## 9. 交付检查
+
+交付前必须确认：
+
+- [ ] `skills/{skill_id}/SKILL.md` 存在。
+- [ ] `skills/{skill_id}/{skill_id}.py` 存在。
+- [ ] `skills/{skill_id}/__init__.py` re-export `execute`。
+- [ ] `input` 字段能解释本次 skill 接收了什么。
+- [ ] `output` 字段能直接给报告和下游 skill 使用。
+- [ ] 文件路径都是完整路径。
+- [ ] 无旧展示字段。
+- [ ] 修改 DCC 场景时有 undo / 沙盒保护。
+- [ ] 有测试或明确说明未跑测试的原因。

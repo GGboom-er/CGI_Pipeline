@@ -79,6 +79,7 @@ def summarize_compare_outcomes(report: dict) -> dict:
     counts = {
         "paired": len(paired),
         "identical": len(identical),
+        "matched_same": len(identical),
         "matched_different": len(matched_different),
         "only_source": len(only_source),
         "only_target": len(only_target),

@@ -8,6 +8,7 @@
 
 import os
 import time
+import json
 
 from core.receipt import make_receipt
 from core.asset_info_schema import compare
@@ -112,6 +113,8 @@ def execute(payload: dict) -> dict:
         output_path = write_compare_result(
             output_path, report, input_a, input_b, label_a, label_b
         )
+        with open(output_path, 'r', encoding='utf-8') as fp:
+            compare_result_payload = json.load(fp)
     except Exception as e:
         return make_receipt('pipeline_compare_asset', 'ERROR', t0,
                             error=f'写入 compare_result 失败: {e}')
@@ -124,6 +127,22 @@ def execute(payload: dict) -> dict:
         skill_id='pipeline_compare_asset',
         status='SUCCESS',
         start_time=t0,
+        input={
+            'input_source': input_a,
+            'input_target': input_b,
+            'output_path': output_path,
+            'label_source': label_a,
+            'label_target': label_b,
+        },
+        output={
+            'output_path': output_path,
+            'matched_same': counts['matched_same'],
+            'matched_different': counts['matched_different'],
+            'only_source': counts['only_source'],
+            'only_target': counts['only_target'],
+            'blocking': counts['blocking'],
+            'compare_result': compare_result_payload,
+        },
         summary_input=f'{os.path.basename(input_a)} vs {os.path.basename(input_b)}',
         summary_action=status_msg,
         summary_count=counts['blocking'],

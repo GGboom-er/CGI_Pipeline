@@ -29,6 +29,7 @@ from skills.maya_sync_rig_incremental.sync_contract import (
     build_sync_report_sections,
     format_action_summary,
     load_compare_result_file,
+    load_compare_result_value,
     parse_sync_inputs,
     summarize_sync_actions,
     validate_input_files,
@@ -54,8 +55,8 @@ MAX_K_SEARCH = 50           # 法线失败时向下检索备选面的数量
 # 辅助函数
 # ═══════════════════════════════════════════
 
-def _load_compare_result(compare_result_path):
-    return load_compare_result_file(compare_result_path)
+def _load_compare_result(compare_result_value):
+    return load_compare_result_value(compare_result_value)
 
 
 def _sync_receipt(status, start_time, phase, error="", items=None,
@@ -635,12 +636,23 @@ def _ensure_hierarchy(group_parts):
     current = ""
     for i, grp in enumerate(group_parts):
         if grp == "Group":
-            existing = cmds.ls("Group", long=True, type="transform")
-            if existing:
-                current = existing[0]
-                continue
+            if cmds.objExists("|Group"):
+                current = (cmds.ls("|Group", long=True, type="transform") or ["|Group"])[0]
+            else:
+                current = cmds.group(em=True, name="Group")
+            continue
+        elif grp == "Geometry":
+            parent = current or (cmds.ls("|Group", long=True, type="transform") or [""])[0]
+            target = f"{parent}|Geometry" if parent else "|Geometry"
+            if not cmds.objExists(target):
+                if parent:
+                    cmds.group(em=True, name="Geometry", parent=parent)
+                else:
+                    cmds.group(em=True, name="Geometry")
+            current = target
+            continue
         elif grp == "cache":
-            geo = cmds.ls("Geometry", long=True, type="transform")
+            geo = cmds.ls("|Group|Geometry", long=True, type="transform") or []
             if geo:
                 geo_path = geo[0]
                 cache_path = f"{geo_path}|cache"
@@ -1236,6 +1248,7 @@ def execute(payload: dict) -> dict:
     abc_path = sync_inputs.source_abc
     tex_json = sync_inputs.source_info
     compare_result_path = sync_inputs.compare_result_path
+    compare_result_value = sync_inputs.compare_result_data or compare_result_path
     cache_group = sync_inputs.cache_group
     rig_path = sync_inputs.rig_path
 
@@ -1263,7 +1276,7 @@ def execute(payload: dict) -> dict:
 
     # ── 读取 source 数据 / 外部 compare_result ──
     try:
-        _, external_report, light_tex_info = _load_compare_result(compare_result_path)
+        _, external_report, light_tex_info = _load_compare_result(compare_result_value)
         if abc_path:
             from core.abc_reader import read_abc_as_info
             full_tex_info = read_abc_as_info(abc_path)
@@ -1277,7 +1290,8 @@ def execute(payload: dict) -> dict:
                     tex_info = json.load(f)
             else:
                 tex_info = light_tex_info
-        items.append(make_item("CompareResult", f"使用对比结果: {os.path.basename(compare_result_path)}"))
+        compare_label = os.path.basename(compare_result_path) if compare_result_path else "上游 output.compare_result"
+        items.append(make_item("CompareResult", f"使用对比结果: {compare_label}"))
     except SyncContractError as e:
         return _sync_receipt(
             "ERROR", t0, "compare_result_contract",
@@ -1433,10 +1447,36 @@ def execute(payload: dict) -> dict:
         # ── 预处理：tex mesh 表（key 保持原样，与 pairing_groups.abc_dags 一致）──
         tex_meshes = dict(tex_info.get("meshes", {}))
 
-        # compare 的 rig_dag 是相对路径格式 (如 "cache|grp|meshShape")
-        # rig_meshes 的 key 是 Maya fullPath (如 "|Group|RIG_cache|RIG_grp|RIG_meshShape")
-        # 建立反向映射：去掉 RIG_ 前缀的相对路径 → fullPath
+        # compare 的 rig_dag 可能来自同步前的真实 Maya fullPath。
+        # 预同步修复会把旧 |asset|geo 归一到 |Group|Geometry|RIG_geo，
+        # 所以根节点自身的 RIG_ 需要保留一组 lookup，同时子节点继续去前缀。
         rig_dag_lookup = {}
+
+        def _register_rig_lookup(key, full_path):
+            if not key:
+                return
+            rig_dag_lookup[key] = full_path
+            if not key.startswith("|"):
+                rig_dag_lookup["|" + key] = full_path
+
+        def _strip_rig_parts(parts_seq, keep_first=False, keep_abs_index=None):
+            stripped = []
+            for local_index, part_data in enumerate(parts_seq):
+                if isinstance(part_data, tuple):
+                    abs_index, part = part_data
+                else:
+                    abs_index, part = local_index, part_data
+                if not part:
+                    continue
+                keep_this = (keep_first and local_index == 0) or (keep_abs_index is not None and abs_index == keep_abs_index)
+                if keep_this:
+                    stripped.append(part)
+                elif part.startswith(rig_prefix):
+                    stripped.append(part[len(rig_prefix):])
+                else:
+                    stripped.append(part)
+            return stripped
+
         for full_path in rig_meshes:
             parts = full_path.split("|")
             rig_start = -1
@@ -1445,19 +1485,17 @@ def execute(payload: dict) -> dict:
                     rig_start = i
                     break
             if rig_start >= 0:
-                rel_parts = [p[len(rig_prefix):] if p.startswith(rig_prefix) else p
-                             for p in parts[rig_start:]]
-                rig_dag_lookup["|".join(rel_parts)] = full_path
+                rel_source = parts[rig_start:]
+                rel_parts = _strip_rig_parts(rel_source)
+                rel_keep_root_parts = _strip_rig_parts(rel_source, keep_first=True)
+                _register_rig_lookup("|".join(rel_parts), full_path)
+                _register_rig_lookup("|".join(rel_keep_root_parts), full_path)
 
-            all_rel_parts = [
-                p[len(rig_prefix):] if p.startswith(rig_prefix) else p
-                for p in parts
-                if p
-            ]
-            if all_rel_parts:
-                all_rel_key = "|".join(all_rel_parts)
-                rig_dag_lookup[all_rel_key] = full_path
-                rig_dag_lookup["|" + all_rel_key] = full_path
+            indexed_parts = list(enumerate(parts))
+            all_rel_parts = _strip_rig_parts(indexed_parts)
+            all_keep_root_parts = _strip_rig_parts(indexed_parts, keep_abs_index=rig_start if rig_start >= 0 else None)
+            _register_rig_lookup("|".join(all_rel_parts), full_path)
+            _register_rig_lookup("|".join(all_keep_root_parts), full_path)
 
         reused_rig_dags = set()
         voting_pool_tex = {}
@@ -2142,6 +2180,18 @@ def execute(payload: dict) -> dict:
 
     return make_receipt(
         SKILL_ID, "SUCCESS", t0,
+        input={
+            "source_path": rig_path,
+            "source_abc": abc_path,
+            "source_info": tex_json,
+            "compare_result": compare_result_path or "output.compare_result",
+            "cache_group": cache_group,
+        },
+        output={
+            "scene": "current_maya_scene",
+            "actions": action_counts,
+            "new_node_count": len(all_new_nodes),
+        },
         summary_action=format_action_summary(action_counts),
         summary_count=len(all_new_nodes),
         summary_label="资产同步",

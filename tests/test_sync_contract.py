@@ -16,6 +16,7 @@ from skills.maya_sync_rig_incremental.sync_contract import (
     build_sync_report_sections,
     format_action_summary,
     load_compare_result_file,
+    load_compare_result_value,
     parse_sync_inputs,
     summarize_sync_actions,
     validate_input_files,
@@ -138,6 +139,10 @@ def test_compare_result_contract():
             _ok("不在允许集合" in str(exc), "非法 action 被阻断")
         else:
             raise AssertionError("非法 action 未被阻断")
+
+        data2, report2, _ = load_compare_result_value(_valid_compare_result())
+        _ok(data2["schema_version"] == "compare_result.v1", "支持直接传 compare_result dict")
+        _ok(len(report2["pairing_groups"]) == 2, "dict 输入读取 pairing_groups")
 
 
 def test_action_summary():

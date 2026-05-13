@@ -6,6 +6,7 @@
 
 import os
 import time
+import json
 
 import maya.cmds as cmds
 
@@ -106,6 +107,8 @@ def execute(payload: dict) -> dict:
             input_source, target_scene,
             label_source, label_target,
         )
+        with open(output_path, 'r', encoding='utf-8') as fp:
+            compare_result_payload = json.load(fp)
     except Exception as e:
         return make_receipt(
             'maya_compare_asset_in_scene', 'ERROR', t0,
@@ -132,6 +135,23 @@ def execute(payload: dict) -> dict:
         skill_id='maya_compare_asset_in_scene',
         status='SUCCESS',
         start_time=t0,
+        input={
+            'source_path': target_scene,
+            'input_source': input_source,
+            'output_path': output_path,
+            'cache_group': cache_group,
+            'label_source': label_source,
+            'label_target': label_target,
+        },
+        output={
+            'output_path': output_path,
+            'matched_same': counts['matched_same'],
+            'matched_different': counts['matched_different'],
+            'only_source': counts['only_source'],
+            'only_target': counts['only_target'],
+            'blocking': counts['blocking'],
+            'compare_result': compare_result_payload,
+        },
         summary_input=f'{os.path.basename(input_source)} vs 当前 Maya 场景',
         summary_action=status_msg,
         summary_count=counts['blocking'],

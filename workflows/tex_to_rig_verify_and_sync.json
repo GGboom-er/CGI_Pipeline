@@ -26,13 +26,41 @@
       }
     },
     {
+      "step_id": "check_hierarchy_pre",
+      "skill_id": "maya_check_asset_hierarchy",
+      "source_path": "{{outputs.resolve_files.result.rig_path}}",
+      "parameters": {
+        "stage": "rig",
+        "phase": "pre_sync",
+        "block_on_fail": false,
+        "block_extra_top_nodes": false
+      }
+    },
+    {
+      "step_id": "fix_hierarchy_pre",
+      "skill_id": "maya_fix_asset_hierarchy",
+      "parameters": {
+        "check_result": "{{outputs.check_hierarchy_pre.result}}",
+        "delete_extra_top_nodes": false
+      }
+    },
+    {
+      "step_id": "check_hierarchy_ready",
+      "skill_id": "maya_check_asset_hierarchy",
+      "parameters": {
+        "stage": "rig",
+        "phase": "pre_sync",
+        "block_on_fail": true,
+        "block_extra_top_nodes": false
+      }
+    },
+    {
       "step_id": "compare_pre",
       "skill_id": "maya_compare_asset_in_scene",
-      "source_path": "{{outputs.resolve_files.result.rig_path}}",
       "parameters": {
         "input_source": "{{outputs.export_abc.output_path}}",
         "output_path": "{{input.info_dir}}/{{outputs.resolve_files.result.rig_stem}}_pre_compare_result.json",
-        "cache_group": "{{config.stages.rig.geom_roots.0}};{{config.stages.rig.geom_roots.1}}",
+        "cache_group": "{{outputs.fix_hierarchy_pre.result.active_rig_root}};{{config.stages.rig.geom_roots.0}}",
         "label_source": "tex",
         "label_target": "rig"
       }
@@ -43,15 +71,25 @@
       "source_path": "{{outputs.resolve_files.result.rig_path}}",
       "parameters": {
         "source_abc": "{{outputs.export_abc.output_path}}",
-        "compare_result": "{{outputs.compare_pre.output_path}}",
-        "cache_group": "{{config.stages.rig.geom_roots.0}};{{config.stages.rig.geom_roots.1}}"
+        "compare_result": "{{outputs.compare_pre.compare_result}}",
+        "cache_group": "{{outputs.fix_hierarchy_pre.result.active_rig_root}};{{config.stages.rig.geom_roots.0}}"
+      }
+    },
+    {
+      "step_id": "check_hierarchy_post",
+      "skill_id": "maya_check_asset_hierarchy",
+      "parameters": {
+        "stage": "rig",
+        "phase": "post_sync",
+        "block_on_fail": true,
+        "block_extra_top_nodes": false
       }
     },
     {
       "step_id": "fix_shapes",
       "skill_id": "maya_fix_shape_names",
       "parameters": {
-        "target_group": "{{config.stages.rig.geom_roots.0}};{{config.stages.rig.geom_roots.1}}"
+        "target_group": "{{config.stages.rig.geom_roots.0}}"
       }
     },
     {
@@ -59,7 +97,7 @@
       "skill_id": "maya_apply_materials",
       "parameters": {
         "materials_path": "{{outputs.extract_materials.output_path}}",
-        "target_group": "{{config.stages.rig.geom_roots.0}};{{config.stages.rig.geom_roots.1}}"
+        "target_group": "{{config.stages.rig.geom_roots.0}}"
       }
     },
     {
@@ -68,7 +106,7 @@
       "parameters": {
         "input_source": "{{outputs.export_abc.output_path}}",
         "output_path": "{{input.info_dir}}/{{outputs.resolve_files.result.rig_stem}}_post_compare_result.json",
-        "cache_group": "{{config.stages.rig.geom_roots.0}};{{config.stages.rig.geom_roots.1}}",
+        "cache_group": "{{config.stages.rig.geom_roots.0}}",
         "label_source": "tex",
         "label_target": "rig_post"
       }

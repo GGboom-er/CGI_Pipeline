@@ -48,6 +48,8 @@ _ACTION_BY_SKILL = {
     "maya_assign_udim_materials": "应用材质",
     "maya_build_mesh_from_abc": "构建网格",
     "maya_check_textures": "贴图检查",
+    "maya_check_asset_hierarchy": "层级检查",
+    "maya_fix_asset_hierarchy": "修复层级",
     "check_uvsets": "检查UV",
     "simplify_uvsets": "精简UV",
     "validate_publish": "质量门禁",
@@ -147,6 +149,24 @@ def _short_json(value: Any, max_chars: int = 6000) -> str:
     if len(text) > max_chars:
         return text[:max_chars] + f"\n... 已截断 {len(text) - max_chars} 字符"
     return text
+
+
+def _report_safe_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        if value.get("schema_version") == "compare_result.v1":
+            compare = value.get("compare") if isinstance(value.get("compare"), dict) else {}
+            groups = compare.get("pairing_groups") if isinstance(compare.get("pairing_groups"), list) else []
+            return f"<compare_result.v1 groups={len(groups)}>"
+        safe = {}
+        for key, item in value.items():
+            if key == "compare_result" and isinstance(item, dict):
+                safe[key] = _report_safe_value(item)
+            else:
+                safe[key] = _report_safe_value(item)
+        return safe
+    if isinstance(value, list):
+        return [_report_safe_value(item) for item in value[:20]]
+    return value
 
 
 def _data_marker(kind: str, records: Any) -> str:
@@ -542,68 +562,51 @@ def render_step_finished(step_context: Dict[str, Any], receipt: Dict[str, Any],
     skill_id = receipt.get("skill_id") or step_context.get("skill_id", "unknown")
     status = receipt.get("status") or worker_status or "UNKNOWN"
     label = _skill_label(skill_id)
-    elapsed_min = receipt.get("elapsed_min")
-    elapsed_text = _format_elapsed(elapsed_min) if isinstance(elapsed_min, (int, float)) else "-"
-    summary = receipt.get("summary", {}) or {}
-    action = summary.get("action") or ""
-    if summary.get("output_count"):
-        action = f"{action} → {summary.get('output_count')} 个 {summary.get('output_label', '项')}".strip()
+    elapsed_sec = receipt.get("elapsed_sec")
+    if not isinstance(elapsed_sec, (int, float)):
+        elapsed_min = receipt.get("elapsed_min")
+        elapsed_sec = float(elapsed_min) * 60.0 if isinstance(elapsed_min, (int, float)) else None
+    elapsed_text = _fmt_elapsed_sec(elapsed_sec)
 
+    standard_input = receipt.get("input") if isinstance(receipt.get("input"), dict) else {}
+    if not standard_input:
+        standard_input = {}
+        if step_context.get("source_path"):
+            standard_input["source_path"] = step_context.get("source_path")
+        for key, value in (step_context.get("parameters", {}) or {}).items():
+            if str(key).startswith("_"):
+                continue
+            standard_input[key] = value
+
+    outputs = receipt.get("output") if isinstance(receipt.get("output"), dict) else None
+    if outputs is None:
+        outputs = receipt.get("outputs", {}) or {}
     summary_line = f"Step {idx}/{total} | {label} | {status} | {elapsed_text}"
-    if action:
-        summary_line += f" | {_escape_md(action)}"
-
-    outputs = receipt.get("outputs", {}) or {}
-    input_summary = summary.get("input") or step_context.get("source_path") or "-"
     lines = [
         f"### {summary_line}",
         "",
-        "#### 节点状态",
+        "#### 标准执行记录",
         "",
-        "| 节点 | Skill | 输入 | 输出 | 状态 | 耗时 |",
-        "|---|---|---|---|---|---|",
+        "| Skill | 输入 | 输出 | 状态 | 耗时 |",
+        "|---|---|---|---|---|",
         (
-            f"| {_escape_cell(label)} | `{_escape_cell(skill_id)}` | "
-            f"{_escape_cell(input_summary)} | {_brief_outputs(outputs)} | "
+            f"| `{_escape_cell(skill_id)}` | "
+            f"{_brief_outputs(standard_input)} | {_brief_outputs(outputs)} | "
             f"{_status_icon(status)} {status} | {elapsed_text} |"
         ),
     ]
     if memory_gb is not None and memory_gb >= 0:
         lines.extend(["", f"- **内存**: {memory_gb:.2f} GB"])
-    if action:
-        lines.append(f"- **执行摘要**: {_escape_md(action)}")
 
-    if outputs:
-        lines.extend(["", "#### 输出参数", "", "```json",
-                      _short_json(outputs), "```"])
-
-    items = receipt.get("items", []) or []
-    if items:
-        lines.extend(_render_items(items))
-
-    sections = receipt.get("report_sections", []) or []
-    for section in sections:
-        lines.extend(_render_section(section))
-
-    report_content = receipt.get("report_content", "")
-    has_structured_sections = "report_sections" in receipt and receipt.get("report_sections") is not None
-    if report_content and not has_structured_sections:
-        lines.extend([
-            "",
-            "#### 详细报告",
-            "",
-            str(report_content),
-        ])
+    lines.extend(["", "#### input", "", "```json", _short_json(_report_safe_value(standard_input)), "```"])
+    lines.extend(["", "#### output", "", "```json", _short_json(_report_safe_value(outputs)), "```"])
 
     error = receipt.get("error", "")
-    recovery = receipt.get("recovery_hint", "")
     tb = receipt.get("traceback", "") or receipt.get("traceback_text", "")
-    if error or recovery or tb or (status not in ("SUCCESS", "RUNNING") and raw_detail):
-        lines.extend(["", "#### 错误与恢复建议", ""])
+    if error or tb or (status not in ("SUCCESS", "RUNNING") and raw_detail):
+        lines.extend(["", "#### 错误信息", ""])
         if error:
             lines.extend(["**错误内容**", "", "```text", str(error), "```", ""])
-        if recovery:
-            lines.extend(["**恢复建议**", "", str(recovery), ""])
         if tb:
             lines.extend(["**完整 Traceback**", "", "```text", str(tb), "```", ""])
         elif raw_detail and status != "SUCCESS":
@@ -719,14 +722,27 @@ def upsert_segment(report_path: str | Path, segment_context: Dict[str, Any],
 
 def extract_receipt(detail: Any, skill_id: str = "", status: str = "") -> Dict[str, Any]:
     """把 worker wrapper detail 或直接 receipt 统一转成 receipt-like dict。"""
+    def _normalize(rc: Dict[str, Any]) -> Dict[str, Any]:
+        rc = dict(rc)
+        rc.setdefault("skill_id", skill_id or rc.get("skill_id") or rc.get("skill") or "unknown")
+        rc.setdefault("skill", rc.get("skill_id", "unknown"))
+        rc.setdefault("status", status or rc.get("status", "UNKNOWN"))
+        if not isinstance(rc.get("output"), dict):
+            rc["output"] = rc.get("outputs", {}) if isinstance(rc.get("outputs"), dict) else {}
+        rc.setdefault("outputs", rc.get("output", {}))
+        if not isinstance(rc.get("input"), dict):
+            rc["input"] = {}
+        if not isinstance(rc.get("elapsed_sec"), (int, float)):
+            elapsed_min = rc.get("elapsed_min")
+            if isinstance(elapsed_min, (int, float)):
+                rc["elapsed_sec"] = round(float(elapsed_min) * 60.0, 3)
+        rc["_parsed"] = True
+        return rc
+
     raw = detail
     if isinstance(detail, dict):
-        if "summary" in detail or "outputs" in detail or "skill_id" in detail:
-            rc = dict(detail)
-            rc.setdefault("skill_id", skill_id or rc.get("skill_id", "unknown"))
-            rc.setdefault("status", status or rc.get("status", "UNKNOWN"))
-            rc["_parsed"] = True
-            return rc
+        if any(k in detail for k in ("summary", "outputs", "output", "skill_id", "skill")):
+            return _normalize(detail)
         raw = json.dumps(detail, ensure_ascii=False, default=str)
 
     if isinstance(detail, str) and detail:
@@ -736,10 +752,7 @@ def extract_receipt(detail: Any, skill_id: str = "", status: str = "") -> Dict[s
         try:
             parsed = json.loads(payload)
             if isinstance(parsed, dict):
-                parsed.setdefault("skill_id", skill_id or parsed.get("skill_id", "unknown"))
-                parsed.setdefault("status", status or parsed.get("status", "UNKNOWN"))
-                parsed["_parsed"] = True
-                return parsed
+                return _normalize(parsed)
         except Exception:
             pass
 
@@ -749,6 +762,8 @@ def extract_receipt(detail: Any, skill_id: str = "", status: str = "") -> Dict[s
         "elapsed_min": 0,
         "summary": {"action": "非标准返回"},
         "items": [],
+        "input": {},
+        "output": {},
         "outputs": {},
         "_parsed": False,
     }
@@ -763,11 +778,15 @@ def extract_receipt(detail: Any, skill_id: str = "", status: str = "") -> Dict[s
 def receipt_from_exception(skill_id: str, exc: BaseException,
                            status: str = "ERROR") -> Dict[str, Any]:
     return {
+        "skill": skill_id,
         "skill_id": skill_id,
         "status": status,
+        "elapsed_sec": 0,
         "elapsed_min": 0,
         "summary": {"action": "执行异常"},
         "items": [],
+        "input": {},
+        "output": {},
         "outputs": {},
         "error": f"{type(exc).__name__}: {exc}",
         "traceback": _traceback.format_exc(),

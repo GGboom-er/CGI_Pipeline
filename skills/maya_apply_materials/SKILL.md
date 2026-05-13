@@ -24,6 +24,11 @@ io:
 category: "material"
 ---
 
+### 🔴 核心限制 (RESTRICTIONS)
+
+- **强依赖**：必须接收合法格式的 `_materials.json`，且场景中的 mesh 必须能根据短名或后缀成功匹配。匹配失败的面将保持默认材质。
+- **撤销支持**：由于涉及大批量材质节点创建和连接，所有操作必须包裹在 `cmds.undoInfo(openChunk=True)` 中。
+
 ### 🟢 核心逻辑 (CORE LOGIC)
 
 读取 `_materials.json`（由 `blender_extract_materials` 生成，UDIM 已按象限拆分为独立条目），为场景中的 mesh 创建 lambert 材质球并按面赋予。
