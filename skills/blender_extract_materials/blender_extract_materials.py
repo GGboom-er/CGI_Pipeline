@@ -429,6 +429,12 @@ def execute(payload: dict) -> dict:
 
     mat_data = extract_materials(export_objects)
     mat_count = len(mat_data.get("materials", {}))
+    material_names = sorted((mat_data.get("materials") or {}).keys())
+    mesh_names = set()
+    for mat_entry in (mat_data.get("materials") or {}).values():
+        if isinstance(mat_entry, dict):
+            mesh_names.update((mat_entry.get("faces_by_mesh") or {}).keys())
+    mesh_count = len(mesh_names)
 
     out_dir = os.path.dirname(output_path)
     if out_dir and not os.path.exists(out_dir):
@@ -445,5 +451,12 @@ def execute(payload: dict) -> dict:
         summary_action='材质信息采集',
         summary_count=mat_count,
         summary_label='材质条目',
-        outputs={'output_path': output_path},
+        outputs={
+            'materials_path': output_path,
+            'output_path': output_path,
+            'material_count': mat_count,
+            'material_names': material_names,
+            'mesh_count': mesh_count,
+            'cache_group': cache_group_name,
+        },
     )

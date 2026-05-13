@@ -16,6 +16,7 @@ import time
 import gc
 import sys
 import logging
+import re
 
 import maya.cmds as cmds
 from maya.api import OpenMaya as om2
@@ -57,6 +58,17 @@ MAX_K_SEARCH = 50           # 法线失败时向下检索备选面的数量
 
 def _load_compare_result(compare_result_value):
     return load_compare_result_value(compare_result_value)
+
+
+def _safe_maya_node_name(name, fallback="sync_layer"):
+    """把外部 compare_result 的 layer_name 收口成 Maya 可创建节点名。"""
+    cleaned = re.sub(r"[^0-9A-Za-z_]", "_", str(name or ""))
+    cleaned = re.sub(r"_+", "_", cleaned)
+    if not cleaned.strip("_"):
+        cleaned = fallback
+    if cleaned[0].isdigit():
+        cleaned = f"L_{cleaned}"
+    return cleaned
 
 
 def _sync_receipt(status, start_time, phase, error="", items=None,
@@ -689,6 +701,7 @@ def _assign_to_layer(layer_name, nodes, reference_nodes=None, group_id=None,
     ref_valid = [n for n in (reference_nodes or []) if cmds.objExists(n)]
     if not valid and not ref_valid:
         return
+    layer_name = _safe_maya_node_name(layer_name, fallback=group_id or "sync_layer")
     if not cmds.objExists(layer_name):
         cmds.createDisplayLayer(name=layer_name, empty=True)
         for attr, val in (("group_id", group_id), ("sync_action", action), ("sync_reason", reason)):
@@ -889,8 +902,70 @@ def _assign_materials_from_info(materials_info, all_mesh_nodes, tex_meshes_keys)
     from skills.maya_apply_materials.maya_apply_materials import apply_materials
     return apply_materials(materials_info, all_mesh_nodes)
 
+def _plug_node(plug_name):
+    """从 Maya plug 字符串中取节点名。"""
+    return str(plug_name or "").split(".", 1)[0]
+
+
+def _long_node_name(node):
+    matches = cmds.ls(node, long=True) or []
+    return matches[0] if matches else str(node or "")
+
+
+def _long_mesh_shape_set(shapes):
+    result = set()
+    for shape in shapes or []:
+        result.update(cmds.ls(shape, long=True, type="mesh") or [])
+    return result
+
+
+def _blendshape_reaches_target_shapes(bs_node, target_shapes, max_depth=12):
+    """只接受 output 链最终落到当前 mesh shape 的 BS，避免误采 target 上游 BS。"""
+    target_shape_set = _long_mesh_shape_set(target_shapes)
+    if not target_shape_set:
+        return False
+
+    start_plugs = cmds.listConnections(
+        f"{bs_node}.outputGeometry",
+        source=False,
+        destination=True,
+        plugs=True,
+    ) or []
+    queue = [(_plug_node(plug), 0) for plug in start_plugs]
+    visited = set()
+
+    while queue:
+        node, depth = queue.pop(0)
+        if not node or node in visited or depth > max_depth:
+            continue
+        visited.add(node)
+
+        try:
+            node_type = cmds.nodeType(node)
+        except Exception:
+            continue
+
+        if node_type == "mesh":
+            if _long_node_name(node) in target_shape_set:
+                return True
+            continue
+
+        next_plugs = cmds.listConnections(
+            node,
+            source=False,
+            destination=True,
+            plugs=True,
+        ) or []
+        for plug in next_plugs:
+            next_node = _plug_node(plug)
+            if next_node and next_node not in visited:
+                queue.append((next_node, depth + 1))
+
+    return False
+
+
 def _extract_blendshape_data(rig_dag):
-    """提取旧 RIG mesh 上所有 BlendShape 数据（含 in-between、Live-Link 蒙皮），返回列表。"""
+    """提取直接作用在旧 RIG mesh 上的 BlendShape 数据（含 in-between、Live-Link 蒙皮）。"""
     import numpy as np
     transform = cmds.listRelatives(rig_dag, parent=True, fullPath=True)
     if not transform:
@@ -920,6 +995,9 @@ def _extract_blendshape_data(rig_dag):
     
     results = []
     for bs_node in sorted(all_bs_nodes):
+        if not _blendshape_reaches_target_shapes(bs_node, all_shapes):
+            continue
+
         sel_bs = om2.MSelectionList()
         sel_bs.add(bs_node)
         fn_bs = om2.MFnDependencyNode(sel_bs.getDependNode(0))

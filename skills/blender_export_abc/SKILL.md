@@ -1,6 +1,6 @@
 ---
 skill_id: "blender_export_abc"
-name: "Blender 导出 ABC"
+name: "blender_export_cache_to_abc"
 dcc: "blender"
 description: "选中指定几何根组，禁用修改器，导出 Alembic (.abc)。只管 ABC 几何导出，不生成 _info.json 或 _materials.json。"
 parameters:

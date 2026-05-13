@@ -1,6 +1,6 @@
 ---
 skill_id: "maya_fix_asset_hierarchy"
-name: "资产层级修复"
+name: "maya_fix_rig_geometry_layout"
 dcc: "maya"
 description: "消费 maya_check_asset_hierarchy 的检查结果，按检查结果把旧绑定几何根归一化为 |Group|Geometry|RIG_geo，并只删除安全空顶层节点。"
 parameters:

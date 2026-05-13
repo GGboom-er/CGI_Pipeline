@@ -1,6 +1,6 @@
 ---
 skill_id: "maya_apply_materials"
-name: "应用材质信息"
+name: "maya_apply_materials_to_cache"
 dcc: "maya"
 description: "消费 blender_extract_materials 导出的 _materials.json，为 Maya 场景中的 mesh 按面创建 lambert 材质球并赋予贴图。"
 parameters:

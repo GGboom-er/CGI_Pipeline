@@ -52,12 +52,13 @@ def test_step_upsert_no_duplicate():
     text = report.read_text(encoding="utf-8")
     assert text.count("[//]: # (report:block:start step:main:0:pipeline_compare_asset)") == 1, text
     assert "<!-- report:block:start" not in text
-    assert "<details" not in text
     step_block = text.split("report:block:start step:main:0:pipeline_compare_asset", 1)[1]
     step_block = step_block.split("report:block:end step:main:0:pipeline_compare_asset", 1)[0]
     assert "RUNNING" not in step_block, text
     assert "SUCCESS" in text
-    assert "| Skill | 输入 | 输出 | 状态 | 耗时 |" in text
+    assert "## Step 1/1 | pipeline_compare_geometry_sources | SUCCESS" in text
+    assert "**Input**" in text
+    assert "**Output**" in text
     assert "compare_result.json" in text
     print(f"✓ test_step_upsert_no_duplicate → {report}")
 
@@ -82,8 +83,7 @@ def test_error_block_contains_full_detail():
     writer.finalize_report(report, {"task_id": "task-error", "asset_name": "demo", "run_dir": str(sbx)}, "ERROR", 0.02)
 
     text = report.read_text(encoding="utf-8")
-    assert "<details" not in text
-    assert "#### 错误信息" in text
+    assert "**Error Detail**" in text
     assert "绑定目标缺少 ShapeOrig" in text
     assert "Traceback line 2" in text
     assert "先运行命名修复" not in text
@@ -109,14 +109,64 @@ def test_sections_and_report_content():
         "report_content": "旧格式完整对比报告",
     })
     text = report.read_text(encoding="utf-8")
-    assert "#### 标准执行记录" in text
-    assert "#### input" in text
-    assert "#### output" in text
-    assert "通过配对 | 73 项" not in text
-    assert "bodyShape" not in text
-    assert "几何差异 | 0 项" not in text
+    assert "**Details**" in text
+    assert "<summary>通过配对 (73 项)</summary>" in text
+    assert "bodyShape" in text
+    assert "<summary>几何差异 (0 项)</summary>" in text
     assert "旧格式完整对比报告" not in text
     print(f"✓ test_sections_and_report_content → {report}")
+
+
+def test_compare_result_renders_action_details_without_json_dump():
+    sbx = _sandbox("compare_details")
+    report = sbx / "REPORT.md"
+    writer.init_report(report, {"task_id": "task-compare-details", "asset_name": "demo", "run_dir": str(sbx)})
+    step_ctx = {"step_index": 4, "step_total": 8, "skill_id": "maya_compare_asset_in_scene", "parameters": {}}
+    compare_result = {
+        "schema_version": "compare_result.v1",
+        "compare": {
+            "pairing_groups": [
+                {
+                    "group_id": "g0001",
+                    "action": "ORIG_INJECT",
+                    "abc_dags": ["ABC|Group|cache|body|bodyShape"],
+                    "rig_dags": ["|Group|Geometry|RIG_geo|body_msh|body_mshShape"],
+                    "layer_name": "body",
+                    "reason": "same topology",
+                },
+                {
+                    "group_id": "g0002",
+                    "action": "PAIRED",
+                    "abc_dags": ["ABC|Group|cache|hatA|hatAShape", "ABC|Group|cache|hatB|hatBShape"],
+                    "rig_dags": ["|Group|Geometry|RIG_geo|hat_msh|hat_mshShape"],
+                    "layer_name": "hatA_hatB_Layer",
+                    "reason": "split pair",
+                },
+            ],
+            "target_only_dags": ["|Group|Geometry|RIG_geo|extra|extraShape"],
+        },
+    }
+    writer.upsert_step_finished(report, step_ctx, {
+        "skill_id": "maya_compare_asset_in_scene",
+        "status": "SUCCESS",
+        "elapsed_sec": 1.4,
+        "input": {"input_source": "a.abc", "cache_group": "|Group|Geometry|RIG_geo"},
+        "output": {
+            "matched_same": 1,
+            "matched_different": 1,
+            "only_source": 0,
+            "only_target": 1,
+            "compare_result": compare_result,
+        },
+    })
+    text = report.read_text(encoding="utf-8")
+    assert "compare_result" not in text
+    assert "<summary>ORIG_INJECT (1)</summary>" in text
+    assert "<summary>PAIRED (1)</summary>" in text
+    assert "<summary>TARGET_ONLY (1)</summary>" in text
+    assert "bodyShape" in text
+    assert "hatA_hatB_Layer" in text
+    print(f"✓ test_compare_result_renders_action_details_without_json_dump → {report}")
 
 
 def test_file_flow_table_has_io_status_elapsed():
@@ -140,11 +190,11 @@ def test_file_flow_table_has_io_status_elapsed():
         },
     ])
     text = report.read_text(encoding="utf-8")
-    assert "| 节点 | 参数 | 输入 | 输出 | 状态 | 耗时 |" in text
+    assert "| Node | Param | Input | Output | Status | Elapsed |" in text
     assert "资产路径解析" in text
-    assert "文件备份" in text
+    assert "pipeline_stage_file_to_sandbox" in text
     assert "ciweiguai" in text
-    assert "已备份" in text
+    assert "STAGED" in text
     print(f"✓ test_file_flow_table_has_io_status_elapsed → {report}")
 
 
@@ -223,12 +273,12 @@ def test_open_scene_merges_across_segments():
     writer.upsert_open_scene(report, maya, "RUNNING")
     writer.upsert_open_scene(report, maya, "SUCCESS", elapsed_sec=2.0)
     text = report.read_text(encoding="utf-8")
-    assert "打开Blender场景" in text
-    assert "打开Maya场景" in text
+    assert "blender_open_scene" in text
+    assert "maya_open_scene" in text
     assert "demo.blend" in text
     assert "demo.ma" in text
-    assert text.count("打开Blender场景") == 1, text
-    assert text.count("打开Maya场景") == 1, text
+    assert text.count("blender_open_scene") == 1, text
+    assert text.count("maya_open_scene") == 1, text
     print(f"✓ test_open_scene_merges_across_segments → {report}")
 
 
@@ -237,6 +287,7 @@ if __name__ == "__main__":
     test_step_upsert_no_duplicate()
     test_error_block_contains_full_detail()
     test_sections_and_report_content()
+    test_compare_result_renders_action_details_without_json_dump()
     test_file_flow_table_has_io_status_elapsed()
     test_internal_chain_history_hidden_from_step_input()
     test_file_flow_merges_across_segments()

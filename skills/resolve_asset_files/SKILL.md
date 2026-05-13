@@ -1,6 +1,6 @@
 ---
 skill_id: "resolve_asset_files"
-name: "解析资产文件"
+name: "pipeline_resolve_tex_rig_paths"
 dcc: "pipeline"
 description: "根据项目配置解析资产 source tex 文件与 target rig 文件。支持只传资产名自动查服务器最新版本，也支持传入明确文件路径直接透传。"
 parameters:

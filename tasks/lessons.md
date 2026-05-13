@@ -17,6 +17,7 @@
 - [材质JSON散落] → [extract_materials按源blend推导] → [output_path显式或.info推导] → [材料中间产物也必须进.info]
 - [缓存分支干扰] → [旧JSON可能被复用] → [每任务重采] → [沙盒产物不做mtime缓存]
 - [采集混入诊断] → [Orig缺失直接门禁] → [空几何交给对比] → [采集skill只输出事实]
+- [layer名非法] → [多源超长截断成+more] → [资产名拼接并合法化] → [Maya节点名不得直接用原始报告字符串]
 
 ## Worker 与服务管理
 
@@ -72,6 +73,28 @@
 
 ## 技能开发
 
+- [库可用性误判] → [只看资料未实跑] → [导入加最小运算验证] → [依赖能力以实跑为准]
+- [Maya相对保存失败] → [project重定向] → [保存前resolve绝对路径] → [DCC写文件禁相对路径]
+- [查询不等于闭环] → [JSON没验证skinCluster] → [写回副本重开比对] → [权重迁移必须复验DCC]
+- [直接ROM无效] → [joint被rig网络覆盖] → [用合成LBS验证权重] → [ROM先确认真实运动]
+- [合并口腔mesh误归单源] → [旧牙龈牙齿分拆] → [组合owner加分] → [merge目标优先识别composite]
+- [owner只看距离] → [口腔眼部近邻歧义] → [语义几何top joint合评] → [归属必须多证据]
+- [权重只看ROM不足] → [rig控制链可能覆盖joint] → [权重向量云补验] → [skin验证要数据+运动双轨]
+- [runs脚本找不到core] → [sys.path只有脚本目录] → [注入仓库根] → [沙盒脚本显式定位repo]
+- [winding扰动复测超时] → [逐点重复算layer] → [缓存support domain] → [layer查询禁交互式重算]
+- [腰带外推敏感] → [近层几何无barrier] → [加owner/layer约束] → [belt/cloth需单独诊断]
+- [全局场近层串扰] → [候选源过宽] → [owner过滤局部field] → [敏感附件先限域再采样]
+- [网上依据未落地] → [只引用不验证] → [资料后跑批量实测] → [研究结论必须绑定本地数据]
+- [原型难复用] → [runs脚本未入registry] → [固化为skill] → [验证过的流程要产品化]
+- [重复诊断覆盖] → [.info固定文件名] → [写前备份] → [机器产物也要防覆盖]
+- [MFnMesh建模报错] → [parent当位置参数] → [显式parent关键字] → [Maya API按官方签名调用]
+- [多语义merge失败] → [per-mesh单owner] → [patch级归属] → [合并mesh先分component]
+- [split低置信但权重准] → [部分body bbox分数低] → [分裂场景放宽置信] → [confidence需区分局部片段]
+- [PowerShell逗号拆参] → [未加引号] → [参数整体加引号] → [列表参数命令行需引用]
+- [跨库数组不兼容] → [TrackedArray被拒] → [先转contiguous ndarray] → [外部库入参先规整]
+- [PyTorch3D失效] → [torch版本抢先] → [对齐2.10] → [二进制库版本同源]
+- [OpenVDB失效] → [Open3D先加载DLL] → [VDB先导入] → [体积步隔离进程]
+- [conda求解异常] → [历史build规格误解] → [核心conda+wheel补齐] → [混装分层验证]
 - [巡航入口启动失败] → [Start-Process截断python -c] → [补tools包装脚本] → [长任务入口用脚本文件]
 - [环境误跑] → [PATH命中系统Python/conda输出编码] → [直调env python] → [pipeline命令用绝对解释器]
 - [CLI单技能失效] → [WarmWorkerProxy无start] → [start做幂等no-op] → [工厂返回对象接口要稳定]
@@ -83,6 +106,7 @@
 - [模板未解析] → [replace回归成非法路径] → [加扫描] → [跨段模板进门禁]
 - [多占位符误吞] → [正则跨模板匹配] → [禁止匹配花括号] → [同串多模板必测]
 - [节点输出漂移] → [业务字段塞outputs顶层] → [只准三键] → [特殊参数走outputs.result]
+- [BS误传] → [全history扫到target上游] → [按output链确认归属] → [只传直接变形当前mesh的BS]
 
 ## 编码规范
 
@@ -98,6 +122,8 @@
 - [专项文档过期] → [重构后旧链路残留] → [重写权威段落] → [bak归档不当现行规范]
 - [归档误用] → [历史文档混在主目录] → [移入archive并写索引] → [主docs只放现行契约]
 - [报告契约膨胀] → [多套展示字段混用] → [只渲染标准记录] → [报告不二次理解]
+- [报告仍像日志] → [输入输出JSON直铺] → [按step块+details渲染] → [报告必须先看链路再展开明细]
 - [规范多头] → [指南与总规范重复] → [唯一CONVENTION] → [其他文档只引用]
 - [规则仍散] → [文档不是触发入口] → [收敛到构建skill] → [规则必须可被调用]
 - [跳转页干扰] → [入口多但无正文] → [只留规范正文] → [规范文件必须确定]
+- [PAIRED层名撞mesh] → [单源沿用mesh名] → [统一资产名_Layer] → [displayLayer不复用transform名]

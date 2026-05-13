@@ -1,6 +1,6 @@
 ---
 skill_id: "maya_check_asset_hierarchy"
-name: "资产层级检查"
+name: "maya_check_rig_geometry_layout"
 dcc: "maya"
 description: "纯 QC 检查：从项目配置读取当前 stage 的标准几何根，确认标准根存在、标准根下有有效 mesh，并输出层级修复节点需要消费的只读事实。"
 parameters:

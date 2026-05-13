@@ -91,6 +91,7 @@ def make_item(name: str, detail: str, elapsed_min: float = None) -> dict:
 
 def _status_icon(status: str) -> str:
     return {
+        'RUNNING': '…',
         'SUCCESS': '✓', 'ERROR': '✗', 'PARTIAL': '⚠',
         'BLOCKED': '🛑', 'AUDIT_FAILED': '✗', 'NEEDS_ATTENTION': '⏸',
         'CHAIN_ABORTED': '✗', 'CHAIN_BLOCKED': '🛑', 'CHAIN_AUDIT_FAILED': '✗',

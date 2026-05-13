@@ -10,6 +10,12 @@ channels:
 dependencies:
   - python=3.11
   - pip
+  # ── 形变继承/几何求解（Deformation Inheritance / Geometry Solving） ──
+  - openvdb=13.0.0              # 稀疏体积场（Sparse Volume Field）
+  - pytorch=2.10.0              # PyTorch3D 0.7.9 的 CPU 构建依赖
+  - pytorch3d=0.7.9             # KNN / Chamfer / Mesh 运算
+  - torchvision=0.25.0          # 与 PyTorch 2.10 对齐
+  - rtree=1.4.1                 # Trimesh 空间索引依赖
   - pip:
     # ── 核心框架 ──
     - celery==5.4.0              # 任务编排（Task Orchestration）
@@ -18,8 +24,16 @@ dependencies:
     - rpyc==6.0.2                # Maya foreground 注入（与 Maya 2025 Python 3.11 ABI 兼容）
     # ── 进程与文件管理 ──
     - filelock==3.16.1           # 并发安全的文件版本锁
-    - psutil==6.1.1              # 进程监控与内存检测
+    - psutil==7.2.2              # 进程监控与内存检测
     - python-dotenv>=1.1.0       # .env 环境变量加载
     # ── 部署与监控 ──
     - uvicorn>=0.35.0            # ASGI server（fastmcp 依赖）
     - flower==2.0.1              # Celery 实时监控 Dashboard
+    # ── 形变继承/几何求解（Deformation Inheritance / Geometry Solving） ──
+    - libigl==2.6.1              # GWN / BBW / 网格几何算子
+    - open3d==0.19.0             # 点云、配准、几何处理
+    - probreg==0.3.8             # CPD 非刚性/刚性配准
+    - scipy==1.17.1              # 稀疏矩阵与数值求解
+    - scikit-learn==1.8.0        # KNN / 聚类等辅助算法
+    - matplotlib==3.10.9         # 诊断图输出
+    - transforms3d==0.4.2        # 配准变换辅助

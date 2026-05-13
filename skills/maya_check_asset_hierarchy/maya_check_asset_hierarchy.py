@@ -255,6 +255,46 @@ def execute(payload):
         else:
             passed = root_exists and cache_mesh_count > 0 and extra_top_ok
 
+        issues = []
+        if phase == "pre_sync":
+            if not active_rig_root_exists:
+                issues.append({
+                    "type": "missing_active_rig_root",
+                    "node": active_rig_root,
+                    "severity": "blocking",
+                })
+            if active_rig_root_exists and active_rig_mesh_count <= 0:
+                issues.append({
+                    "type": "empty_active_rig_root",
+                    "node": active_rig_root,
+                    "severity": "blocking",
+                })
+        else:
+            if not root_exists:
+                issues.append({
+                    "type": "missing_cache_root",
+                    "node": required_root,
+                    "severity": "blocking",
+                })
+            if root_exists and cache_mesh_count <= 0:
+                issues.append({
+                    "type": "empty_cache_root",
+                    "node": required_root,
+                    "severity": "blocking",
+                })
+        for node in legacy_geo_roots:
+            issues.append({
+                "type": "legacy_geo_root",
+                "node": node,
+                "severity": "blocking",
+            })
+        for node in manual_review_top_nodes:
+            issues.append({
+                "type": "extra_top_node",
+                "node": node,
+                "severity": "blocking" if block_extra_top_nodes else "warning",
+            })
+
         result = {
             "passed": passed,
             "code": "" if passed else INVALID_CODE,
@@ -271,6 +311,7 @@ def execute(payload):
             "active_rig_root": active_rig_root,
             "active_rig_root_exists": active_rig_root_exists,
             "active_rig_mesh_count": active_rig_mesh_count,
+            "issues": issues,
         }
 
         if passed:

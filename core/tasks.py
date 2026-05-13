@@ -356,6 +356,8 @@ def execute_skill_chain(self, payload: dict):
         _chain_config = payload.get('_chain_config', {}) or {}
         _chain_extra_params.setdefault('run_dir', str(run_dir))
         _chain_extra_params.setdefault('info_dir', str(info_dir))
+        _report_step_offset = int(payload.get('_step_index_offset') or 0)
+        _report_step_total = int(payload.get('_workflow_step_total') or len(skill_chain))
 
         for i, step in enumerate(skill_chain):
             step_skill_id = step['skill_id']
@@ -389,8 +391,8 @@ def execute_skill_chain(self, payload: dict):
 
             _write_audit('STEP_START', f'step {i}: {step_skill_id}', i, step_skill_id)
             step_report_context = {
-                'step_index': i,
-                'step_total': len(skill_chain),
+                'step_index': _report_step_offset + i,
+                'step_total': _report_step_total,
                 'skill_id': step_skill_id,
                 'parameters': step_params,
                 'source_path': source_path,
@@ -1007,6 +1009,12 @@ def execute_workflow(self, payload: dict):
         _write_audit('WORKFLOW_SEGMENTED',
                       f'{len(segments)} segments: {[(s[0], len(s[1])) for s in segments]}')
 
+        segment_step_offsets = {}
+        _planned_step_total = 0
+        for _seg_i, (_seg_dcc, _seg_steps) in enumerate(segments):
+            segment_step_offsets[_seg_i] = _planned_step_total
+            _planned_step_total += len(_seg_steps)
+
         # ── 断点恢复：从 Redis 恢复已完成段和 outputs ──
         completed_segs = get_completed_segments(task_id) if resume_mode else set()
         all_outputs = restore_outputs(task_id) if resume_mode else {}
@@ -1093,6 +1101,8 @@ def execute_workflow(self, payload: dict):
                 '_chain_outputs_in': dict(all_outputs),  # 跨段 outputs，chain 补解析时合并
                 'extra_params': dict(extra_params),      # 支持 {{input.xxx}}
                 '_chain_config': project_config,         # 支持 {{config.x.y.z}}
+                '_step_index_offset': segment_step_offsets.get(seg_idx, 0),
+                '_workflow_step_total': _planned_step_total,
             }
 
             # ── 异步派发子段，独立 Celery task context ──

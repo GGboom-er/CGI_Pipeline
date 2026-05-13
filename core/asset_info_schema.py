@@ -8,6 +8,7 @@
 # 统一标尺：厘米（cm）、Y 轴向上、世界空间坐标。
 
 import math
+import re
 from typing import TypedDict, List, Dict, Optional, Literal, Any
 
 
@@ -450,7 +451,7 @@ def _build_pairing_groups(result):
                 "action": act,
                 "abc_dags": [p["dag_a"]],
                 "rig_dags": [p["dag_b"]],
-                "layer_name": _make_layer_name([p["dag_a"]]),
+                "layer_name": _make_layer_name([p["dag_a"]], force_layer_suffix=False),
                 "reason": f"Step 1/2 路径+几何一致 ({act})",
             })
         elif act in step_s3_actions:
@@ -506,7 +507,7 @@ def _build_pairing_groups(result):
             "action": "PAIRED",
             "abc_dags": abc_dags,
             "rig_dags": rig_dags,
-            "layer_name": _make_layer_name(abc_dags),
+            "layer_name": _make_layer_name(abc_dags, force_layer_suffix=True),
             "reason": "Step 3 空间配对：" + "/".join(reasons) if reasons else "Step 3 空间配对",
         })
 
@@ -524,28 +525,86 @@ def _build_pairing_groups(result):
     return groups
 
 
-def _make_layer_name(abc_dags, max_len=30):
-    """abc 短名用 __ 连接，超长截断 + hash 后缀。单个 mesh 直接返回短名。"""
+def _make_layer_name(abc_dags, max_len=80, force_layer_suffix=True):
+    """用 source mesh 名生成可读且 Maya 安全的 displayLayer 名。
+
+    PAIRED 单 source 生成 A_Layer，多 source 拼成 A_B_Layer。名称过长时
+    保留首个 source 名并退化为 A_GRP_Layer，避免生成 __+Nmore 这类不可读/非法名。
+    """
     import hashlib
-    shorts = [_dag_display(d) for d in abc_dags]
-    if len(shorts) == 1:
-        return shorts[0]
-    joined = "__".join(shorts)
+
+    raw_names = [_dag_layer_display(d) for d in abc_dags if d]
+    names = [_safe_maya_node_name(n, fallback=f"mesh{i + 1}") for i, n in enumerate(raw_names)]
+    if not names:
+        return "pairing_Layer"
+
+    if len(names) == 1:
+        if force_layer_suffix:
+            return _append_layer_suffix(names[0], max_len=max_len)
+        return _shorten_maya_node_name(names[0], max_len=max_len)
+
+    joined = f"{'_'.join(names)}_Layer"
     if len(joined) <= max_len:
         return joined
-    # 截断：保留前 N 个短名 + 数字提示 + hash 后缀
-    suffix = hashlib.md5(joined.encode("utf-8")).hexdigest()[:4]
-    kept = []
-    used = 0
-    for s in shorts:
-        if used + len(s) + 2 > max_len - 12:  # 给 +Nmore_xxxx 留空间
-            break
-        kept.append(s)
-        used += len(s) + 2
-    more = len(shorts) - len(kept)
-    if more > 0:
-        return "__".join(kept) + f"__+{more}more_{suffix}"
-    return joined[:max_len - 5] + f"_{suffix}"
+
+    fallback = f"{names[0]}_GRP_Layer"
+    if len(fallback) <= max_len:
+        return fallback
+
+    digest = hashlib.md5(joined.encode("utf-8")).hexdigest()[:6]
+    tail = f"_{digest}_GRP_Layer"
+    head_budget = max(1, max_len - len(tail))
+    head = names[0][:head_budget].rstrip("_") or "mesh"
+    return f"{head}{tail}"
+
+
+def _append_layer_suffix(name, max_len=80):
+    """为单 source PAIRED layer 追加 _Layer，避免与 mesh transform 撞名。"""
+    suffix = "_Layer"
+    if name.endswith(suffix):
+        return _shorten_maya_node_name(name, max_len=max_len)
+    candidate = f"{name}{suffix}"
+    if len(candidate) <= max_len:
+        return candidate
+
+    import hashlib
+    digest = hashlib.md5(candidate.encode("utf-8")).hexdigest()[:6]
+    tail = f"_{digest}{suffix}"
+    head_budget = max(1, max_len - len(tail))
+    head = name[:head_budget].rstrip("_") or "mesh"
+    return f"{head}{tail}"
+
+
+def _dag_layer_display(dag):
+    """layer 命名使用 transform 名；shape 路径则回退到父 transform。"""
+    parts = dag.strip("|").split("|")
+    parts = [p.split(":")[-1] for p in parts if p]
+    if not parts:
+        return dag
+    last = parts[-1]
+    if last.endswith("Shape") and len(parts) >= 2:
+        return parts[-2]
+    return last
+
+
+def _safe_maya_node_name(name, fallback="node"):
+    cleaned = re.sub(r"[^0-9A-Za-z_]", "_", str(name or ""))
+    cleaned = re.sub(r"_+", "_", cleaned).strip("_")
+    if not cleaned:
+        cleaned = fallback
+    if cleaned[0].isdigit():
+        cleaned = f"L_{cleaned}"
+    return cleaned
+
+
+def _shorten_maya_node_name(name, max_len=80):
+    if len(name) <= max_len:
+        return name
+    import hashlib
+    digest = hashlib.md5(name.encode("utf-8")).hexdigest()[:6]
+    tail = f"_{digest}"
+    head = name[:max(1, max_len - len(tail))].rstrip("_") or "node"
+    return f"{head}{tail}"
 
 
 def _dag_display(dag):

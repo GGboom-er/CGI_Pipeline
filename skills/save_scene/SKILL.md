@@ -1,6 +1,6 @@
 ---
 skill_id: "save_scene"
-name: "保存场景"
+name: "maya_save_scene_as_next_version"
 dcc: "maya"
 description: "保存当前任务沙盒中的 Maya 场景。后台 pipeline 默认保存当前已打开的沙盒副本，禁止写入沙盒外路径。"
 parameters:

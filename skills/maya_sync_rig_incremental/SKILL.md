@@ -1,6 +1,6 @@
 ---
 skill_id: "maya_sync_rig_incremental"
-name: "增量同步资产到绑定文件"
+name: "maya_sync_abc_to_rig_cache"
 dcc: "maya"
 description: "在 target rig 场景中，依据前置 compare_result 和 source ABC 增量重建/更新 mesh。对 IDENTICAL/ORIG_INJECT 走快速搬运或坐标注入，对 PAIRED/UNPAIRED 走 SuperMesh 包裹重建并迁移权重/BS。"
 parameters:

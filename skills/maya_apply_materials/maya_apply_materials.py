@@ -247,7 +247,16 @@ def execute(payload: dict) -> dict:
         return make_receipt("maya_apply_materials", "SUCCESS", t0,
                            summary_input=os.path.basename(materials_path),
                            summary_action="无 mesh 可赋材",
-                           summary_count=0, summary_label="材质球")
+                           summary_count=0, summary_label="材质球",
+                           output={
+                               "materials_path": materials_path,
+                               "target_group": target_group,
+                               "material_count": len(materials_info),
+                               "material_names": sorted(materials_info.keys()),
+                               "assigned_mesh_count": 0,
+                               "assignment_count": 0,
+                               "failed_count": 0,
+                           })
 
     # 执行赋予
     cmds.undoInfo(openChunk=True, chunkName="maya_apply_materials")
@@ -259,6 +268,8 @@ def execute(payload: dict) -> dict:
     items = [make_item(name=a.split("→")[0], detail=a) for a in assigned]
     items.extend(make_item(name=f.split("→")[0], detail=f"失败: {f}") for f in failed)
     status = "SUCCESS" if not failed else "PARTIAL"
+    assigned_meshes = sorted({a.split("→", 1)[0] for a in assigned})
+    material_names = sorted({a.split("→", 1)[1] for a in assigned if "→" in a})
 
     return make_receipt(
         skill_id="maya_apply_materials",
@@ -269,5 +280,16 @@ def execute(payload: dict) -> dict:
         summary_count=len(assigned),
         summary_label="面赋予",
         items=items,
+        output={
+            "materials_path": materials_path,
+            "target_group": target_group,
+            "material_count": len(material_names),
+            "material_names": material_names,
+            "assigned_mesh_count": len(assigned_meshes),
+            "assigned_meshes": assigned_meshes,
+            "assignment_count": len(assigned),
+            "failed_count": len(failed),
+            "failed_assignments": failed,
+        },
         error="; ".join(failed) if failed else "",
     )

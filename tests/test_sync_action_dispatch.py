@@ -143,6 +143,14 @@ def test_sync_layer_helper_exists():
         'sync 有 _relocate_rig_mesh（IDENTICAL/ORIG_INJECT 搬运路径）')
     _ok('def _ensure_collectable_shape_orig(' in source,
         'sync 有新建 mesh ShapeOrig 可采集性补齐')
+    _ok('def _safe_maya_node_name(' in source,
+        'sync 有 displayLayer 名称合法化 helper')
+    _ok('_safe_maya_node_name(layer_name' in source,
+        'sync 建 layer 前先合法化 layer_name')
+    _ok('def _blendshape_reaches_target_shapes(' in source,
+        'sync 有 BS 输出链归属过滤 helper')
+    _ok('_blendshape_reaches_target_shapes(bs_node' in source,
+        'sync 提取 BS 前先确认直接连到当前 rig mesh')
     _ok('_ensure_collectable_shape_orig(node)' in source,
         'sync 会对新建 mesh 执行 ShapeOrig 可采集性补齐')
     _ok('def _check_sync_already_done(' in source,

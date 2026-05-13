@@ -156,7 +156,7 @@ def test_action_summary():
     _ok("IDENTICAL: 1" in summary and "target_only: 1" in summary, "摘要格式稳定")
 
 
-def test_report_sections_use_chinese_labels():
+def test_report_sections_use_action_labels():
     print("\n=== Test 5: 同步报告结构化章节 ===")
     _, report, _ = load_compare_result_file_from_dict(_valid_compare_result())
     counts = summarize_sync_actions(report)
@@ -168,11 +168,11 @@ def test_report_sections_use_chinese_labels():
         cache_group="|Group|Geometry|cache",
     )
     titles = [section.get("title") for section in sections]
-    for title in ("原样搬运", "坐标注入", "配对重建", "新增构建", "绑定独有"):
+    for title in ("IDENTICAL", "ORIG_INJECT", "PAIRED", "UNPAIRED", "target_only"):
         _ok(title in titles, f"包含同步章节: {title}")
-    overview = next((section for section in sections if section.get("title") == "同步动作概览"), {})
+    overview = next((section for section in sections if section.get("title") == "ACTION_SUMMARY"), {})
     content = overview.get("content", "")
-    _ok("原样搬运" in content and "绑定独有" in content, "同步概览使用中文配置标签")
+    _ok("IDENTICAL" in content and "target_only" in content, "同步概览使用 action 标签")
 
 
 def load_compare_result_file_from_dict(data):
@@ -187,5 +187,5 @@ if __name__ == "__main__":
     test_input_file_validation()
     test_compare_result_contract()
     test_action_summary()
-    test_report_sections_use_chinese_labels()
+    test_report_sections_use_action_labels()
     print("\nALL SYNC CONTRACT TESTS PASSED!")

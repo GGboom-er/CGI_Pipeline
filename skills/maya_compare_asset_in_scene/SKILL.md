@@ -1,6 +1,6 @@
 ---
 skill_id: "maya_compare_asset_in_scene"
-name: "Maya 场景内资产对比"
+name: "maya_compare_abc_to_scene_geometry"
 dcc: "maya"
 description: "在当前已打开的 target rig Maya 场景内采集指定 cache_group 的 ShapeOrig 几何信息，读取 source 侧 ABC 或 _info.json，调用统一 compare 算法并写出 compare_result.json。用于只看差异或为后续 maya_sync_rig_incremental 提供拼装决策。"
 parameters:

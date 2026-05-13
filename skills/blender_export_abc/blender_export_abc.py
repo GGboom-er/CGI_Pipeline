@@ -149,5 +149,10 @@ def execute(payload: dict) -> dict:
         summary_action=f'Blender ABC 导出',
         summary_count=mesh_count,
         summary_label='mesh',
-        outputs={'output_path': abc_path},
+        outputs={
+            'abc_path': abc_path,
+            'output_path': abc_path,
+            'mesh_count': mesh_count,
+            'cache_group': cache_group_name,
+        },
     )

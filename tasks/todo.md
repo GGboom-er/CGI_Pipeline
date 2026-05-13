@@ -36,6 +36,10 @@
 
 ## 待办
 
+- [x] 2026-05-13 Deformation Inheritance 可行性验证：在独立 runs 沙盒验证权重场、层级归属、扩散、置信度、依赖库真实可用性，并输出结论报告
+- [x] 2026-05-13 cdfBaiXingG 真实资产写回复验：旧 rig 权重场查询、21 个 cache mesh 写入 skinCluster、重开场景数值比对通过
+- [x] 2026-05-13 cdfBaiXingG 合成 LBS ROM：16 个有基线 mesh 全部 PASS，5 个新增 mesh 产生非零运动但需 ownership 确认
+- [x] 2026-05-13 Deformation Inheritance 依赖实装：补齐 libigl/Open3D/probreg/torch/rtree/OpenVDB/PyTorch3D，并完成 Python/Maya/conda 最小运算验证
 - [x] 2026-05-11 运行时总规范 v1：确认所有源文件只读、沙盒命名、统一 MD 报告、`.info` 中间产物、最终输出按升版本
 - [x] 2026-05-11 skill 拆解 01：完成 `blender_build_asset_info` 职责、输入、输出、问题和改造目标文档
 - [x] 对比/拼装 pipeline 专项 Phase 1：`tex_to_rig_verify`、`blender_tex_export`、`blender_to_maya_full_build` 的 JSON/ABC/materials/compare_result 显式落任务沙盒 `.info`
@@ -95,3 +99,14 @@
 - [x] 2026-05-13 旧 `|*|geo` 预同步归一：`|MaYou_B|geo` 改为 `|Group|Geometry|RIG_geo`，同步输出 `|Group|Geometry|cache`，maYouB workflow PASS。
 - [x] 2026-05-13 问题塌陷到代码：层级预同步顺序、RIG_geo DAG 映射、额外顶层非阻断、CLI WarmWorkerProxy.start 兼容均进入总门禁/测试。
 - [x] 2026-05-13 输出布局回归修复：workflow 收尾只把 MD/HTML 记为 reports，JSON/ABC 机器产物保留在 outputs 与 `.info`，根目录重复副本自动清理。
+- [x] 2026-05-13 多源配对 layer 命名修复：PAIRED 组按 source mesh 拼 `A_B_Layer`，过长退到 `A_GRP_Layer`，sync 建层前统一合法化。
+- [x] 2026-05-13 body PAIRED 修复：单源 PAIRED layer 统一 `资产名_Layer`，BS 只传直接连到当前 rig mesh 的节点。
+- [x] 2026-05-13 cdfBaiXingG deformation inheritance 验证：field skin 写回副本、重开复验、合成 LBS ROM、ownership 诊断均完成，5 个无基线 mesh 得到可解释 owner。
+- [x] 2026-05-13 cdfBaiXingG Skin 加固验证：16 个 baseline mesh 权重向量/权重云 PASS，5 个无基线 mesh owner 权重流形一致，点序打乱重采样 0 误差。
+- [x] 2026-05-13 cdfBaiXingG Skin 拓扑扰动验证：merge/split/子采样 0 误差；waistband 法线外推触发 WARN，指向 layer/barrier 缓存优化。
+- [x] 2026-05-13 owner-filtered 稳定性验证：`waistband1` 使用 `belt_002_msh` 局部 field 后外推 l1_mean 降低且 top1_match 提升，证明 owner/layer 过滤有效。
+- [x] 2026-05-13 外部资料核查 + owner-filtered 批量验证：论文/官方文档支持体积、GWN、BBW、deformation transfer、PSD 路线；21 个 mesh 局部 field 验证 16 PASS/5 NO_GROUND_TRUTH。
+- [x] 2026-05-13 新增 `maya_deformation_inherit_skin`：将 owner-filtered Skin 继承固化为 Maya skill，支持 diagnose_only/apply_skin、missing_only/all、诊断 NPZ/JSON 输出。
+- [x] 2026-05-13 `maya_deformation_inherit_skin` 真实资产验证：cdfBaiXingG 21 mesh 诊断成功，5 个缺 Skin mesh 写回并重开复验，写回权重与预测权重 0 误差。
+- [x] 2026-05-13 Split/Merge 极端测试：单源 body 拆 6 个目标 mesh 全部 PASS；多语义合并单 mesh 触发 EXPECTED_LIMITATION，证明下一步需要 patch-level ownership。
+- [x] 2026-05-13 运行时报告重构：step 全局编号、英文清晰 skill 名、Input/Output/Details 块、compare/sync 明细按 action 折叠展示。

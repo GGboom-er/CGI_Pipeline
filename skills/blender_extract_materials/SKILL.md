@@ -1,6 +1,6 @@
 ---
 skill_id: "blender_extract_materials"
-name: "Blender 材质信息采集"
+name: "blender_extract_cache_materials"
 dcc: "blender"
 description: "从 Blender 场景 cache 组采集 per-face 材质分配（颜色、透明度、贴图路径），UDIM 按象限拆分，输出 _materials.json。与 maya_apply_materials 配对。"
 parameters:

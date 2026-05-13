@@ -25,41 +25,54 @@ REPORT_FILENAME = "REPORT.md"
 _LOCK_TIMEOUT_SEC = 30.0
 
 
-_ACTION_BY_SKILL = {
-    "copy_files": "取文件",
-    "resolve_asset_files": "解析路径",
-    "pipeline_compare_asset": "对比资产",
-    "maya_compare_asset_in_scene": "场景对比",
-    "maya_sync_rig_incremental": "同步拼装",
-    "maya_build_asset_info": "采集信息",
-    "blender_build_asset_info": "采集信息",
-    "maya_export_abc": "导出ABC",
-    "blender_export_abc": "导出ABC",
-    "maya_import_abc": "导入ABC",
-    "blender_extract_materials": "采集材质",
-    "save_scene": "保存场景",
-    "rename_asset": "保存场景",
-    "maya_master_cleanup": "清理检查",
-    "maya_clean_skinweights": "清理权重",
-    "maya_fix_shape_names": "修复命名",
-    "maya_conform_normals": "统一法线",
-    "maya_freeze_transforms": "冻结变换",
-    "maya_apply_materials": "应用材质",
-    "maya_assign_udim_materials": "应用材质",
-    "maya_build_mesh_from_abc": "构建网格",
-    "maya_check_textures": "贴图检查",
-    "maya_check_asset_hierarchy": "层级检查",
-    "maya_fix_asset_hierarchy": "修复层级",
-    "check_uvsets": "检查UV",
-    "simplify_uvsets": "精简UV",
-    "validate_publish": "质量门禁",
-    "maya_get_scene_info": "场景总览",
-    "maya_get_object_info": "对象信息",
-    "maya_capture_viewport": "视口截图",
-    "blender_capture_viewport": "视口截图",
-    "ping": "心跳检测",
-    "exec_code": "执行代码",
-    "blender_exec_code": "执行代码",
+_REPORT_SKILL_NAME_BY_ID = {
+    "copy_files": "pipeline_stage_file_to_sandbox",
+    "resolve_asset_files": "pipeline_resolve_tex_rig_paths",
+    "pipeline_compare_asset": "pipeline_compare_geometry_sources",
+    "maya_compare_asset_in_scene": "maya_compare_abc_to_scene_geometry",
+    "maya_sync_rig_incremental": "maya_sync_abc_to_rig_cache",
+    "maya_build_asset_info": "maya_collect_scene_geometry_info",
+    "blender_build_asset_info": "blender_collect_cache_geometry_info",
+    "maya_export_abc": "maya_export_cache_to_abc",
+    "blender_export_abc": "blender_export_cache_to_abc",
+    "maya_import_abc": "maya_import_abc_to_scene",
+    "blender_extract_materials": "blender_extract_cache_materials",
+    "save_scene": "maya_save_scene_as_next_version",
+    "rename_asset": "pipeline_rename_asset_file",
+    "maya_master_cleanup": "maya_cleanup_scene",
+    "maya_clean_skinweights": "maya_clean_skin_weights",
+    "maya_fix_shape_names": "maya_fix_cache_shape_names",
+    "maya_conform_normals": "maya_conform_cache_normals",
+    "maya_freeze_transforms": "maya_freeze_scene_transforms",
+    "maya_apply_materials": "maya_apply_materials_to_cache",
+    "maya_assign_udim_materials": "maya_assign_udim_materials_to_cache",
+    "maya_build_mesh_from_abc": "maya_build_scene_meshes_from_abc",
+    "maya_check_textures": "maya_check_scene_textures",
+    "maya_check_asset_hierarchy": "maya_check_rig_geometry_layout",
+    "maya_fix_asset_hierarchy": "maya_fix_rig_geometry_layout",
+    "check_uvsets": "maya_check_cache_uv_sets",
+    "simplify_uvsets": "maya_simplify_cache_uv_sets",
+    "validate_publish": "maya_validate_publish_scene",
+    "maya_get_scene_info": "maya_collect_scene_overview",
+    "maya_get_object_info": "maya_collect_object_info",
+    "maya_capture_viewport": "maya_capture_viewport_image",
+    "blender_capture_viewport": "blender_capture_viewport_image",
+    "ping": "pipeline_ping_worker",
+    "exec_code": "maya_execute_python_code",
+    "blender_exec_code": "blender_execute_python_code",
+}
+
+_HIDDEN_INPUT_KEYS = {
+    "_chain_history",
+    "_open_elapsed_sec",
+    "output_path",
+    "abc_path",
+    "compare_result",
+}
+_HIDDEN_OUTPUT_KEYS = {
+    "compare_result",
+    "report_content",
+    "report_sections",
 }
 
 
@@ -141,6 +154,366 @@ def _brief_outputs(outputs: Dict[str, Any]) -> str:
     return "；".join(parts) if parts else "-"
 
 
+def _display_skill_name(skill_id: str) -> str:
+    return _REPORT_SKILL_NAME_BY_ID.get(skill_id, skill_id or "unknown_skill")
+
+
+def _is_hidden_key(key: str, section: str) -> bool:
+    if str(key).startswith("_"):
+        return True
+    if section == "input":
+        return key in _HIDDEN_INPUT_KEYS
+    if section == "output":
+        return key in _HIDDEN_OUTPUT_KEYS
+    return False
+
+
+def _short_dag(dag: Any) -> str:
+    text = str(dag or "")
+    parts = text.strip("|").split("|")
+    leaf = parts[-1] if parts else text
+    return leaf.split(":")[-1]
+
+
+def _format_report_scalar(value: Any) -> str:
+    if value is None or value == "":
+        return "-"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if _looks_like_path(value):
+        return _fmt_path(value)
+    return f"`{_escape_md(value)}`" if isinstance(value, str) else str(value)
+
+
+def _format_report_value(value: Any) -> str:
+    if isinstance(value, dict):
+        return f"{len(value)} fields"
+    if isinstance(value, list):
+        if not value:
+            return "0 items"
+        if len(value) <= 6 and all(not isinstance(x, (dict, list)) for x in value):
+            return ", ".join(_format_report_scalar(x) for x in value)
+        return f"{len(value)} items"
+    return _format_report_scalar(value)
+
+
+def _normalize_report_io(values: Dict[str, Any], section: str) -> Dict[str, Any]:
+    if not isinstance(values, dict):
+        return {}
+    result = values.get("result")
+    if section == "output" and isinstance(result, dict) and len(values) <= 2:
+        if result.get("source_path") or result.get("rig_path"):
+            values = {
+                key: result.get(key)
+                for key in ("source_path", "rig_path", "source_version", "rig_version")
+                if result.get(key) not in (None, "")
+            }
+        else:
+            values = dict(result)
+    else:
+        values = dict(values)
+    if section == "output":
+        output_path = values.get("output_path")
+        if output_path:
+            if values.get("abc_path") == output_path or values.get("materials_path") == output_path:
+                values.pop("output_path", None)
+            elif any(key in values for key in ("matched_same", "matched_different", "only_source", "only_target")):
+                values["compare_result_path"] = output_path
+                values.pop("output_path", None)
+            elif len(values) == 1:
+                values["scene_path"] = output_path
+                values.pop("output_path", None)
+    clean: Dict[str, Any] = {}
+    for key, value in values.items():
+        if _is_hidden_key(str(key), section):
+            continue
+        if key == "result" and isinstance(value, dict):
+            for sub_key, sub_value in value.items():
+                if not _is_hidden_key(str(sub_key), section):
+                    clean[str(sub_key)] = sub_value
+            continue
+        clean[str(key)] = _report_safe_value(value)
+    return clean
+
+
+def _render_io_list(title: str, values: Dict[str, Any], section: str) -> List[str]:
+    clean = _normalize_report_io(values, section)
+    lines = ["", f"**{title}**"]
+    if not clean:
+        lines.append("- none")
+        return lines
+    for key, value in clean.items():
+        lines.append(f"- `{_escape_md(key)}`: {_format_report_value(value)}")
+    return lines
+
+
+def _render_markdown_table(headers: List[str], rows: List[List[Any]]) -> List[str]:
+    lines = [
+        "| " + " | ".join(_escape_cell(h) for h in headers) + " |",
+        "|" + "|".join("---" for _ in headers) + "|",
+    ]
+    for row in rows:
+        cells = []
+        for value in row:
+            if _looks_like_path(value):
+                cells.append(_fmt_cell_path(value))
+            else:
+                cells.append(_escape_cell(value))
+        lines.append("| " + " | ".join(cells) + " |")
+    return lines
+
+
+def _detail_block(summary: str, body_lines: List[str], open_by_default: bool = False) -> List[str]:
+    attr = " open" if open_by_default else ""
+    return [
+        "",
+        f"<details{attr}>",
+        f"<summary>{_escape_md(summary)}</summary>",
+        "",
+        *body_lines,
+        "",
+        "</details>",
+    ]
+
+
+def _mesh_names_from_dags(dags: Iterable[Any]) -> str:
+    names = [_short_dag(dag) for dag in dags or []]
+    return ", ".join(names) if names else "-"
+
+
+def _render_compare_group_details(compare_payload: Dict[str, Any]) -> List[str]:
+    if not isinstance(compare_payload, dict):
+        return []
+    report = compare_payload.get("compare") if isinstance(compare_payload.get("compare"), dict) else compare_payload
+    if not isinstance(report, dict):
+        return []
+
+    lines: List[str] = []
+    paired = report.get("paired") if isinstance(report.get("paired"), list) else []
+    paired_by_pair: Dict[tuple[str, str], Dict[str, Any]] = {}
+    paired_by_source: Dict[str, List[Dict[str, Any]]] = {}
+    for pair in paired:
+        if not isinstance(pair, dict):
+            continue
+        dag_a = str(pair.get("dag_a") or "")
+        dag_b = str(pair.get("dag_b") or "")
+        if dag_a or dag_b:
+            paired_by_pair[(dag_a, dag_b)] = pair
+        if dag_a:
+            paired_by_source.setdefault(dag_a, []).append(pair)
+    only_source = report.get("only_a") if isinstance(report.get("only_a"), list) else []
+    only_source_by_dag = {
+        str(entry.get("dag") or ""): entry
+        for entry in only_source
+        if isinstance(entry, dict)
+    }
+
+    def _group_metrics(group: Dict[str, Any]) -> List[Dict[str, Any]]:
+        metrics: List[Dict[str, Any]] = []
+        seen: set[int] = set()
+        abc_dags = [str(dag) for dag in (group.get("abc_dags") or [])]
+        rig_dags = [str(dag) for dag in (group.get("rig_dags") or [])]
+        for abc_dag in abc_dags:
+            for rig_dag in rig_dags:
+                metric = paired_by_pair.get((abc_dag, rig_dag))
+                if metric is not None and id(metric) not in seen:
+                    metrics.append(metric)
+                    seen.add(id(metric))
+            for metric in paired_by_source.get(abc_dag, []):
+                if id(metric) not in seen:
+                    metrics.append(metric)
+                    seen.add(id(metric))
+            if abc_dag in only_source_by_dag:
+                metric = only_source_by_dag[abc_dag]
+                if id(metric) not in seen:
+                    metrics.append(metric)
+                    seen.add(id(metric))
+        return metrics
+
+    def _join_metric(metrics: List[Dict[str, Any]], key: str) -> str:
+        values = []
+        for metric in metrics:
+            value = metric.get(key)
+            if value in (None, ""):
+                continue
+            text = str(value)
+            if text not in values:
+                values.append(text)
+        return ", ".join(values)
+
+    groups = report.get("pairing_groups") if isinstance(report.get("pairing_groups"), list) else []
+    if groups:
+        by_action: Dict[str, List[Dict[str, Any]]] = {}
+        for group in groups:
+            if not isinstance(group, dict):
+                continue
+            action = str(group.get("action") or "UNKNOWN")
+            by_action.setdefault(action, []).append(group)
+        for action in ("ORIG_INJECT", "PAIRED", "UNPAIRED", "IDENTICAL", "TARGET_ONLY"):
+            action_groups = by_action.pop(action, [])
+            if not action_groups:
+                continue
+            rows = []
+            for group in action_groups:
+                metrics = _group_metrics(group)
+                rows.append([
+                    group.get("group_id", ""),
+                    _mesh_names_from_dags(group.get("abc_dags") or []),
+                    _mesh_names_from_dags(group.get("rig_dags") or []),
+                    group.get("layer_name", ""),
+                    _join_metric(metrics, "vtx_a") or _join_metric(metrics, "vtx"),
+                    _join_metric(metrics, "vtx_b"),
+                    _join_metric(metrics, "match_pct_loose") or _join_metric(metrics, "match_pct_exact"),
+                    group.get("reason", ""),
+                ])
+            body = _render_markdown_table(
+                ["group", "abc_mesh", "rig_mesh", "layer", "abc_vtx", "rig_vtx", "match", "reason"],
+                rows,
+            )
+            lines.extend(_detail_block(f"{action} ({len(action_groups)})", body))
+        for action, action_groups in sorted(by_action.items()):
+            rows = []
+            for group in action_groups:
+                metrics = _group_metrics(group)
+                rows.append([
+                    group.get("group_id", ""),
+                    _mesh_names_from_dags(group.get("abc_dags") or []),
+                    _mesh_names_from_dags(group.get("rig_dags") or []),
+                    group.get("layer_name", ""),
+                    _join_metric(metrics, "vtx_a") or _join_metric(metrics, "vtx"),
+                    _join_metric(metrics, "vtx_b"),
+                    _join_metric(metrics, "match_pct_loose") or _join_metric(metrics, "match_pct_exact"),
+                    group.get("reason", ""),
+                ])
+            lines.extend(_detail_block(
+                f"{action} ({len(action_groups)})",
+                _render_markdown_table(["group", "abc_mesh", "rig_mesh", "layer", "abc_vtx", "rig_vtx", "match", "reason"], rows),
+            ))
+
+    if not groups and paired:
+        by_action: Dict[str, List[Dict[str, Any]]] = {}
+        for pair in paired:
+            if not isinstance(pair, dict):
+                continue
+            action = str(pair.get("actionability") or "PAIRED")
+            by_action.setdefault(action, []).append(pair)
+        for action in ("IDENTICAL", "ORIG_INJECT", "MODIFIED", "MERGE", "SPLIT"):
+            pairs = by_action.pop(action, [])
+            if not pairs:
+                continue
+            rows = [[
+                pair.get("name_a") or _short_dag(pair.get("dag_a")),
+                pair.get("name_b") or _short_dag(pair.get("dag_b")),
+                pair.get("vtx_a", ""),
+                pair.get("vtx_b", ""),
+                pair.get("match_pct_loose") or pair.get("match_pct_exact") or "",
+            ] for pair in pairs]
+            lines.extend(_detail_block(
+                f"{action} ({len(pairs)})",
+                _render_markdown_table(["abc_mesh", "rig_mesh", "abc_vtx", "rig_vtx", "match"], rows),
+            ))
+
+    if not groups and only_source:
+        rows = [[entry.get("name") or _short_dag(entry.get("dag")), entry.get("dag", ""), entry.get("vtx", entry.get("vertices", ""))]
+                for entry in only_source if isinstance(entry, dict)]
+        lines.extend(_detail_block(
+            f"UNPAIRED ({len(rows)})",
+            _render_markdown_table(["abc_mesh", "dag", "vertices"], rows),
+        ))
+
+    only_target = report.get("only_b") if isinstance(report.get("only_b"), list) else []
+    target_only_dags = report.get("target_only_dags") if isinstance(report.get("target_only_dags"), list) else []
+    if only_target:
+        rows = [[entry.get("name") or _short_dag(entry.get("dag")), entry.get("dag", ""), entry.get("vtx", entry.get("vertices", ""))]
+                for entry in only_target if isinstance(entry, dict)]
+    else:
+        rows = [[_short_dag(dag), dag, ""] for dag in target_only_dags]
+    if rows:
+        lines.extend(_detail_block(
+            f"TARGET_ONLY ({len(rows)})",
+            _render_markdown_table(["rig_mesh", "dag", "vertices"], rows),
+        ))
+    return lines
+
+
+def _render_structured_sections(sections: Any) -> List[str]:
+    if not isinstance(sections, list):
+        return []
+    lines: List[str] = []
+    for section in sections:
+        if not isinstance(section, dict):
+            continue
+        title = str(section.get("title") or section.get("name") or "details")
+        summary = str(section.get("summary") or "")
+        heading = f"{title} ({summary})" if summary else title
+        body: List[str] = []
+        if section.get("content"):
+            body.extend(str(section.get("content")).splitlines())
+            body.append("")
+        if section.get("markdown"):
+            body.extend(str(section.get("markdown")).splitlines())
+            body.append("")
+        items = section.get("items") or []
+        if items:
+            if all(isinstance(item, dict) for item in items):
+                keys: List[str] = []
+                for item in items:
+                    for key in item.keys():
+                        if key not in keys:
+                            keys.append(key)
+                body.extend(_render_markdown_table(keys, [[item.get(key, "") for key in keys] for item in items]))
+            else:
+                body.extend(f"- {_escape_md(item)}" for item in items)
+        if not body:
+            body = ["- none"]
+        lines.extend(_detail_block(heading, body))
+    return lines
+
+
+def _render_items_details(items: Any) -> List[str]:
+    if not isinstance(items, list) or not items:
+        return []
+    rows = []
+    for item in items:
+        if isinstance(item, dict):
+            rows.append([
+                item.get("name", ""),
+                item.get("detail", ""),
+                _format_elapsed(item.get("elapsed_min")) if isinstance(item.get("elapsed_min"), (int, float)) else "",
+            ])
+        else:
+            rows.append([str(item), "", ""])
+    return _detail_block(
+        f"ITEMS ({len(rows)})",
+        _render_markdown_table(["name", "detail", "elapsed"], rows),
+    )
+
+
+def _render_output_field_details(outputs: Dict[str, Any]) -> List[str]:
+    clean = _normalize_report_io(outputs, "output")
+    lines: List[str] = []
+    for key, value in clean.items():
+        if isinstance(value, list) and value:
+            if all(isinstance(item, dict) for item in value):
+                keys: List[str] = []
+                for item in value:
+                    for item_key in item.keys():
+                        if item_key not in keys:
+                            keys.append(item_key)
+                rows = [[item.get(item_key, "") for item_key in keys] for item in value]
+                body = _render_markdown_table(keys, rows)
+            else:
+                body = [f"- {_format_report_scalar(item)}" for item in value]
+            lines.extend(_detail_block(f"{key} ({len(value)})", body))
+        elif isinstance(value, dict) and value:
+            rows = [[sub_key, _format_report_value(sub_value)] for sub_key, sub_value in value.items()]
+            lines.extend(_detail_block(
+                f"{key} ({len(value)} fields)",
+                _render_markdown_table(["field", "value"], rows),
+            ))
+    return lines
+
+
 def _short_json(value: Any, max_chars: int = 6000) -> str:
     try:
         text = json.dumps(value, ensure_ascii=False, indent=2, default=str)
@@ -218,21 +591,7 @@ def _merge_records(existing: Iterable[Dict[str, Any]],
 
 
 def _skill_label(skill_id: str) -> str:
-    if skill_id in _ACTION_BY_SKILL:
-        return _ACTION_BY_SKILL[skill_id]
-    if skill_id.endswith("_export_abc"):
-        return "导出ABC"
-    if skill_id.endswith("_build_asset_info") or skill_id.endswith("_get_scene_info"):
-        return "采集信息"
-    if "compare" in skill_id:
-        return "对比资产"
-    if "sync" in skill_id:
-        return "同步拼装"
-    if "material" in skill_id:
-        return "材质处理"
-    if "clean" in skill_id or "cleanup" in skill_id or "fix" in skill_id:
-        return "清理修复"
-    return "执行技能"
+    return _display_skill_name(skill_id)
 
 
 @contextlib.contextmanager
@@ -317,7 +676,7 @@ def init_report(report_path: str | Path, task_context: Dict[str, Any]) -> str:
         asset = task_context.get("asset_name") or "untitled"
         anchor_start, anchor_end = _block_markers("execution_anchor")
         path.write_text(
-            f"# {asset} 任务报告\n\n{anchor_start}\n## 执行明细\n{anchor_end}\n",
+            f"# {asset} Task Report\n\n{anchor_start}\n## Execution\n{anchor_end}\n",
             encoding="utf-8",
         )
     upsert_block(path, "header", render_header(task_context, "RUNNING"),
@@ -329,21 +688,21 @@ def init_report(report_path: str | Path, task_context: Dict[str, Any]) -> str:
 
 def render_header(task_context: Dict[str, Any], status: str) -> str:
     lines = [
-        "| 字段 | 值 |",
+        "| Field | Value |",
         "|---|---|",
-        f"| 状态 | {_status_icon(status)} {status} |",
-        f"| 任务 ID | `{_escape_md(task_context.get('task_id', ''))}` |",
-        f"| 资产 | {_escape_md(task_context.get('asset_name', 'untitled'))} |",
+        f"| Status | {_status_icon(status)} {status} |",
+        f"| Task ID | `{_escape_md(task_context.get('task_id', ''))}` |",
+        f"| Asset | {_escape_md(task_context.get('asset_name', 'untitled'))} |",
     ]
     if task_context.get("project"):
-        lines.append(f"| 项目 | {_escape_md(task_context.get('project'))} |")
+        lines.append(f"| Project | {_escape_md(task_context.get('project'))} |")
     if task_context.get("workflow_id"):
-        lines.append(f"| 工作流 | `{_escape_md(task_context.get('workflow_id'))}` |")
+        lines.append(f"| Workflow | `{_escape_md(task_context.get('workflow_id'))}` |")
     if task_context.get("source_path"):
-        lines.append(f"| 来源文件 | {_fmt_path(task_context.get('source_path'))} |")
+        lines.append(f"| Source File | {_fmt_path(task_context.get('source_path'))} |")
     if task_context.get("run_dir"):
-        lines.append(f"| 沙盒 | {_fmt_path(task_context.get('run_dir'))} |")
-    lines.append(f"| 更新时间 | {now_str()} |")
+        lines.append(f"| Sandbox | {_fmt_path(task_context.get('run_dir'))} |")
+    lines.append(f"| Updated At | {now_str()} |")
     return "\n".join(lines)
 
 
@@ -352,21 +711,21 @@ def render_final(task_context: Dict[str, Any], status: str,
                  error: str = "",
                  traceback_text: str = "") -> str:
     lines = [
-        "## 最终状态",
+        "## Final Status",
         "",
-        "| 字段 | 值 |",
+        "| Field | Value |",
         "|---|---|",
-        f"| 状态 | {_status_icon(status)} {status} |",
-        f"| 更新时间 | {now_str()} |",
+        f"| Status | {_status_icon(status)} {status} |",
+        f"| Updated At | {now_str()} |",
     ]
     if elapsed_min is not None:
-        lines.append(f"| 总耗时 | {_format_elapsed(elapsed_min)} |")
+        lines.append(f"| Total Elapsed | {_format_elapsed(elapsed_min)} |")
     if task_context.get("run_dir"):
-        lines.append(f"| 沙盒 | {_fmt_cell_path(task_context.get('run_dir'))} |")
+        lines.append(f"| Sandbox | {_fmt_cell_path(task_context.get('run_dir'))} |")
     if error:
-        lines.extend(["", "**错误内容**", "", "```text", str(error), "```"])
+        lines.extend(["", "**Error**", "", "```text", str(error), "```"])
     if traceback_text:
-        lines.extend(["", "**完整 Traceback**", "", "```text", str(traceback_text), "```"])
+        lines.extend(["", "**Traceback**", "", "```text", str(traceback_text), "```"])
     return "\n".join(lines)
 
 
@@ -389,24 +748,24 @@ def _role_node_param(record: Dict[str, Any]) -> tuple[str, str]:
 
     role = str(record.get("role") or "-")
     if role == "source_path":
-        return "文件备份", "主场景文件"
+        return "pipeline_stage_file_to_sandbox", "source_path"
     if role.startswith("input."):
-        return "文件备份", role.split(".", 1)[1]
+        return "pipeline_stage_file_to_sandbox", role.split(".", 1)[1]
     if role.startswith("step."):
         parts = role.split(".")
         if len(parts) >= 3:
-            return f"文件备份:{parts[1]}", ".".join(parts[2:])
-    return "文件备份", role
+            return f"pipeline_stage_file_to_sandbox:{_display_skill_name(parts[1])}", ".".join(parts[2:])
+    return "pipeline_stage_file_to_sandbox", role
 
 
 def render_file_staged(records: Iterable[Dict[str, Any]]) -> str:
     records = list(records or [])
     lines = [
-        "## 文件流转",
+        "## File Staging",
         "",
-        f"共 {len(records)} 项文件或路径节点记录。",
+        f"{len(records)} file/path records.",
         "",
-        "| 节点 | 参数 | 输入 | 输出 | 状态 | 耗时 |",
+        "| Node | Param | Input | Output | Status | Elapsed |",
         "|---|---|---|---|---|---|",
     ]
     for rec in records:
@@ -414,13 +773,13 @@ def render_file_staged(records: Iterable[Dict[str, Any]]) -> str:
         if rec.get("status"):
             state = str(rec.get("status"))
         elif rec.get("skipped"):
-            state = "已在沙盒"
+            state = "ALREADY_IN_SANDBOX"
         elif rec.get("reused"):
-            state = "复用副本"
+            state = "REUSED"
         elif rec.get("error"):
-            state = "失败"
+            state = "ERROR"
         else:
-            state = "已备份"
+            state = "STAGED"
         lines.append(
             f"| {_escape_cell(node)} | "
             f"`{_escape_cell(param)}` | "
@@ -445,20 +804,20 @@ def upsert_file_staged(report_path: str | Path, records: Iterable[Dict[str, Any]
 def _open_scene_node(source_path: str) -> str:
     lower = str(source_path or "").lower()
     if lower.endswith(".blend"):
-        return "打开Blender场景"
+        return "blender_open_scene"
     if lower.endswith((".ma", ".mb")):
-        return "打开Maya场景"
-    return "打开场景"
+        return "maya_open_scene"
+    return "dcc_open_scene"
 
 
 def render_open_scenes(records: Iterable[Dict[str, Any]]) -> str:
     records = list(records or [])
     lines = [
-        "## 打开场景",
+        "## Open Scene",
         "",
-        f"共 {len(records)} 次 DCC 场景打开记录。",
+        f"{len(records)} DCC scene open records.",
         "",
-        "| 节点 | 输入 | 输出 | 状态 | 耗时 |",
+        "| Node | Input | Output | Status | Elapsed |",
         "|---|---|---|---|---|",
     ]
     errors = []
@@ -467,7 +826,7 @@ def render_open_scenes(records: Iterable[Dict[str, Any]]) -> str:
         status = str(rec.get("status") or "UNKNOWN")
         lines.append(
             f"| {_escape_cell(_open_scene_node(source_path))} | "
-            f"{_fmt_cell_path(source_path)} | 当前 DCC 会话 | "
+            f"{_fmt_cell_path(source_path)} | current_dcc_session | "
             f"{_status_icon(status)} {status} | {_fmt_elapsed_sec(rec.get('elapsed_sec'))} |"
         )
         if rec.get("error"):
@@ -475,7 +834,7 @@ def render_open_scenes(records: Iterable[Dict[str, Any]]) -> str:
     for source_path, error in errors:
         lines.extend([
             "",
-            f"**打开失败: {_escape_md(source_path)}**",
+            f"**Open failed: {_escape_md(source_path)}**",
             "",
             "```text",
             error,
@@ -526,27 +885,17 @@ def render_step_started(step_context: Dict[str, Any]) -> str:
     skill_id = step_context.get("skill_id", "unknown")
     label = _skill_label(skill_id)
     lines = [
-        f"### Step {idx}/{total} | {label} | RUNNING | -",
+        f"## Step {idx}/{total} | {label} | RUNNING | -",
         "",
-        "| 字段 | 值 |",
-        "|---|---|",
-        f"| 节点 | {_escape_cell(label)} |",
-        f"| Skill | `{_escape_cell(skill_id)}` |",
-        "| 状态 | RUNNING |",
+        f"- `skill_id`: `{_escape_md(skill_id)}`",
+        "- `status`: RUNNING",
     ]
     if step_context.get("segment") not in (None, "", -1):
-        lines.append(f"| Segment | {step_context.get('segment')} |")
+        lines.append(f"- `segment`: {step_context.get('segment')}")
     if step_context.get("source_path"):
-        lines.append(f"| 输入场景 | {_fmt_cell_path(step_context.get('source_path'))} |")
+        lines.append(f"- `source_path`: {_fmt_path(step_context.get('source_path'))}")
     params = step_context.get("parameters", {}) or {}
-    lines.extend([
-        "",
-        "#### 输入参数",
-        "",
-        "```json",
-        _short_json(params),
-        "```",
-    ])
+    lines.extend(_render_io_list("Input", params, "input"))
     return "\n".join(lines)
 
 
@@ -583,39 +932,47 @@ def render_step_finished(step_context: Dict[str, Any], receipt: Dict[str, Any],
         outputs = receipt.get("outputs", {}) or {}
     summary_line = f"Step {idx}/{total} | {label} | {status} | {elapsed_text}"
     lines = [
-        f"### {summary_line}",
+        f"## {summary_line}",
         "",
-        "#### 标准执行记录",
-        "",
-        "| Skill | 输入 | 输出 | 状态 | 耗时 |",
-        "|---|---|---|---|---|",
-        (
-            f"| `{_escape_cell(skill_id)}` | "
-            f"{_brief_outputs(standard_input)} | {_brief_outputs(outputs)} | "
-            f"{_status_icon(status)} {status} | {elapsed_text} |"
-        ),
+        f"- `skill_id`: `{_escape_md(skill_id)}`",
+        f"- `status`: {_status_icon(status)} {status}",
+        f"- `elapsed`: {elapsed_text}",
     ]
     if memory_gb is not None and memory_gb >= 0:
-        lines.extend(["", f"- **内存**: {memory_gb:.2f} GB"])
+        lines.append(f"- `memory_gb`: {memory_gb:.2f}")
 
-    lines.extend(["", "#### input", "", "```json", _short_json(_report_safe_value(standard_input)), "```"])
-    lines.extend(["", "#### output", "", "```json", _short_json(_report_safe_value(outputs)), "```"])
+    lines.extend(_render_io_list("Input", standard_input, "input"))
+    lines.extend(_render_io_list("Output", outputs, "output"))
+
+    detail_lines: List[str] = []
+    has_report_sections = isinstance(receipt.get("report_sections"), list) and bool(receipt.get("report_sections"))
+    if isinstance(outputs.get("compare_result"), dict):
+        detail_lines.extend(_render_compare_group_details(outputs.get("compare_result")))
+    else:
+        if not has_report_sections:
+            detail_lines.extend(_render_output_field_details(outputs))
+        detail_lines.extend(_render_structured_sections(receipt.get("report_sections")))
+    if not has_report_sections and not detail_lines:
+        detail_lines.extend(_render_items_details(receipt.get("items")))
+    if detail_lines:
+        lines.extend(["", "**Details**"])
+        lines.extend(detail_lines)
 
     error = receipt.get("error", "")
     tb = receipt.get("traceback", "") or receipt.get("traceback_text", "")
     if error or tb or (status not in ("SUCCESS", "RUNNING") and raw_detail):
-        lines.extend(["", "#### 错误信息", ""])
+        lines.extend(["", "**Error Detail**", ""])
         if error:
-            lines.extend(["**错误内容**", "", "```text", str(error), "```", ""])
+            lines.extend(["```text", str(error), "```", ""])
         if tb:
-            lines.extend(["**完整 Traceback**", "", "```text", str(tb), "```", ""])
+            lines.extend(["**Traceback**", "", "```text", str(tb), "```", ""])
         elif raw_detail and status != "SUCCESS":
-            lines.extend(["**原始返回**", "", "```text", str(raw_detail), "```", ""])
+            lines.extend(["**Raw Detail**", "", "```text", str(raw_detail), "```", ""])
 
     if raw_detail and not receipt.get("_parsed", True) and status == "SUCCESS":
         lines.extend([
             "",
-            "#### 原始返回",
+            "**Raw Detail**",
             "",
             "```text",
             str(raw_detail),
@@ -699,14 +1056,14 @@ def render_segment(segment_context: Dict[str, Any], status: str,
     step_count = segment_context.get("step_count", 0)
     elapsed_text = _format_elapsed(elapsed_min) if elapsed_min is not None else "-"
     lines = [
-        f"## Segment {idx} | {dcc} | {status} | {step_count} 步 | {elapsed_text}",
+        f"## Segment {idx} | {dcc} | {status} | {step_count} steps | {elapsed_text}",
         "",
-        "| 字段 | 值 |",
+        "| Field | Value |",
         "|---|---|",
         f"| DCC | `{_escape_cell(dcc)}` |",
-        f"| 步骤数 | {step_count} |",
-        f"| 状态 | {_status_icon(status)} {status} |",
-        f"| 耗时 | {elapsed_text} |",
+        f"| Step Count | {step_count} |",
+        f"| Status | {_status_icon(status)} {status} |",
+        f"| Elapsed | {elapsed_text} |",
     ]
     if error:
         lines.extend(["", "```text", str(error), "```"])
@@ -716,8 +1073,9 @@ def render_segment(segment_context: Dict[str, Any], status: str,
 def upsert_segment(report_path: str | Path, segment_context: Dict[str, Any],
                    status: str, elapsed_min: Optional[float] = None,
                    error: str = "") -> None:
-    block_id = f"segment:{segment_context.get('segment_index', 0)}"
-    upsert_block(report_path, block_id, render_segment(segment_context, status, elapsed_min, error))
+    # Segment 是调度层概念，用户报告按 step 顺序阅读即可。
+    # 保留函数给 core.tasks 调用，但新报告不再写 Segment 块。
+    return None
 
 
 def extract_receipt(detail: Any, skill_id: str = "", status: str = "") -> Dict[str, Any]:

@@ -170,8 +170,26 @@ def execute(payload: dict) -> dict:
     finally:
         cmds.undoInfo(closeChunk=True)
             
-    total_renames = sum(1 for r in report_list if 'renames' in r)
+    total_renames = sum(len(r.get('renames', [])) for r in report_list)
     total_deleted = sum(len(r.get('deleted', [])) for r in report_list)
+    changed_nodes = [
+        {
+            'transform': r.get('transform', ''),
+            'renames': r.get('renames', []),
+            'deleted': r.get('deleted', []),
+            'status': r.get('status', ''),
+        }
+        for r in report_list
+        if r.get('renames') or r.get('deleted')
+    ]
+    warnings = [
+        {
+            'transform': r.get('transform', ''),
+            'message': r.get('msg', ''),
+        }
+        for r in report_list
+        if r.get('status') == 'WARNING'
+    ]
 
     items = []
     for r in report_list:
@@ -195,4 +213,12 @@ def execute(payload: dict) -> dict:
         summary_count=total_renames + total_deleted,
         summary_label='Shape 操作',
         items=items,
+        output={
+            'target_group': target_grp,
+            'renamed_count': total_renames,
+            'deleted_dead_shape_count': total_deleted,
+            'changed_nodes': changed_nodes,
+            'warning_count': len(warnings),
+            'warnings': warnings,
+        },
     )

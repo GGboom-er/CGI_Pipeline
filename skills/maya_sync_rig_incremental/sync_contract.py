@@ -186,11 +186,7 @@ def format_action_summary(counts: dict[str, int]) -> str:
 
 
 def _action_label(action: str) -> str:
-    try:
-        from core.report_labels import label
-        return label("sync_actions", action)
-    except Exception:
-        return action
+    return action
 
 
 def _short_dag(dag: str) -> str:
@@ -226,7 +222,7 @@ def build_sync_report_sections(report: dict, counts: dict[str, int],
             groups_by_action[action].append(group)
 
     overview = [
-        "| 动作 | 数量 |",
+        "| action | count |",
         "|---|---|",
     ]
     for action in VALID_GROUP_ACTIONS:
@@ -234,7 +230,6 @@ def build_sync_report_sections(report: dict, counts: dict[str, int],
     overview.append(f"| {_action_label('target_only')} | {counts.get('target_only', 0)} |")
 
     source_lines = [
-        f"- **compare_result**: `{compare_result_path or '-'}`",
         f"- **source_abc**: `{source_abc or '-'}`",
         f"- **source_info**: `{source_info or '-'}`",
         f"- **cache_group**: `{cache_group or '-'}`",
@@ -242,12 +237,12 @@ def build_sync_report_sections(report: dict, counts: dict[str, int],
 
     sections = [
         {
-            "title": "同步来源",
+            "title": "SYNC_INPUT",
             "summary": f"groups={counts.get('groups', len(groups))} target_only={counts.get('target_only', 0)}",
             "content": "\n".join(source_lines),
         },
         {
-            "title": "同步动作概览",
+            "title": "ACTION_SUMMARY",
             "summary": format_action_summary(counts),
             "content": "\n".join(overview),
         },
