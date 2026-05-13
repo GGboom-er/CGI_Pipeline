@@ -60,10 +60,12 @@ def test_step_upsert_no_duplicate():
     assert "## Step 1/1 | pipeline_compare_geometry_sources | SUCCESS" not in text
     assert "\n<details>\n<summary>Step 1/1 | pipeline_compare_geometry_sources | SUCCESS" in step_block
     assert text.count("<details>") == text.count("<summary>Step ")
-    assert "<h4>Input</h4>" in text
-    assert "<h4>Output</h4>" in text
+    assert "<h4>Input</h4>" not in text
+    assert "<h4>Output</h4>" not in text
     assert "**Input**" not in text
     assert "**Output**" not in text
+    assert "<h4>Details</h4>" in text
+    assert "<h5>result</h5>" in text
     assert "compare_result.json" in text
     print(f"✓ test_step_upsert_no_duplicate → {report}")
 
@@ -168,7 +170,9 @@ def test_compare_result_renders_action_details_without_json_dump():
     text = report.read_text(encoding="utf-8")
     assert "compare_result" not in text
     assert "**Details**" not in text
-    assert "<h4>Details</h4>" not in text
+    assert "<h4>Details</h4>" in text
+    assert "<h5>result</h5>" in text
+    assert "matched_same" in text
     assert "<th>action</th>" not in text
     assert "bodyShape" not in text
     assert "hatA_hatB_Layer" not in text
@@ -204,46 +208,16 @@ def test_embedded_result_contract_stays_out_of_output_summary():
         ],
     })
     text = report.read_text(encoding="utf-8")
-    output_block = text.split("<h4>Output</h4>", 1)[1].split("<h4>Details</h4>", 1)[0]
-    assert "<code>issue_count</code>: 3" in output_block
-    assert "<code>phase</code>:" not in output_block
-    assert "<code>extra_top_nodes</code>:" not in output_block
-    assert "<code>issues</code>:" not in output_block
+    assert "<h4>Input</h4>" not in text
+    assert "<h4>Output</h4>" not in text
+    assert "issue_count" not in text
+    assert "<code>phase</code>:" not in text
+    assert "<code>extra_top_nodes</code>:" not in text
+    assert "<code>issues</code>:" not in text
     assert text.count("<details>") == text.count("<summary>Step ")
     assert "<h5>extra_top_nodes (2)</h5>" in text
     assert "<h5>issues (1)</h5>" in text
     print(f"✓ test_embedded_result_contract_stays_out_of_output_summary → {report}")
-
-
-def test_file_flow_table_has_io_status_elapsed():
-    sbx = _sandbox("file_flow")
-    report = sbx / "REPORT.md"
-    writer.init_report(report, {"task_id": "task-file-flow", "asset_name": "demo", "run_dir": str(sbx)})
-    writer.upsert_file_staged(report, [
-        {
-            "node": "资产路径解析",
-            "param": "asset_name",
-            "input": "ciweiguai",
-            "output": "X:/Project/ysj/pub/assets/chr/ciweiguai/rig/rigMaster/a.ma",
-            "status": "SUCCESS",
-            "elapsed_sec": 3.0,
-        },
-        {
-            "role": "source_path",
-            "origin": "X:/Project/ysj/pub/assets/chr/ciweiguai/rig/rigMaster/a.ma",
-            "sandbox": str(sbx / "a.ma"),
-            "elapsed_sec": 1.2,
-        },
-    ])
-    text = report.read_text(encoding="utf-8")
-    assert "report:data:file_staged:" in text
-    assert "<summary>File Staging | 2 records</summary>" not in text
-    assert "## File Staging" not in text
-    assert "<th>Node</th>" not in text
-    assert "资产路径解析" not in text
-    assert "pipeline_stage_file_to_sandbox" not in text
-    assert "ciweiguai" not in text
-    print(f"✓ test_file_flow_table_has_io_status_elapsed → {report}")
 
 
 def test_internal_chain_history_hidden_from_step_input():
@@ -270,65 +244,9 @@ def test_internal_chain_history_hidden_from_step_input():
     text = report.read_text(encoding="utf-8")
     assert "_chain_history" not in text
     assert "compare_result" not in text
-    assert "source_path" in text
+    assert "source_path" not in text
     assert "demo_v002.ma" in text
     print(f"✓ test_internal_chain_history_hidden_from_step_input → {report}")
-
-
-def test_file_flow_merges_across_segments():
-    sbx = _sandbox("file_flow_merge")
-    report = sbx / "REPORT.md"
-    writer.init_report(report, {"task_id": "task-file-flow-merge", "asset_name": "demo", "run_dir": str(sbx)})
-    writer.upsert_file_staged(report, [
-        {
-            "role": "source_path",
-            "origin": "X:/Project/ysj/pub/assets/chr/demo/tex/texMaster/demo.blend",
-            "sandbox": str(sbx / "demo.blend"),
-            "elapsed_sec": 0.2,
-        },
-    ])
-    writer.upsert_file_staged(report, [
-        {
-            "role": "step.maya_compare_asset_in_scene.input_source",
-            "origin": str(sbx / ".info" / "demo.abc"),
-            "sandbox": str(sbx / ".info" / "demo.abc"),
-            "skipped": True,
-            "elapsed_sec": 0.0,
-        },
-        {
-            "role": "source_path",
-            "origin": "X:/Project/ysj/pub/assets/chr/demo/rig/rigMaster/demo.ma",
-            "sandbox": str(sbx / "demo.ma"),
-            "elapsed_sec": 1.1,
-        },
-    ])
-    text = report.read_text(encoding="utf-8")
-    assert "report:data:file_staged:" in text
-    assert "demo.blend" not in text
-    assert "demo.abc" not in text
-    assert "demo.ma" not in text
-    print(f"✓ test_file_flow_merges_across_segments → {report}")
-
-
-def test_open_scene_merges_across_segments():
-    sbx = _sandbox("open_scene_merge")
-    report = sbx / "REPORT.md"
-    writer.init_report(report, {"task_id": "task-open-scene-merge", "asset_name": "demo", "run_dir": str(sbx)})
-    blend = str(sbx / "demo.blend")
-    maya = str(sbx / "demo.ma")
-    writer.upsert_open_scene(report, blend, "RUNNING")
-    writer.upsert_open_scene(report, blend, "SUCCESS", elapsed_sec=0.5)
-    writer.upsert_open_scene(report, maya, "RUNNING")
-    writer.upsert_open_scene(report, maya, "SUCCESS", elapsed_sec=2.0)
-    text = report.read_text(encoding="utf-8")
-    assert "report:data:open_scene:" in text
-    assert "<summary>Open Scene | 2 records</summary>" not in text
-    assert "## Open Scene" not in text
-    assert "blender_open_scene" not in text
-    assert "maya_open_scene" not in text
-    assert "demo.blend" not in text
-    assert "demo.ma" not in text
-    print(f"✓ test_open_scene_merges_across_segments → {report}")
 
 
 if __name__ == "__main__":
@@ -338,8 +256,5 @@ if __name__ == "__main__":
     test_sections_and_report_content()
     test_compare_result_renders_action_details_without_json_dump()
     test_embedded_result_contract_stays_out_of_output_summary()
-    test_file_flow_table_has_io_status_elapsed()
     test_internal_chain_history_hidden_from_step_input()
-    test_file_flow_merges_across_segments()
-    test_open_scene_merges_across_segments()
     print("\n✅ all pass")

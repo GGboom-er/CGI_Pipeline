@@ -189,8 +189,6 @@ def execute_skill_chain(self, payload: dict):
     if report_path and (not is_subchain or not Path(report_path).exists()):
         _report_writer.init_report(report_path, report_context)
     _t_chain_start = time.time()
-    staged_records = []
-
     def _write_audit(status, detail='', step_idx=-1, skill_id=''):
         entry = {
             'task_id': task_id, 'skill_id': skill_id or 'chain',
@@ -212,10 +210,7 @@ def execute_skill_chain(self, payload: dict):
         return detail
 
     def _record_file_staged(record: dict):
-        staged_records.append(record)
         _write_audit('FILE_STAGED', json.dumps(record, ensure_ascii=False))
-        if report_path:
-            _report_writer.upsert_file_staged(report_path, staged_records)
 
     def _finalize_runtime_report(status: str, error: str = '', tb: str = ''):
         if report_path:
@@ -317,8 +312,6 @@ def execute_skill_chain(self, payload: dict):
                 except Exception as e:
                     logger.warning(f'[{task_id}] 沙盒化主场景失败，使用原路径: {e}')
             _write_audit('CHAIN_OPEN_FILE', source_path, -1, 'open_file')
-            if report_path:
-                _report_writer.upsert_open_scene(report_path, source_path, 'RUNNING')
             _update_progress(self, 'OPENING_FILE', f'正在打开源文件: {source_path}')
             _t_open = time.time()
             ok, err = _open_source_file(worker, task_id, source_path, dcc_type)
@@ -326,11 +319,6 @@ def execute_skill_chain(self, payload: dict):
             if not ok:
                 meaningful_err = _translate_error(err, "open_file")
                 _write_audit('CHAIN_ABORTED', f'打开文件失败: {meaningful_err}')
-                if report_path:
-                    _report_writer.upsert_open_scene(
-                        report_path, source_path, 'ERROR',
-                        elapsed_sec=open_elapsed_sec, error=meaningful_err,
-                    )
                 _finalize_runtime_report('CHAIN_ABORTED', error=meaningful_err)
                 return {
                     'task_id': task_id, 'status': 'CHAIN_ABORTED',
@@ -338,10 +326,6 @@ def execute_skill_chain(self, payload: dict):
                     'chain_results': [], 'report_path': report_path,
                 }
             _write_audit('CHAIN_FILE_OPENED', source_path, -1, 'open_file')
-            if report_path:
-                _report_writer.upsert_open_scene(
-                    report_path, source_path, 'SUCCESS', elapsed_sec=open_elapsed_sec
-                )
         elif not source_path and dcc_type in ('maya', 'blender'):
             # 对于 Warm Pool，如果没有源文件，必须强制清空场景防止污染
             _open_source_file(worker, task_id, "", dcc_type)
@@ -630,12 +614,9 @@ def execute_dcc_skill(self, payload: dict):
         'run_dir': str(run_dir),
     }
     _report_writer.init_report(report_path, report_context)
-    staged_records = []
 
     def _record_file_staged(record: dict):
-        staged_records.append(record)
         _write_audit('FILE_STAGED', json.dumps(record, ensure_ascii=False))
-        _report_writer.upsert_file_staged(report_path, staged_records)
 
     def _finalize_runtime_report(status: str, error: str = '', tb: str = ''):
         elapsed_min = (time.time() - _t_start) / 60
@@ -729,7 +710,6 @@ def execute_dcc_skill(self, payload: dict):
                     logger.warning(f'[{task_id}] 沙盒化失败，使用原路径: {e}')
             payload['source_path'] = source_path
             _write_audit('CHAIN_OPEN_FILE', source_path)
-            _report_writer.upsert_open_scene(report_path, source_path, 'RUNNING')
             _update_progress(self, 'OPENING_FILE', f'正在打开源文件: {source_path}')
             _t_open = time.time()
             ok, err = _open_source_file(worker, task_id, source_path, dcc_type)
@@ -737,16 +717,11 @@ def execute_dcc_skill(self, payload: dict):
             if not ok:
                 meaningful_err = _translate_error(err, "open_file")
                 _write_audit('OPEN_FILE_FAILED', meaningful_err)
-                _report_writer.upsert_open_scene(
-                    report_path, source_path, 'ERROR',
-                    elapsed_sec=open_elapsed, error=meaningful_err,
-                )
                 _finalize_runtime_report('SKILL_ERROR', error=meaningful_err)
                 return {'task_id': task_id, 'status': 'SKILL_ERROR',
                         'detail': f'打开文件失败: {source_path} — {meaningful_err}',
                         'report_path': report_path}
             _write_audit('CHAIN_FILE_OPENED', source_path)
-            _report_writer.upsert_open_scene(report_path, source_path, 'SUCCESS', elapsed_sec=open_elapsed)
         elif not source_path and dcc_type in ('maya', 'blender'):
             _open_source_file(worker, task_id, "", dcc_type)
 
@@ -915,12 +890,9 @@ def execute_workflow(self, payload: dict):
             'run_dir': str(run_dir),
         }
         _report_writer.init_report(master_report_path, report_context)
-        staged_records = []
 
         def _record_file_staged(record: dict):
-            staged_records.append(record)
             _write_audit('FILE_STAGED', json.dumps(record, ensure_ascii=False))
-            _report_writer.upsert_file_staged(master_report_path, staged_records)
 
         def _finalize_runtime_report(status: str, error: str = '', tb: str = ''):
             elapsed_min = (time.time() - _t_workflow_start) / 60
@@ -1058,15 +1030,6 @@ def execute_workflow(self, payload: dict):
             seg_task_id = f'{task_id}_seg{seg_idx}'
             _write_audit('SEGMENT_START',
                           f'seg {seg_idx}: {seg_dcc}, {len(resolved_steps)} steps')
-            _report_writer.upsert_segment(
-                master_report_path,
-                {
-                    'segment_index': seg_idx,
-                    'dcc': seg_dcc,
-                    'step_count': len(resolved_steps),
-                },
-                'RUNNING',
-            )
             publish_event(task_id, {
                 'event_type': 'segment.start',
                 'segment': seg_idx,
@@ -1162,17 +1125,6 @@ def execute_workflow(self, payload: dict):
                 seg_detail['error'] = str(seg_result.get('error'))[:500]
             _write_audit(f'SEGMENT_{seg_status}',
                           json.dumps(seg_detail, default=str, ensure_ascii=False))
-            _report_writer.upsert_segment(
-                master_report_path,
-                {
-                    'segment_index': seg_idx,
-                    'dcc': seg_dcc,
-                    'step_count': len(seg_chain_results),
-                },
-                seg_status,
-                elapsed_min=round(_seg_ts_min, 2),
-                error=seg_detail.get('error', ''),
-            )
 
             publish_event(task_id, {
                 'event_type': 'segment.done',

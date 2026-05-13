@@ -15,7 +15,6 @@ import os
 import re
 import time
 import traceback as _traceback
-import base64
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -125,36 +124,6 @@ def _looks_like_path(value: Any) -> bool:
     )
 
 
-def _brief_outputs(outputs: Dict[str, Any]) -> str:
-    if not outputs:
-        return "-"
-    result = outputs.get("result")
-    if isinstance(result, dict):
-        path_parts = []
-        for key in ("source_path", "rig_path", "output_path", "report_path"):
-            if result.get(key):
-                path_parts.append(f"result.{key}={_fmt_cell_path(result.get(key))}")
-        if path_parts:
-            return "；".join(path_parts[:4])
-        if result:
-            return f"result={len(result)} 个字段"
-    preferred = ["output_path", "report_path", "result"]
-    parts = []
-    for key in preferred + [k for k in outputs.keys() if k not in preferred]:
-        if key not in outputs:
-            continue
-        value = outputs.get(key)
-        if _looks_like_path(value):
-            parts.append(f"{key}={_fmt_cell_path(value)}")
-        else:
-            parts.append(f"{key}={_escape_cell(value)}")
-        if len(parts) >= 4:
-            break
-    if len(outputs) > len(parts):
-        parts.append(f"... 其他 {len(outputs) - len(parts)} 项")
-    return "；".join(parts) if parts else "-"
-
-
 def _display_skill_name(skill_id: str) -> str:
     return _REPORT_SKILL_NAME_BY_ID.get(skill_id, skill_id or "unknown_skill")
 
@@ -174,53 +143,6 @@ def _short_dag(dag: Any) -> str:
     parts = text.strip("|").split("|")
     leaf = parts[-1] if parts else text
     return leaf.split(":")[-1]
-
-
-def _format_report_scalar(value: Any) -> str:
-    if value is None or value == "":
-        return "-"
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if _looks_like_path(value):
-        return _fmt_path(value)
-    return f"`{_escape_md(value)}`" if isinstance(value, str) else str(value)
-
-
-def _format_report_value(value: Any) -> str:
-    if isinstance(value, dict):
-        return f"{len(value)} fields"
-    if isinstance(value, list):
-        if not value:
-            return "0 items"
-        if len(value) <= 6 and all(not isinstance(x, (dict, list)) for x in value):
-            return ", ".join(_format_report_scalar(x) for x in value)
-        return f"{len(value)} items"
-    return _format_report_scalar(value)
-
-
-def _format_report_scalar_html(value: Any) -> str:
-    if value is None or value == "":
-        return "-"
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    text = str(value)
-    if _looks_like_path(text):
-        return f"<code>{html.escape(text)}</code>"
-    if isinstance(value, str):
-        return f"<code>{html.escape(text)}</code>"
-    return html.escape(text)
-
-
-def _format_report_value_html(value: Any) -> str:
-    if isinstance(value, dict):
-        return f"{len(value)} fields"
-    if isinstance(value, list):
-        if not value:
-            return "0 items"
-        if len(value) <= 6 and all(not isinstance(x, (dict, list)) for x in value):
-            return ", ".join(_format_report_scalar_html(x) for x in value)
-        return f"{len(value)} items"
-    return _format_report_scalar_html(value)
 
 
 def _normalize_report_io(values: Dict[str, Any], section: str) -> Dict[str, Any]:
@@ -246,7 +168,7 @@ def _normalize_report_io(values: Dict[str, Any], section: str) -> Dict[str, Any]
             elif any(key in values for key in ("matched_same", "matched_different", "only_source", "only_target")):
                 values["compare_result_path"] = output_path
                 values.pop("output_path", None)
-            elif len(values) == 1:
+            elif len(values) == 1 and str(output_path).lower().endswith((".ma", ".mb", ".blend")):
                 values["scene_path"] = output_path
                 values.pop("output_path", None)
     clean: Dict[str, Any] = {}
@@ -267,33 +189,6 @@ def _normalize_report_io(values: Dict[str, Any], section: str) -> Dict[str, Any]
             continue
         clean[str(key)] = _report_safe_value(value)
     return clean
-
-
-def _render_io_list(title: str, values: Dict[str, Any], section: str) -> List[str]:
-    clean = _normalize_report_io(values, section)
-    lines = ["", f"**{title}**"]
-    if not clean:
-        lines.append("- none")
-        return lines
-    for key, value in clean.items():
-        lines.append(f"- `{_escape_md(key)}`: {_format_report_value(value)}")
-    return lines
-
-
-def _render_markdown_table(headers: List[str], rows: List[List[Any]]) -> List[str]:
-    lines = [
-        "| " + " | ".join(_escape_cell(h) for h in headers) + " |",
-        "|" + "|".join("---" for _ in headers) + "|",
-    ]
-    for row in rows:
-        cells = []
-        for value in row:
-            if _looks_like_path(value):
-                cells.append(_fmt_cell_path(value))
-            else:
-                cells.append(_escape_cell(value))
-        lines.append("| " + " | ".join(cells) + " |")
-    return lines
 
 
 def _html_cell(value: Any) -> str:
@@ -327,28 +222,6 @@ def _render_html_list(items: Iterable[Any]) -> List[str]:
     return lines
 
 
-def _render_html_kv_list(values: Dict[str, Any], section: str = "") -> List[str]:
-    clean = _normalize_report_io(values, section) if section else dict(values or {})
-    lines = ["<ul>"]
-    if not clean:
-        lines.append("<li>none</li>")
-    else:
-        for key, value in clean.items():
-            lines.append(
-                f"<li><code>{html.escape(str(key))}</code>: "
-                f"{_format_report_value_html(value)}</li>"
-            )
-    lines.append("</ul>")
-    return lines
-
-
-def _render_html_io_section(title: str, values: Dict[str, Any], section: str) -> List[str]:
-    return [
-        f"<h4>{html.escape(title)}</h4>",
-        *_render_html_kv_list(values, section),
-    ]
-
-
 def _render_html_pre(text: str) -> List[str]:
     return ["<pre>", html.escape(str(text)), "</pre>"]
 
@@ -369,10 +242,6 @@ def _wrap_summary_body(summary_line: str, body_lines: List[str]) -> str:
         "",
         "</details>",
     ])
-
-
-def _render_compare_group_details(compare_payload: Dict[str, Any]) -> List[str]:
-    return []
 
 
 def _render_structured_sections(sections: Any) -> List[str]:
@@ -429,6 +298,7 @@ def _render_items_details(items: Any) -> List[str]:
 def _render_output_field_details(outputs: Dict[str, Any]) -> List[str]:
     clean = _normalize_report_io(outputs, "output")
     lines: List[str] = []
+    scalar_rows: List[List[Any]] = []
     for key, value in clean.items():
         if isinstance(value, list) and value:
             if all(isinstance(item, dict) for item in value):
@@ -448,17 +318,14 @@ def _render_output_field_details(outputs: Dict[str, Any]) -> List[str]:
                 f"{key} ({len(value)} fields)",
                 _render_html_table(["field", "value"], rows),
             ))
+        elif value not in (None, "", [], {}):
+            scalar_rows.append([key, value])
+    if scalar_rows:
+        lines[0:0] = _render_html_subsection(
+            "result",
+            _render_html_table(["field", "value"], scalar_rows),
+        )
     return lines
-
-
-def _short_json(value: Any, max_chars: int = 6000) -> str:
-    try:
-        text = json.dumps(value, ensure_ascii=False, indent=2, default=str)
-    except Exception:
-        text = str(value)
-    if len(text) > max_chars:
-        return text[:max_chars] + f"\n... 已截断 {len(text) - max_chars} 字符"
-    return text
 
 
 def _report_safe_value(value: Any) -> Any:
@@ -477,54 +344,6 @@ def _report_safe_value(value: Any) -> Any:
     if isinstance(value, list):
         return [_report_safe_value(item) for item in value[:20]]
     return value
-
-
-def _data_marker(kind: str, records: Any) -> str:
-    raw = json.dumps(records, ensure_ascii=False, separators=(",", ":"), default=str)
-    payload = base64.b64encode(raw.encode("utf-8")).decode("ascii")
-    return f"[//]: # (report:data:{kind}:{payload})"
-
-
-def _read_data_marker(report_path: str | Path, kind: str) -> List[Dict[str, Any]]:
-    path = Path(report_path)
-    if not path.exists():
-        return []
-    text = path.read_text(encoding="utf-8")
-    pattern = re.compile(
-        r"\[//\]: # \(report:data:" + re.escape(kind) + r":([A-Za-z0-9+/=]+)\)"
-    )
-    matches = pattern.findall(text)
-    if not matches:
-        return []
-    try:
-        decoded = base64.b64decode(matches[-1].encode("ascii")).decode("utf-8")
-        data = json.loads(decoded)
-    except Exception:
-        return []
-    if not isinstance(data, list):
-        return []
-    return [dict(x) for x in data if isinstance(x, dict)]
-
-
-def _merge_records(existing: Iterable[Dict[str, Any]],
-                   incoming: Iterable[Dict[str, Any]],
-                   key_fields: Iterable[str]) -> List[Dict[str, Any]]:
-    merged: List[Dict[str, Any]] = []
-    index: Dict[tuple, int] = {}
-    fields = list(key_fields)
-    for rec in list(existing or []) + list(incoming or []):
-        if not isinstance(rec, dict):
-            continue
-        key = tuple(str(rec.get(field, "")) for field in fields)
-        if not any(key):
-            key = (json.dumps(rec, ensure_ascii=False, sort_keys=True, default=str),)
-        clean = dict(rec)
-        if key in index:
-            merged[index[key]].update(clean)
-        else:
-            index[key] = len(merged)
-            merged.append(clean)
-    return merged
 
 
 def _skill_label(skill_id: str) -> str:
@@ -679,79 +498,6 @@ def finalize_report(report_path: str | Path, task_context: Dict[str, Any],
     )
 
 
-def _role_node_param(record: Dict[str, Any]) -> tuple[str, str]:
-    if record.get("node") or record.get("param"):
-        return str(record.get("node") or "文件流转"), str(record.get("param") or record.get("role") or "-")
-
-    role = str(record.get("role") or "-")
-    if role == "source_path":
-        return "pipeline_stage_file_to_sandbox", "source_path"
-    if role.startswith("input."):
-        return "pipeline_stage_file_to_sandbox", role.split(".", 1)[1]
-    if role.startswith("step."):
-        parts = role.split(".")
-        if len(parts) >= 3:
-            return f"pipeline_stage_file_to_sandbox:{_display_skill_name(parts[1])}", ".".join(parts[2:])
-    return "pipeline_stage_file_to_sandbox", role
-
-
-def render_file_staged(records: Iterable[Dict[str, Any]]) -> str:
-    records = list(records or [])
-    # 调度层文件流转只用于内部合并，用户报告按 skill step 顺序阅读。
-    return _data_marker("file_staged", records)
-
-
-def upsert_file_staged(report_path: str | Path, records: Iterable[Dict[str, Any]]) -> None:
-    merged = _merge_records(
-        _read_data_marker(report_path, "file_staged"),
-        records,
-        ("role", "node", "param", "origin", "sandbox", "input", "output"),
-    )
-    upsert_block(report_path, "context:file_staged", render_file_staged(merged))
-
-
-def _open_scene_node(source_path: str) -> str:
-    lower = str(source_path or "").lower()
-    if lower.endswith(".blend"):
-        return "blender_open_scene"
-    if lower.endswith((".ma", ".mb")):
-        return "maya_open_scene"
-    return "dcc_open_scene"
-
-
-def render_open_scenes(records: Iterable[Dict[str, Any]]) -> str:
-    records = list(records or [])
-    # 打开场景是调度事实，不再作为可见报告块展示，避免打断 step 阅读。
-    return _data_marker("open_scene", records)
-
-
-def render_open_scene(source_path: str, status: str,
-                      elapsed_sec: Optional[float] = None,
-                      error: str = "") -> str:
-    return render_open_scenes([{
-        "source_path": source_path,
-        "status": status,
-        "elapsed_sec": elapsed_sec,
-        "error": error,
-    }])
-
-
-def upsert_open_scene(report_path: str | Path, source_path: str, status: str,
-                      elapsed_sec: Optional[float] = None,
-                      error: str = "") -> None:
-    merged = _merge_records(
-        _read_data_marker(report_path, "open_scene"),
-        [{
-            "source_path": source_path,
-            "status": status,
-            "elapsed_sec": elapsed_sec,
-            "error": error,
-        }],
-        ("source_path",),
-    )
-    upsert_block(report_path, "context:open_scene", render_open_scenes(merged))
-
-
 def _step_block_id(step_context: Dict[str, Any]) -> str:
     segment = step_context.get("segment")
     prefix = f"seg{segment}" if segment is not None and segment != "" and segment != -1 else "main"
@@ -766,19 +512,7 @@ def render_step_started(step_context: Dict[str, Any]) -> str:
     skill_id = step_context.get("skill_id", "unknown")
     label = _skill_label(skill_id)
     summary_line = f"Step {idx}/{total} | {label} | RUNNING | -"
-    body_lines = [
-        *_render_html_kv_list({
-            "skill_id": skill_id,
-            "status": "RUNNING",
-        }),
-    ]
-    if step_context.get("segment") not in (None, "", -1):
-        body_lines.extend(_render_html_kv_list({"segment": step_context.get("segment")}))
-    if step_context.get("source_path"):
-        body_lines.extend(_render_html_kv_list({"source_path": step_context.get("source_path")}))
-    params = step_context.get("parameters", {}) or {}
-    body_lines.extend(_render_html_io_section("Input", params, "input"))
-    return _wrap_summary_body(summary_line, body_lines)
+    return _wrap_summary_body(summary_line, [])
 
 
 def upsert_step_started(report_path: str | Path, step_context: Dict[str, Any]) -> None:
@@ -799,36 +533,16 @@ def render_step_finished(step_context: Dict[str, Any], receipt: Dict[str, Any],
         elapsed_sec = float(elapsed_min) * 60.0 if isinstance(elapsed_min, (int, float)) else None
     elapsed_text = _fmt_elapsed_sec(elapsed_sec)
 
-    standard_input = receipt.get("input") if isinstance(receipt.get("input"), dict) else {}
-    if not standard_input:
-        standard_input = {}
-        if step_context.get("source_path"):
-            standard_input["source_path"] = step_context.get("source_path")
-        for key, value in (step_context.get("parameters", {}) or {}).items():
-            if str(key).startswith("_"):
-                continue
-            standard_input[key] = value
-
     outputs = receipt.get("output") if isinstance(receipt.get("output"), dict) else None
     if outputs is None:
         outputs = receipt.get("outputs", {}) or {}
     summary_line = f"Step {idx}/{total} | {label} | {status} | {elapsed_text}"
-    meta = {
-        "skill_id": skill_id,
-        "status": f"{_status_icon(status)} {status}",
-        "elapsed": elapsed_text,
-    }
-    if memory_gb is not None and memory_gb >= 0:
-        meta["memory_gb"] = f"{memory_gb:.2f}"
-    body_lines = _render_html_kv_list(meta)
-
-    body_lines.extend(_render_html_io_section("Input", standard_input, "input"))
-    body_lines.extend(_render_html_io_section("Output", outputs, "output"))
+    body_lines: List[str] = []
 
     detail_lines: List[str] = []
     has_report_sections = isinstance(receipt.get("report_sections"), list) and bool(receipt.get("report_sections"))
     if isinstance(outputs.get("compare_result"), dict):
-        detail_lines.extend(_render_compare_group_details(outputs.get("compare_result")))
+        detail_lines.extend(_render_output_field_details(outputs))
     else:
         if not has_report_sections:
             detail_lines.extend(_render_output_field_details(outputs))
@@ -869,91 +583,6 @@ def upsert_step_finished(report_path: str | Path, step_context: Dict[str, Any],
         _step_block_id(step_context),
         render_step_finished(step_context, receipt, worker_status, memory_gb, raw_detail),
     )
-
-
-def _render_items(items: List[Dict[str, Any]]) -> List[str]:
-    lines = [
-        "",
-        f"#### 受影响对象 | {len(items)} 项",
-        "",
-        "| 对象 | 详情 | 耗时 |",
-        "|---|---|---|",
-    ]
-    for item in items:
-        elapsed = item.get("elapsed_min")
-        elapsed_text = _format_elapsed(elapsed) if isinstance(elapsed, (int, float)) else "-"
-        lines.append(
-            f"| {_escape_cell(item.get('name', ''))} | "
-            f"{_escape_cell(item.get('detail', ''))} | {elapsed_text} |"
-        )
-    return lines
-
-
-def _render_section(section: Dict[str, Any]) -> List[str]:
-    title = section.get("title") or section.get("name") or "详细信息"
-    summary = section.get("summary") or ""
-    head = f"{title}" + (f" | {summary}" if summary else "")
-    lines = ["", f"#### {_escape_md(head)}", ""]
-    if section.get("description"):
-        lines.extend([str(section.get("description")), ""])
-    if section.get("content"):
-        lines.extend([str(section.get("content")), ""])
-    if section.get("markdown"):
-        lines.extend([str(section.get("markdown")), ""])
-    items = section.get("items") or []
-    if items:
-        total_items = len(items)
-        shown_items = items[:20]
-        if all(isinstance(x, dict) for x in items):
-            keys = []
-            for item in shown_items:
-                for key in item.keys():
-                    if key not in keys:
-                        keys.append(key)
-                if len(keys) >= 6:
-                    break
-            keys = keys[:6] or ["name", "detail"]
-            lines.append("| " + " | ".join(_escape_cell(k) for k in keys) + " |")
-            lines.append("|" + "|".join("---" for _ in keys) + "|")
-            for item in shown_items:
-                lines.append("| " + " | ".join(_escape_cell(item.get(k, "")) for k in keys) + " |")
-        else:
-            for item in shown_items:
-                lines.append(f"- {_escape_md(item)}")
-        if total_items > len(shown_items):
-            lines.append(f"- ... 其他 {total_items - len(shown_items)} 项")
-        lines.append("")
-    return lines
-
-
-def render_segment(segment_context: Dict[str, Any], status: str,
-                   elapsed_min: Optional[float] = None,
-                   error: str = "") -> str:
-    idx = segment_context.get("segment_index", 0)
-    dcc = segment_context.get("dcc", "")
-    step_count = segment_context.get("step_count", 0)
-    elapsed_text = _format_elapsed(elapsed_min) if elapsed_min is not None else "-"
-    lines = [
-        f"## Segment {idx} | {dcc} | {status} | {step_count} steps | {elapsed_text}",
-        "",
-        "| Field | Value |",
-        "|---|---|",
-        f"| DCC | `{_escape_cell(dcc)}` |",
-        f"| Step Count | {step_count} |",
-        f"| Status | {_status_icon(status)} {status} |",
-        f"| Elapsed | {elapsed_text} |",
-    ]
-    if error:
-        lines.extend(["", "```text", str(error), "```"])
-    return "\n".join(lines)
-
-
-def upsert_segment(report_path: str | Path, segment_context: Dict[str, Any],
-                   status: str, elapsed_min: Optional[float] = None,
-                   error: str = "") -> None:
-    # Segment 是调度层概念，用户报告按 step 顺序阅读即可。
-    # 保留函数给 core.tasks 调用，但新报告不再写 Segment 块。
-    return None
 
 
 def extract_receipt(detail: Any, skill_id: str = "", status: str = "") -> Dict[str, Any]:
