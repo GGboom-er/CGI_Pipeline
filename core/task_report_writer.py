@@ -198,6 +198,31 @@ def _format_report_value(value: Any) -> str:
     return _format_report_scalar(value)
 
 
+def _format_report_scalar_html(value: Any) -> str:
+    if value is None or value == "":
+        return "-"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    text = str(value)
+    if _looks_like_path(text):
+        return f"<code>{html.escape(text)}</code>"
+    if isinstance(value, str):
+        return f"<code>{html.escape(text)}</code>"
+    return html.escape(text)
+
+
+def _format_report_value_html(value: Any) -> str:
+    if isinstance(value, dict):
+        return f"{len(value)} fields"
+    if isinstance(value, list):
+        if not value:
+            return "0 items"
+        if len(value) <= 6 and all(not isinstance(x, (dict, list)) for x in value):
+            return ", ".join(_format_report_scalar_html(x) for x in value)
+        return f"{len(value)} items"
+    return _format_report_scalar_html(value)
+
+
 def _normalize_report_io(values: Dict[str, Any], section: str) -> Dict[str, Any]:
     if not isinstance(values, dict):
         return {}
@@ -302,6 +327,32 @@ def _render_html_list(items: Iterable[Any]) -> List[str]:
     return lines
 
 
+def _render_html_kv_list(values: Dict[str, Any], section: str = "") -> List[str]:
+    clean = _normalize_report_io(values, section) if section else dict(values or {})
+    lines = ["<ul>"]
+    if not clean:
+        lines.append("<li>none</li>")
+    else:
+        for key, value in clean.items():
+            lines.append(
+                f"<li><code>{html.escape(str(key))}</code>: "
+                f"{_format_report_value_html(value)}</li>"
+            )
+    lines.append("</ul>")
+    return lines
+
+
+def _render_html_io_section(title: str, values: Dict[str, Any], section: str) -> List[str]:
+    return [
+        f"<h4>{html.escape(title)}</h4>",
+        *_render_html_kv_list(values, section),
+    ]
+
+
+def _render_html_pre(text: str) -> List[str]:
+    return ["<pre>", html.escape(str(text)), "</pre>"]
+
+
 def _detail_block(summary: str, body_lines: List[str], open_by_default: bool = False) -> List[str]:
     attr = " open" if open_by_default else ""
     return [
@@ -339,11 +390,9 @@ def _render_structured_sections(sections: Any) -> List[str]:
         heading = f"{title} ({summary})" if summary else title
         body: List[str] = []
         if section.get("content"):
-            body.extend(str(section.get("content")).splitlines())
-            body.append("")
+            body.extend(_render_html_pre(str(section.get("content"))))
         if section.get("markdown"):
-            body.extend(str(section.get("markdown")).splitlines())
-            body.append("")
+            body.extend(_render_html_pre(str(section.get("markdown"))))
         items = section.get("items") or []
         if items:
             if all(isinstance(item, dict) for item in items):
@@ -652,11 +701,9 @@ def _role_node_param(record: Dict[str, Any]) -> tuple[str, str]:
 def render_file_staged(records: Iterable[Dict[str, Any]]) -> str:
     records = list(records or [])
     body_lines = [
-        f"{len(records)} file/path records.",
-        "",
-        "| Node | Param | Input | Output | Status | Elapsed |",
-        "|---|---|---|---|---|---|",
+        f"<p>{len(records)} file/path records.</p>",
     ]
+    rows = []
     for rec in records:
         node, param = _role_node_param(rec)
         if rec.get("status"):
@@ -669,16 +716,19 @@ def render_file_staged(records: Iterable[Dict[str, Any]]) -> str:
             state = "ERROR"
         else:
             state = "STAGED"
-        body_lines.append(
-            f"| {_escape_cell(node)} | "
-            f"`{_escape_cell(param)}` | "
-            f"{_fmt_cell_path(rec.get('input', rec.get('origin', '')))} | "
-            f"{_fmt_cell_path(rec.get('output', rec.get('sandbox', '')))} | "
-            f"{_escape_cell(state)} | "
-            f"{_fmt_elapsed_sec(rec.get('elapsed_sec'))} |"
-        )
-    body_lines.extend(["", _data_marker("file_staged", records)])
-    return _wrap_summary_body(f"File Staging | {len(records)} records", body_lines)
+        rows.append([
+            node,
+            param,
+            rec.get("input", rec.get("origin", "")),
+            rec.get("output", rec.get("sandbox", "")),
+            state,
+            _fmt_elapsed_sec(rec.get("elapsed_sec")),
+        ])
+    body_lines.extend(_render_html_table(["Node", "Param", "Input", "Output", "Status", "Elapsed"], rows))
+    return "\n".join([
+        _wrap_summary_body(f"File Staging | {len(records)} records", body_lines),
+        _data_marker("file_staged", records),
+    ])
 
 
 def upsert_file_staged(report_path: str | Path, records: Iterable[Dict[str, Any]]) -> None:
@@ -702,33 +752,33 @@ def _open_scene_node(source_path: str) -> str:
 def render_open_scenes(records: Iterable[Dict[str, Any]]) -> str:
     records = list(records or [])
     body_lines = [
-        f"{len(records)} DCC scene open records.",
-        "",
-        "| Node | Input | Output | Status | Elapsed |",
-        "|---|---|---|---|---|",
+        f"<p>{len(records)} DCC scene open records.</p>",
     ]
     errors = []
+    rows = []
     for rec in records:
         source_path = str(rec.get("source_path") or "")
         status = str(rec.get("status") or "UNKNOWN")
-        body_lines.append(
-            f"| {_escape_cell(_open_scene_node(source_path))} | "
-            f"{_fmt_cell_path(source_path)} | current_dcc_session | "
-            f"{_status_icon(status)} {status} | {_fmt_elapsed_sec(rec.get('elapsed_sec'))} |"
-        )
+        rows.append([
+            _open_scene_node(source_path),
+            source_path,
+            "current_dcc_session",
+            f"{_status_icon(status)} {status}",
+            _fmt_elapsed_sec(rec.get("elapsed_sec")),
+        ])
         if rec.get("error"):
             errors.append((source_path, str(rec.get("error"))))
+    body_lines.extend(_render_html_table(["Node", "Input", "Output", "Status", "Elapsed"], rows))
     for source_path, error in errors:
         body_lines.extend([
             "",
-            f"**Open failed: {_escape_md(source_path)}**",
-            "",
-            "```text",
-            error,
-            "```",
+            f"<p><strong>Open failed: {html.escape(source_path)}</strong></p>",
+            *_render_html_pre(error),
         ])
-    body_lines.extend(["", _data_marker("open_scene", records)])
-    return _wrap_summary_body(f"Open Scene | {len(records)} records", body_lines)
+    return "\n".join([
+        _wrap_summary_body(f"Open Scene | {len(records)} records", body_lines),
+        _data_marker("open_scene", records),
+    ])
 
 
 def render_open_scene(source_path: str, status: str,
@@ -773,15 +823,17 @@ def render_step_started(step_context: Dict[str, Any]) -> str:
     label = _skill_label(skill_id)
     summary_line = f"Step {idx}/{total} | {label} | RUNNING | -"
     body_lines = [
-        f"- `skill_id`: `{_escape_md(skill_id)}`",
-        "- `status`: RUNNING",
+        *_render_html_kv_list({
+            "skill_id": skill_id,
+            "status": "RUNNING",
+        }),
     ]
     if step_context.get("segment") not in (None, "", -1):
-        body_lines.append(f"- `segment`: {step_context.get('segment')}")
+        body_lines.extend(_render_html_kv_list({"segment": step_context.get("segment")}))
     if step_context.get("source_path"):
-        body_lines.append(f"- `source_path`: {_fmt_path(step_context.get('source_path'))}")
+        body_lines.extend(_render_html_kv_list({"source_path": step_context.get("source_path")}))
     params = step_context.get("parameters", {}) or {}
-    body_lines.extend(_render_io_list("Input", params, "input"))
+    body_lines.extend(_render_html_io_section("Input", params, "input"))
     return _wrap_summary_body(summary_line, body_lines)
 
 
@@ -817,16 +869,17 @@ def render_step_finished(step_context: Dict[str, Any], receipt: Dict[str, Any],
     if outputs is None:
         outputs = receipt.get("outputs", {}) or {}
     summary_line = f"Step {idx}/{total} | {label} | {status} | {elapsed_text}"
-    body_lines = [
-        f"- `skill_id`: `{_escape_md(skill_id)}`",
-        f"- `status`: {_status_icon(status)} {status}",
-        f"- `elapsed`: {elapsed_text}",
-    ]
+    meta = {
+        "skill_id": skill_id,
+        "status": f"{_status_icon(status)} {status}",
+        "elapsed": elapsed_text,
+    }
     if memory_gb is not None and memory_gb >= 0:
-        body_lines.append(f"- `memory_gb`: {memory_gb:.2f}")
+        meta["memory_gb"] = f"{memory_gb:.2f}"
+    body_lines = _render_html_kv_list(meta)
 
-    body_lines.extend(_render_io_list("Input", standard_input, "input"))
-    body_lines.extend(_render_io_list("Output", outputs, "output"))
+    body_lines.extend(_render_html_io_section("Input", standard_input, "input"))
+    body_lines.extend(_render_html_io_section("Output", outputs, "output"))
 
     detail_lines: List[str] = []
     has_report_sections = isinstance(receipt.get("report_sections"), list) and bool(receipt.get("report_sections"))
@@ -839,28 +892,25 @@ def render_step_finished(step_context: Dict[str, Any], receipt: Dict[str, Any],
     if not has_report_sections and not detail_lines:
         detail_lines.extend(_render_items_details(receipt.get("items")))
     if detail_lines:
-        body_lines.extend(["", "**Details**"])
+        body_lines.extend(["", "<h4>Details</h4>"])
         body_lines.extend(detail_lines)
 
     error = receipt.get("error", "")
     tb = receipt.get("traceback", "") or receipt.get("traceback_text", "")
     if error or tb or (status not in ("SUCCESS", "RUNNING") and raw_detail):
-        body_lines.extend(["", "**Error Detail**", ""])
+        body_lines.extend(["", "<h4>Error Detail</h4>"])
         if error:
-            body_lines.extend(["```text", str(error), "```", ""])
+            body_lines.extend(_render_html_pre(str(error)))
         if tb:
-            body_lines.extend(["**Traceback**", "", "```text", str(tb), "```", ""])
+            body_lines.extend(["<h4>Traceback</h4>", *_render_html_pre(str(tb))])
         elif raw_detail and status != "SUCCESS":
-            body_lines.extend(["**Raw Detail**", "", "```text", str(raw_detail), "```", ""])
+            body_lines.extend(["<h4>Raw Detail</h4>", *_render_html_pre(str(raw_detail))])
 
     if raw_detail and not receipt.get("_parsed", True) and status == "SUCCESS":
         body_lines.extend([
             "",
-            "**Raw Detail**",
-            "",
-            "```text",
-            str(raw_detail),
-            "```",
+            "<h4>Raw Detail</h4>",
+            *_render_html_pre(str(raw_detail)),
         ])
 
     return _wrap_summary_body(summary_line, body_lines)

@@ -59,8 +59,10 @@ def test_step_upsert_no_duplicate():
     assert "<summary>Step 1/1 | pipeline_compare_geometry_sources | SUCCESS" in text
     assert "## Step 1/1 | pipeline_compare_geometry_sources | SUCCESS" not in text
     assert "\n<details>\n<summary>Step 1/1 | pipeline_compare_geometry_sources | SUCCESS" in step_block
-    assert "**Input**" in text
-    assert "**Output**" in text
+    assert "<h4>Input</h4>" in text
+    assert "<h4>Output</h4>" in text
+    assert "**Input**" not in text
+    assert "**Output**" not in text
     assert "compare_result.json" in text
     print(f"✓ test_step_upsert_no_duplicate → {report}")
 
@@ -85,7 +87,7 @@ def test_error_block_contains_full_detail():
     writer.finalize_report(report, {"task_id": "task-error", "asset_name": "demo", "run_dir": str(sbx)}, "ERROR", 0.02)
 
     text = report.read_text(encoding="utf-8")
-    assert "**Error Detail**" in text
+    assert "<h4>Error Detail</h4>" in text
     assert "绑定目标缺少 ShapeOrig" in text
     assert "Traceback line 2" in text
     assert "先运行命名修复" not in text
@@ -111,7 +113,7 @@ def test_sections_and_report_content():
         "report_content": "旧格式完整对比报告",
     })
     text = report.read_text(encoding="utf-8")
-    assert "**Details**" in text
+    assert "<h4>Details</h4>" in text
     assert "<summary>通过配对 (73 项)</summary>" in text
     assert "bodyShape" in text
     assert "<summary>几何差异 (0 项)</summary>" in text
@@ -164,6 +166,7 @@ def test_compare_result_renders_action_details_without_json_dump():
     text = report.read_text(encoding="utf-8")
     assert "compare_result" not in text
     assert "**Details**" not in text
+    assert "<h4>Details</h4>" not in text
     assert "<th>action</th>" not in text
     assert "bodyShape" not in text
     assert "hatA_hatB_Layer" not in text
@@ -199,11 +202,11 @@ def test_embedded_result_contract_stays_out_of_output_summary():
         ],
     })
     text = report.read_text(encoding="utf-8")
-    output_block = text.split("**Output**", 1)[1].split("**Details**", 1)[0]
-    assert "- `issue_count`: 3" in output_block
-    assert "- `phase`:" not in output_block
-    assert "- `extra_top_nodes`:" not in output_block
-    assert "- `issues`:" not in output_block
+    output_block = text.split("<h4>Output</h4>", 1)[1].split("<h4>Details</h4>", 1)[0]
+    assert "<code>issue_count</code>: 3" in output_block
+    assert "<code>phase</code>:" not in output_block
+    assert "<code>extra_top_nodes</code>:" not in output_block
+    assert "<code>issues</code>:" not in output_block
     assert "<summary>extra_top_nodes (2)</summary>" in text
     assert "<summary>issues (1)</summary>" in text
     print(f"✓ test_embedded_result_contract_stays_out_of_output_summary → {report}")
@@ -232,7 +235,8 @@ def test_file_flow_table_has_io_status_elapsed():
     text = report.read_text(encoding="utf-8")
     assert "<summary>File Staging | 2 records</summary>" in text
     assert "## File Staging" not in text
-    assert "| Node | Param | Input | Output | Status | Elapsed |" in text
+    assert "<th>Node</th>" in text
+    assert "<th>Param</th>" in text
     assert "资产路径解析" in text
     assert "pipeline_stage_file_to_sandbox" in text
     assert "ciweiguai" in text
