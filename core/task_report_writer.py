@@ -287,115 +287,26 @@ def _render_html_table(headers: List[str], rows: List[List[Any]]) -> List[str]:
     return lines
 
 
+def _render_html_list(items: Iterable[Any]) -> List[str]:
+    lines = ["<ul>"]
+    for item in items:
+        lines.append(f"<li>{_html_cell(item)}</li>")
+    lines.append("</ul>")
+    return lines
+
+
 def _detail_block(summary: str, body_lines: List[str], open_by_default: bool = False) -> List[str]:
     attr = " open" if open_by_default else ""
     return [
-        "",
-        f"<details markdown=\"1\"{attr}>",
+        f"<details{attr}>",
         f"<summary>{_escape_md(summary)}</summary>",
-        "",
         *body_lines,
-        "",
         "</details>",
     ]
 
 
-def _mesh_names_from_dags(dags: Iterable[Any]) -> str:
-    names = [_short_dag(dag) for dag in dags or []]
-    return ", ".join(names) if names else "-"
-
-
 def _render_compare_group_details(compare_payload: Dict[str, Any]) -> List[str]:
-    if not isinstance(compare_payload, dict):
-        return []
-    report = compare_payload.get("compare") if isinstance(compare_payload.get("compare"), dict) else compare_payload
-    if not isinstance(report, dict):
-        return []
-
-    lines: List[str] = []
-    paired = report.get("paired") if isinstance(report.get("paired"), list) else []
-    only_source = report.get("only_a") if isinstance(report.get("only_a"), list) else []
-
-    groups = report.get("pairing_groups") if isinstance(report.get("pairing_groups"), list) else []
-    if groups:
-        by_action: Dict[str, List[Dict[str, Any]]] = {}
-        for group in groups:
-            if not isinstance(group, dict):
-                continue
-            action = str(group.get("action") or "UNKNOWN")
-            by_action.setdefault(action, []).append(group)
-        for action in ("ORIG_INJECT", "PAIRED", "UNPAIRED", "IDENTICAL", "TARGET_ONLY"):
-            action_groups = by_action.pop(action, [])
-            if not action_groups:
-                continue
-            rows = []
-            for group in action_groups:
-                rows.append([
-                    group.get("group_id", ""),
-                    _mesh_names_from_dags(group.get("abc_dags") or []),
-                    _mesh_names_from_dags(group.get("rig_dags") or []),
-                    group.get("layer_name", ""),
-                ])
-            body = _render_html_table(
-                ["group", "abc_mesh", "rig_mesh", "layer"],
-                rows,
-            )
-            lines.extend(_detail_block(f"{action} ({len(action_groups)})", body))
-        for action, action_groups in sorted(by_action.items()):
-            rows = []
-            for group in action_groups:
-                rows.append([
-                    group.get("group_id", ""),
-                    _mesh_names_from_dags(group.get("abc_dags") or []),
-                    _mesh_names_from_dags(group.get("rig_dags") or []),
-                    group.get("layer_name", ""),
-                ])
-            lines.extend(_detail_block(
-                f"{action} ({len(action_groups)})",
-                _render_html_table(["group", "abc_mesh", "rig_mesh", "layer"], rows),
-            ))
-
-    if not groups and paired:
-        by_action: Dict[str, List[Dict[str, Any]]] = {}
-        for pair in paired:
-            if not isinstance(pair, dict):
-                continue
-            action = str(pair.get("actionability") or "PAIRED")
-            by_action.setdefault(action, []).append(pair)
-        for action in ("IDENTICAL", "ORIG_INJECT", "MODIFIED", "MERGE", "SPLIT"):
-            pairs = by_action.pop(action, [])
-            if not pairs:
-                continue
-            rows = [[
-                pair.get("name_a") or _short_dag(pair.get("dag_a")),
-                pair.get("name_b") or _short_dag(pair.get("dag_b")),
-            ] for pair in pairs]
-            lines.extend(_detail_block(
-                f"{action} ({len(pairs)})",
-                _render_html_table(["abc_mesh", "rig_mesh"], rows),
-            ))
-
-    if not groups and only_source:
-        rows = [[entry.get("name") or _short_dag(entry.get("dag")), entry.get("dag", "")]
-                for entry in only_source if isinstance(entry, dict)]
-        lines.extend(_detail_block(
-            f"UNPAIRED ({len(rows)})",
-            _render_html_table(["abc_mesh", "dag"], rows),
-        ))
-
-    only_target = report.get("only_b") if isinstance(report.get("only_b"), list) else []
-    target_only_dags = report.get("target_only_dags") if isinstance(report.get("target_only_dags"), list) else []
-    if only_target:
-        rows = [[entry.get("name") or _short_dag(entry.get("dag")), entry.get("dag", "")]
-                for entry in only_target if isinstance(entry, dict)]
-    else:
-        rows = [[_short_dag(dag), dag] for dag in target_only_dags]
-    if rows:
-        lines.extend(_detail_block(
-            f"TARGET_ONLY ({len(rows)})",
-            _render_html_table(["rig_mesh", "dag"], rows),
-        ))
-    return lines
+    return []
 
 
 def _render_structured_sections(sections: Any) -> List[str]:
@@ -425,7 +336,7 @@ def _render_structured_sections(sections: Any) -> List[str]:
                             keys.append(key)
                 body.extend(_render_html_table(keys, [[item.get(key, "") for key in keys] for item in items]))
             else:
-                body.extend(f"- {_escape_md(item)}" for item in items)
+                body.extend(_render_html_list(items))
         if not body:
             body = ["- none"]
         lines.extend(_detail_block(heading, body))
@@ -465,7 +376,7 @@ def _render_output_field_details(outputs: Dict[str, Any]) -> List[str]:
                 rows = [[item.get(item_key, "") for item_key in keys] for item in value]
                 body = _render_html_table(keys, rows)
             else:
-                body = [f"- {_format_report_scalar(item)}" for item in value]
+                body = _render_html_list(value)
             lines.extend(_detail_block(f"{key} ({len(value)})", body))
         elif isinstance(value, dict) and value:
             rows = [[sub_key, _format_report_value(sub_value)] for sub_key, sub_value in value.items()]

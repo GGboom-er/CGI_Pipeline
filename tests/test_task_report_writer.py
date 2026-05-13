@@ -161,11 +161,10 @@ def test_compare_result_renders_action_details_without_json_dump():
     })
     text = report.read_text(encoding="utf-8")
     assert "compare_result" not in text
-    assert "<summary>ORIG_INJECT (1)</summary>" in text
-    assert "<summary>PAIRED (1)</summary>" in text
-    assert "<summary>TARGET_ONLY (1)</summary>" in text
-    assert "bodyShape" in text
-    assert "hatA_hatB_Layer" in text
+    assert "**Details**" not in text
+    assert "<th>action</th>" not in text
+    assert "bodyShape" not in text
+    assert "hatA_hatB_Layer" not in text
     print(f"✓ test_compare_result_renders_action_details_without_json_dump → {report}")
 
 

@@ -168,8 +168,7 @@ def test_report_sections_use_action_labels():
         cache_group="|Group|Geometry|cache",
     )
     titles = [section.get("title") for section in sections]
-    for title in ("IDENTICAL", "ORIG_INJECT", "PAIRED", "UNPAIRED", "target_only"):
-        _ok(title in titles, f"包含同步章节: {title}")
+    _ok(titles == ["ACTION_SUMMARY"], "同步报告只保留动作概览")
     overview = next((section for section in sections if section.get("title") == "ACTION_SUMMARY"), {})
     actions = [item.get("action") for item in overview.get("items", [])]
     _ok("IDENTICAL" in actions and "target_only" in actions, "同步概览使用 action 标签")

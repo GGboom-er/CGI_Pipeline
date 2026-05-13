@@ -212,49 +212,15 @@ def build_sync_report_sections(report: dict, counts: dict[str, int],
                                source_info: str = "",
                                cache_group: str = "") -> list[dict]:
     """把 sync 执行指令转成统一报告可渲染的结构化折叠段。"""
-    groups = report.get("pairing_groups") or []
-    target_only = report.get("target_only_dags") or []
-    groups_by_action = {action: [] for action in VALID_GROUP_ACTIONS}
-    for group in groups:
-        action = group.get("action")
-        if action in groups_by_action:
-            groups_by_action[action].append(group)
-
     overview = []
     for action in VALID_GROUP_ACTIONS:
         overview.append({"action": _action_label(action), "count": counts.get(action, 0)})
     overview.append({"action": _action_label("target_only"), "count": counts.get("target_only", 0)})
 
-    source_lines = [
-        {"input": "source_abc", "value": source_abc or "-"},
-        {"input": "source_info", "value": source_info or "-"},
-        {"input": "cache_group", "value": cache_group or "-"},
-    ]
-
-    sections = [
-        {
-            "title": "SYNC_INPUT",
-            "summary": f"groups={counts.get('groups', len(groups))} target_only={counts.get('target_only', 0)}",
-            "items": source_lines,
-        },
+    return [
         {
             "title": "ACTION_SUMMARY",
             "summary": format_action_summary(counts),
             "items": overview,
         },
     ]
-
-    for action in VALID_GROUP_ACTIONS:
-        action_groups = groups_by_action.get(action, [])
-        sections.append({
-            "title": _action_label(action),
-            "summary": f"{len(action_groups)} 组",
-            "items": [_group_item(group) for group in action_groups],
-        })
-
-    sections.append({
-        "title": _action_label("target_only"),
-        "summary": f"{len(target_only)} 项",
-        "items": [{"target": _short_dag(dag), "dag": dag, "action": "原位保留"} for dag in target_only],
-    })
-    return sections
