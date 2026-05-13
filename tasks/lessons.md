@@ -38,6 +38,7 @@
 - [.env覆盖默认] → [IPC_TIMEOUT_SEC仍为1800] → [同步改0] → [默认修复查.env]
 - [中间产物散落] → [workflow未显式传info_dir] → [统一写沙盒.info] → [JSON/ABC只进.info]
 - [沙盒名噪音] → [task_id混入用户路径] → [日期时间_资产名] → [task_id只进manifest]
+- [根目录JSON复现] → [收尾把JSON当报告] → [reports只收人读报告] → [机器产物只进outputs/.info]
 
 ## 对比与验证
 

@@ -28,7 +28,8 @@ from core.progress import (
 )
 from core.run_archive import (
     create_run_dir, get_run_report_path, write_manifest,
-    copy_to_run_dir, cleanup_old_runs,
+    copy_to_run_dir, cleanup_old_runs, is_report_path,
+    cleanup_root_machine_duplicates,
 )
 from core import task_report_writer as _report_writer
 
@@ -1227,14 +1228,18 @@ def execute_workflow(self, payload: dict):
 
     # (审计日志已直接写入沙盒，无需手动复制)
 
-        # 收集所有产出路径并写入 manifest
+        # 收集所有产出路径并写入 manifest。机器中间产物保留在 outputs，
+        # 只有给人阅读的报告才进入 reports 并归档到沙盒根目录。
         for step_id, step_outputs in all_outputs.items():
             for field, value in step_outputs.items():
-                if isinstance(value, str) and (value.endswith('.json') or value.endswith('.md') or value.endswith('.ma') or value.endswith('.abc')):
+                if isinstance(value, str) and value.lower().endswith(('.json', '.md', '.ma', '.mb', '.abc', '.blend', '.html', '.htm')):
                     collected_outputs[f'{step_id}.{field}'] = value
-                    if value.endswith('.md') or value.endswith('.json'):
-                        copy_to_run_dir(task_id, value)
-                        collected_reports.append(value)
+                    if is_report_path(value):
+                        copied_report = copy_to_run_dir(task_id, value)
+                        collected_reports.append(copied_report or value)
+
+        for removed_path in cleanup_root_machine_duplicates(run_dir):
+            _write_audit('ROOT_DUPLICATE_CLEANED', removed_path)
 
         write_manifest(
             wf_id=task_id,

@@ -283,6 +283,36 @@ def check_workflow_internal_outputs(errors: list[str]) -> None:
                     )
 
 
+def check_workflow_archive_layout(errors: list[str]) -> None:
+    """工作流收尾不得把 JSON/ABC 机器中间产物复制或登记为报告。"""
+    tasks_text = _read_text(ROOT / "core" / "tasks.py")
+    archive_text = _read_text(ROOT / "core" / "run_archive.py")
+
+    forbidden_tasks = {
+        "value.endswith('.md') or value.endswith('.json')": "JSON 被当作报告归档",
+        "collected_reports.append(value)": "未经过报告类型过滤直接登记 reports",
+    }
+    for needle, label in forbidden_tasks.items():
+        if needle in tasks_text:
+            errors.append(f"core/tasks.py: {label}")
+
+    for needle in (
+        "is_report_path(value)",
+        "cleanup_root_machine_duplicates(run_dir)",
+    ):
+        if needle not in tasks_text:
+            errors.append(f"core/tasks.py: 缺少沙盒输出布局门禁调用 {needle}")
+
+    for needle in (
+        "REPORT_SUFFIXES",
+        "MACHINE_OUTPUT_SUFFIXES",
+        "def cleanup_root_machine_duplicates",
+        "_dedupe_report_paths(reports)",
+    ):
+        if needle not in archive_text:
+            errors.append(f"core/run_archive.py: 缺少沙盒输出布局规则 {needle}")
+
+
 def check_tex_to_rig_hierarchy_presync(errors: list[str]) -> None:
     """把旧 |*|geo 预同步归一化链路固化到总门禁。"""
     wf_path = ROOT / "workflows" / "tex_to_rig_verify_and_sync.json"
@@ -467,6 +497,7 @@ def main() -> int:
     check_text_patterns(errors)
     check_workflow_resume_order(errors)
     check_workflow_internal_outputs(errors)
+    check_workflow_archive_layout(errors)
     check_tex_to_rig_hierarchy_presync(errors)
     check_cli_worker_interface(errors)
     check_default_output_fallbacks(errors)

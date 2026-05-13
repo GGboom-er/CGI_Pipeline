@@ -94,3 +94,4 @@
 - [x] 2026-05-13 两分支合并：标准执行记录、compare_result 直传、层级 check/fix 已合入 `tex_to_rig_verify_and_sync`，maYouB workflow 巡航 PASS。
 - [x] 2026-05-13 旧 `|*|geo` 预同步归一：`|MaYou_B|geo` 改为 `|Group|Geometry|RIG_geo`，同步输出 `|Group|Geometry|cache`，maYouB workflow PASS。
 - [x] 2026-05-13 问题塌陷到代码：层级预同步顺序、RIG_geo DAG 映射、额外顶层非阻断、CLI WarmWorkerProxy.start 兼容均进入总门禁/测试。
+- [x] 2026-05-13 输出布局回归修复：workflow 收尾只把 MD/HTML 记为 reports，JSON/ABC 机器产物保留在 outputs 与 `.info`，根目录重复副本自动清理。

@@ -10,6 +10,7 @@ import time
 import shutil
 import logging
 import re
+import filecmp
 from pathlib import Path
 
 from core.bootstrap import cfg as _cfg
@@ -19,6 +20,8 @@ logger = logging.getLogger(__name__)
 PROJECT_ROOT = Path(_cfg.PROJECT_ROOT)
 RUNS_DIR = PROJECT_ROOT / 'runs'
 PROJECTS_DIR = PROJECT_ROOT / 'projects'
+REPORT_SUFFIXES = {'.md', '.html', '.htm'}
+MACHINE_OUTPUT_SUFFIXES = {'.json', '.abc'}
 
 
 def _safe_segment(value: str, fallback: str = 'untitled') -> str:
@@ -148,6 +151,65 @@ def get_run_report_path(wf_id: str, asset_name: str, project: str = None) -> str
     return str(run_dir / 'REPORT.md')
 
 
+def is_report_path(value) -> bool:
+    """判断路径是否是给人阅读的报告，而不是机器中间产物。"""
+    if not isinstance(value, (str, Path)):
+        return False
+    return Path(str(value)).suffix.lower() in REPORT_SUFFIXES
+
+
+def _dedupe_report_paths(reports: list | None) -> list:
+    """Manifest 只登记人读报告；JSON/ABC 等机器产物由 outputs 字段负责。"""
+    result = []
+    seen = set()
+    for item in reports or []:
+        if not is_report_path(item):
+            continue
+        path_text = str(item)
+        if path_text in seen:
+            continue
+        result.append(path_text)
+        seen.add(path_text)
+    return result
+
+
+def cleanup_root_machine_duplicates(run_dir: str | Path) -> list[str]:
+    """
+    清理沙盒根目录里与 .info 同名且内容完全一致的机器产物副本。
+
+    只删除可证明已有 .info 权威副本的文件，避免误删人工放置或唯一产物。
+    """
+    run_dir = Path(run_dir)
+    info_dir = run_dir / '.info'
+    if not run_dir.exists() or not info_dir.exists():
+        return []
+
+    removed = []
+    for path in run_dir.iterdir():
+        if not path.is_file():
+            continue
+        if path.name == 'manifest.json':
+            continue
+        if path.suffix.lower() not in MACHINE_OUTPUT_SUFFIXES:
+            continue
+
+        info_path = info_dir / path.name
+        if not info_path.exists() or not info_path.is_file():
+            continue
+
+        try:
+            if path.stat().st_size != info_path.stat().st_size:
+                continue
+            if not filecmp.cmp(str(path), str(info_path), shallow=False):
+                continue
+            path.unlink()
+            removed.append(str(path))
+        except OSError as exc:
+            logger.warning(f'根目录机器产物副本清理失败 {path}: {exc}')
+
+    return removed
+
+
 def write_manifest(
     wf_id: str,
     workflow_id: str,
@@ -191,7 +253,7 @@ def write_manifest(
         'created_at': datetime.datetime.now().isoformat(),
         'inputs': inputs,
         'outputs': outputs,
-        'reports': reports,
+        'reports': _dedupe_report_paths(reports),
         'segments': segments or [],
     }
 
@@ -219,6 +281,8 @@ def copy_to_run_dir(wf_id: str, src_path: str, filename: str = None) -> str:
     run_dir.mkdir(parents=True, exist_ok=True)
     dst = run_dir / (filename or src.name)
     try:
+        if src.resolve() == dst.resolve():
+            return str(src)
         shutil.copy2(str(src), str(dst))
         return str(dst)
     except Exception as e:
