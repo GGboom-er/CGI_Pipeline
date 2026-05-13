@@ -88,6 +88,7 @@ def test_happy_path():
     assert 'asset.ma' in content
     assert '188.3 MB' in content, '缺 items 详情'
     assert '完整对比报告' in content, '缺 compare report_content'
+    assert content.count('<details>') == content.count('<summary>Step ')
     assert r['outputs']['result']['units_rendered'] == 2
     print(f'✓ test_happy_path  →  {out}')
 
@@ -151,6 +152,7 @@ def test_hold_mode():
     assert 'NEEDS_ATTENTION' in content
     assert 'hair17Shape' in content, 'items 应该展示'
     assert '恢复建议' in content
+    assert content.count('<details>') == content.count('<summary>Step ')
     print(f'✓ test_hold_mode  →  {out}')
 
 
@@ -268,6 +270,7 @@ def test_workflow_mode():
     assert 'Blender 导 ABC' in content and 'Step 1' in content, content
     assert 'Maya 采集' in content and 'Step 2' in content, content
     assert '清理 skinweights' in content or 'maya_clean_skinweights' in content, content
+    assert content.count('<details>') == content.count('<summary>Step ')
     # 新设计：不再有子链报告链接
     assert 'blender_seg0.md' not in content
     print(f'✓ test_workflow_mode  →  {r["outputs"]["output_path"]}')
@@ -295,7 +298,9 @@ def test_broken_json_fallback_marker():
     content = Path(r['outputs']['output_path']).read_text(encoding='utf-8')
     assert 'detail 损坏或截断' in content, content
     # 不应该把半截 JSON 作为 action 塞进去
-    assert '{"status":' not in content.split('## ')[1] if '## ' in content else True
+    summary_line = next(line for line in content.splitlines() if line.startswith('<summary>Step '))
+    assert '{"status":' not in summary_line
+    assert content.count('<details>') == content.count('<summary>Step ')
     print(f'✓ test_broken_json_fallback_marker  →  {r["outputs"]["output_path"]}')
 
 

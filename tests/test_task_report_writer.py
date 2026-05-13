@@ -59,6 +59,7 @@ def test_step_upsert_no_duplicate():
     assert "<summary>Step 1/1 | pipeline_compare_geometry_sources | SUCCESS" in text
     assert "## Step 1/1 | pipeline_compare_geometry_sources | SUCCESS" not in text
     assert "\n<details>\n<summary>Step 1/1 | pipeline_compare_geometry_sources | SUCCESS" in step_block
+    assert text.count("<details>") == text.count("<summary>Step ")
     assert "<h4>Input</h4>" in text
     assert "<h4>Output</h4>" in text
     assert "**Input**" not in text
@@ -113,10 +114,11 @@ def test_sections_and_report_content():
         "report_content": "旧格式完整对比报告",
     })
     text = report.read_text(encoding="utf-8")
+    assert text.count("<details>") == text.count("<summary>Step ")
     assert "<h4>Details</h4>" in text
-    assert "<summary>通过配对 (73 项)</summary>" in text
+    assert "<h5>通过配对 (73 项)</h5>" in text
     assert "bodyShape" in text
-    assert "<summary>几何差异 (0 项)</summary>" in text
+    assert "<h5>几何差异 (0 项)</h5>" in text
     assert "旧格式完整对比报告" not in text
     print(f"✓ test_sections_and_report_content → {report}")
 
@@ -207,8 +209,9 @@ def test_embedded_result_contract_stays_out_of_output_summary():
     assert "<code>phase</code>:" not in output_block
     assert "<code>extra_top_nodes</code>:" not in output_block
     assert "<code>issues</code>:" not in output_block
-    assert "<summary>extra_top_nodes (2)</summary>" in text
-    assert "<summary>issues (1)</summary>" in text
+    assert text.count("<details>") == text.count("<summary>Step ")
+    assert "<h5>extra_top_nodes (2)</h5>" in text
+    assert "<h5>issues (1)</h5>" in text
     print(f"✓ test_embedded_result_contract_stays_out_of_output_summary → {report}")
 
 
@@ -233,14 +236,13 @@ def test_file_flow_table_has_io_status_elapsed():
         },
     ])
     text = report.read_text(encoding="utf-8")
-    assert "<summary>File Staging | 2 records</summary>" in text
+    assert "report:data:file_staged:" in text
+    assert "<summary>File Staging | 2 records</summary>" not in text
     assert "## File Staging" not in text
-    assert "<th>Node</th>" in text
-    assert "<th>Param</th>" in text
-    assert "资产路径解析" in text
-    assert "pipeline_stage_file_to_sandbox" in text
-    assert "ciweiguai" in text
-    assert "STAGED" in text
+    assert "<th>Node</th>" not in text
+    assert "资产路径解析" not in text
+    assert "pipeline_stage_file_to_sandbox" not in text
+    assert "ciweiguai" not in text
     print(f"✓ test_file_flow_table_has_io_status_elapsed → {report}")
 
 
@@ -301,10 +303,10 @@ def test_file_flow_merges_across_segments():
         },
     ])
     text = report.read_text(encoding="utf-8")
-    assert "demo.blend" in text
-    assert "demo.abc" in text
-    assert "demo.ma" in text
-    assert text.count("demo.blend") >= 1
+    assert "report:data:file_staged:" in text
+    assert "demo.blend" not in text
+    assert "demo.abc" not in text
+    assert "demo.ma" not in text
     print(f"✓ test_file_flow_merges_across_segments → {report}")
 
 
@@ -319,14 +321,13 @@ def test_open_scene_merges_across_segments():
     writer.upsert_open_scene(report, maya, "RUNNING")
     writer.upsert_open_scene(report, maya, "SUCCESS", elapsed_sec=2.0)
     text = report.read_text(encoding="utf-8")
-    assert "<summary>Open Scene | 2 records</summary>" in text
+    assert "report:data:open_scene:" in text
+    assert "<summary>Open Scene | 2 records</summary>" not in text
     assert "## Open Scene" not in text
-    assert "blender_open_scene" in text
-    assert "maya_open_scene" in text
-    assert "demo.blend" in text
-    assert "demo.ma" in text
-    assert text.count("blender_open_scene") == 1, text
-    assert text.count("maya_open_scene") == 1, text
+    assert "blender_open_scene" not in text
+    assert "maya_open_scene" not in text
+    assert "demo.blend" not in text
+    assert "demo.ma" not in text
     print(f"✓ test_open_scene_merges_across_segments → {report}")
 
 

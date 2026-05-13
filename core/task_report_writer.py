@@ -353,13 +353,10 @@ def _render_html_pre(text: str) -> List[str]:
     return ["<pre>", html.escape(str(text)), "</pre>"]
 
 
-def _detail_block(summary: str, body_lines: List[str], open_by_default: bool = False) -> List[str]:
-    attr = " open" if open_by_default else ""
+def _render_html_subsection(title: str, body_lines: List[str]) -> List[str]:
     return [
-        f"<details{attr}>",
-        f"<summary>{_escape_md(summary)}</summary>",
+        f"<h5>{html.escape(str(title))}</h5>",
         *body_lines,
-        "</details>",
     ]
 
 
@@ -405,8 +402,8 @@ def _render_structured_sections(sections: Any) -> List[str]:
             else:
                 body.extend(_render_html_list(items))
         if not body:
-            body = ["- none"]
-        lines.extend(_detail_block(heading, body))
+            body = ["<p>none</p>"]
+        lines.extend(_render_html_subsection(heading, body))
     return lines
 
 
@@ -423,7 +420,7 @@ def _render_items_details(items: Any) -> List[str]:
             ])
         else:
             rows.append([str(item), "", ""])
-    return _detail_block(
+    return _render_html_subsection(
         f"ITEMS ({len(rows)})",
         _render_html_table(["name", "detail", "elapsed"], rows),
     )
@@ -444,10 +441,10 @@ def _render_output_field_details(outputs: Dict[str, Any]) -> List[str]:
                 body = _render_html_table(keys, rows)
             else:
                 body = _render_html_list(value)
-            lines.extend(_detail_block(f"{key} ({len(value)})", body))
+            lines.extend(_render_html_subsection(f"{key} ({len(value)})", body))
         elif isinstance(value, dict) and value:
-            rows = [[sub_key, _format_report_value(sub_value)] for sub_key, sub_value in value.items()]
-            lines.extend(_detail_block(
+            rows = [[sub_key, sub_value] for sub_key, sub_value in value.items()]
+            lines.extend(_render_html_subsection(
                 f"{key} ({len(value)} fields)",
                 _render_html_table(["field", "value"], rows),
             ))
@@ -700,35 +697,8 @@ def _role_node_param(record: Dict[str, Any]) -> tuple[str, str]:
 
 def render_file_staged(records: Iterable[Dict[str, Any]]) -> str:
     records = list(records or [])
-    body_lines = [
-        f"<p>{len(records)} file/path records.</p>",
-    ]
-    rows = []
-    for rec in records:
-        node, param = _role_node_param(rec)
-        if rec.get("status"):
-            state = str(rec.get("status"))
-        elif rec.get("skipped"):
-            state = "ALREADY_IN_SANDBOX"
-        elif rec.get("reused"):
-            state = "REUSED"
-        elif rec.get("error"):
-            state = "ERROR"
-        else:
-            state = "STAGED"
-        rows.append([
-            node,
-            param,
-            rec.get("input", rec.get("origin", "")),
-            rec.get("output", rec.get("sandbox", "")),
-            state,
-            _fmt_elapsed_sec(rec.get("elapsed_sec")),
-        ])
-    body_lines.extend(_render_html_table(["Node", "Param", "Input", "Output", "Status", "Elapsed"], rows))
-    return "\n".join([
-        _wrap_summary_body(f"File Staging | {len(records)} records", body_lines),
-        _data_marker("file_staged", records),
-    ])
+    # 调度层文件流转只用于内部合并，用户报告按 skill step 顺序阅读。
+    return _data_marker("file_staged", records)
 
 
 def upsert_file_staged(report_path: str | Path, records: Iterable[Dict[str, Any]]) -> None:
@@ -751,34 +721,8 @@ def _open_scene_node(source_path: str) -> str:
 
 def render_open_scenes(records: Iterable[Dict[str, Any]]) -> str:
     records = list(records or [])
-    body_lines = [
-        f"<p>{len(records)} DCC scene open records.</p>",
-    ]
-    errors = []
-    rows = []
-    for rec in records:
-        source_path = str(rec.get("source_path") or "")
-        status = str(rec.get("status") or "UNKNOWN")
-        rows.append([
-            _open_scene_node(source_path),
-            source_path,
-            "current_dcc_session",
-            f"{_status_icon(status)} {status}",
-            _fmt_elapsed_sec(rec.get("elapsed_sec")),
-        ])
-        if rec.get("error"):
-            errors.append((source_path, str(rec.get("error"))))
-    body_lines.extend(_render_html_table(["Node", "Input", "Output", "Status", "Elapsed"], rows))
-    for source_path, error in errors:
-        body_lines.extend([
-            "",
-            f"<p><strong>Open failed: {html.escape(source_path)}</strong></p>",
-            *_render_html_pre(error),
-        ])
-    return "\n".join([
-        _wrap_summary_body(f"Open Scene | {len(records)} records", body_lines),
-        _data_marker("open_scene", records),
-    ])
+    # 打开场景是调度事实，不再作为可见报告块展示，避免打断 step 阅读。
+    return _data_marker("open_scene", records)
 
 
 def render_open_scene(source_path: str, status: str,

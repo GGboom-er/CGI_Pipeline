@@ -278,39 +278,8 @@ def _render_workflow_context(entries: list, workflow_task_id: str) -> list:
     - FILE_STAGED：找服务器文件 + 备份到沙盒
     归属判定：entry.task_id == workflow_task_id（即 workflow 自己的事件，不是任何 seg 的）。
     """
-    staged = [
-        e for e in entries
-        if e.get('status') == 'FILE_STAGED'
-        and e.get('task_id', workflow_task_id) == workflow_task_id
-    ]
-    if not staged:
-        return []
-
-    lines = [
-        '<details>',
-        '<summary>🗂️ 上下文 — 源文件定位与沙盒备份</summary>',
-        '',
-        '| 角色 | 原始路径 | 沙盒副本 | 状态 |',
-        '|---|---|---|---|',
-    ]
-    for e in staged:
-        d = _parse_stage_detail(e.get('detail', ''))
-        role = d.get('role', '-')
-        origin = d.get('origin', '') or '-'
-        sandbox = d.get('sandbox', '') or origin
-        if d.get('skipped'):
-            status = '⊘ 已在沙盒内'
-        elif d.get('reused'):
-            status = '♻️ 复用已有副本'
-        else:
-            status = '✓ 已备份'
-        lines.append(
-            f'| `{_escape_md(role)}` | {_fmt_path(origin)} | {_fmt_path(sandbox)} | {status} |'
-        )
-    lines.append('')
-    lines.append('</details>')
-    lines.append('')
-    return lines
+    # 文件流转是调度事实，最终报告按 skill step 顺序阅读，避免额外可见折叠块打断主线。
+    return []
 
 
 def _render_segment_context(seg_stage_entries: list, seg_open_entry: dict) -> list:
@@ -327,10 +296,10 @@ def _render_segment_context(seg_stage_entries: list, seg_open_entry: dict) -> li
 
 
 def _render_step(receipt: dict, step_idx: int) -> list:
-    """两级折叠结构：
+    """一级折叠结构：
     - 顶层 summary：Step N: {label} — {一句话动作} ({耗时}) {icon}
     - 展开后：最多 4 行核心信息（动作 / 主输出 / 关键指标 / 错误）
-    - items/完整 outputs/内嵌报告：再嵌一层 <details>
+    - items/完整 outputs/内嵌报告：在同一个 step 内用小标题和表格展示，不再嵌套 details
     """
     skill_id = receipt.get('skill_id', 'unknown')
     status = receipt.get('status', 'UNKNOWN')
@@ -390,10 +359,9 @@ def _render_step(receipt: dict, step_idx: int) -> list:
         lines.extend(key_lines)
         lines.append('')
 
-    # 复杂 outputs（dict/list）折到二级 details
+    # 复杂 outputs：不再二级折叠，避免 Markdown 查看器的嵌套 details 兼容问题。
     if _complex_metrics:
-        lines.append('<details>')
-        lines.append('<summary>📊 详细指标</summary>')
+        lines.append('#### 详细指标')
         lines.append('')
         lines.append('| 字段 | 值 |')
         lines.append('|---|---|')
@@ -403,14 +371,11 @@ def _render_step(receipt: dict, step_idx: int) -> list:
                 s = s[:297] + '...'
             lines.append(f'| {_escape_md(k)} | `{_escape_md(s)}` |')
         lines.append('')
-        lines.append('</details>')
-        lines.append('')
 
-    # items 详情（二级折叠）
+    # items 详情
     items = receipt.get('items', []) or []
     if items:
-        lines.append('<details>')
-        lines.append(f'<summary>📋 受影响对象明细（共 {len(items)} 项）</summary>')
+        lines.append(f'#### 受影响对象明细（共 {len(items)} 项）')
         lines.append('')
         lines.append('| 对象 | 详情 | 耗时 |')
         lines.append('|---|---|---|')
@@ -423,29 +388,22 @@ def _render_step(receipt: dict, step_idx: int) -> list:
         if len(items) > 30:
             lines.append(f'| ... | 共 {len(items)} 项，仅显示前 30 | - |')
         lines.append('')
-        lines.append('</details>')
-        lines.append('')
 
-    # 内嵌报告（如 pipeline_compare_asset 的 MD）再套一层折叠
+    # 内嵌报告（如 pipeline_compare_asset 的 MD）
     report_content = receipt.get('report_content', '') or outputs.get('report_content', '')
     if report_content:
-        lines.append('<details>')
-        lines.append('<summary>📄 完整对比报告</summary>')
+        lines.append('#### 完整对比报告')
         lines.append('')
         lines.append(report_content)
-        lines.append('')
-        lines.append('</details>')
         lines.append('')
 
     # _raw（fallback）
     if '_raw' in receipt and not items and not err:
-        lines.append('<details>')
-        lines.append('<summary>🔍 原始 detail（解析失败）</summary>')
+        lines.append('#### 原始 detail（解析失败）')
         lines.append('')
         lines.append('```')
         lines.append(receipt['_raw'])
         lines.append('```')
-        lines.append('</details>')
         lines.append('')
 
     lines.append('</details>')
@@ -524,12 +482,8 @@ def _render_segment(rc: dict, seg_idx: int, step_entries: list = None,
     action = summary.get('action', '') or (f'{dcc} · {n_steps} 步' if dcc else '')
 
     head = f'Segment {seg_idx}: 🎬 {action} ({_format_elapsed(elapsed_min)}) {icon}'
-    # 成功段默认收起（减少噪音），失败/异常段默认展开
-    is_success = status in ('SUCCESS', 'CHAIN_SUCCESS')
-    open_attr = '' if is_success else ' open'
     lines = [
-        f'<details{open_attr}>',
-        f'<summary>{head}</summary>',
+        f'## {head}',
         '',
     ]
     if dcc:
@@ -552,7 +506,6 @@ def _render_segment(rc: dict, seg_idx: int, step_entries: list = None,
             local_step_counter[0] += 1
             lines.extend(_render_step(sub_rc, local_step_counter[0]))
 
-    lines.append('</details>')
     lines.append('')
     return lines
 
