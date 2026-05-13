@@ -202,7 +202,7 @@ def _normalize_report_io(values: Dict[str, Any], section: str) -> Dict[str, Any]
     if not isinstance(values, dict):
         return {}
     result = values.get("result")
-    if section == "output" and isinstance(result, dict) and len(values) <= 2:
+    if section == "output" and isinstance(result, dict) and len(values) == 1:
         if result.get("source_path") or result.get("rig_path"):
             values = {
                 key: result.get(key)
@@ -225,10 +225,17 @@ def _normalize_report_io(values: Dict[str, Any], section: str) -> Dict[str, Any]
                 values["scene_path"] = output_path
                 values.pop("output_path", None)
     clean: Dict[str, Any] = {}
+    result_is_embedded_contract = (
+        section == "output"
+        and isinstance(values.get("result"), dict)
+        and len(values) > 1
+    )
     for key, value in values.items():
         if _is_hidden_key(str(key), section):
             continue
         if key == "result" and isinstance(value, dict):
+            if result_is_embedded_contract:
+                continue
             for sub_key, sub_value in value.items():
                 if not _is_hidden_key(str(sub_key), section):
                     clean[str(sub_key)] = sub_value

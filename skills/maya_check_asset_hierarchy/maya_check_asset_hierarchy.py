@@ -225,6 +225,26 @@ def _format_failure(result):
     return "；".join(reasons) if reasons else "资产层级不符合项目规范"
 
 
+def _report_sections(result):
+    sections = []
+    for key in (
+        "extra_top_nodes",
+        "manual_review_top_nodes",
+        "legacy_geo_roots",
+        "candidate_source_roots",
+        "issues",
+    ):
+        items = result.get(key) or []
+        if not items:
+            continue
+        sections.append({
+            "title": key,
+            "summary": str(len(items)),
+            "items": items,
+        })
+    return sections
+
+
 def execute(payload):
     t0 = time.time()
     params = payload.get("parameters", {}) or {}
@@ -326,6 +346,13 @@ def execute(payload):
             action = f"资产层级检查未通过：{_format_failure(result)}"
             error = action if block_on_fail else ""
 
+        report_output = {
+            "passed": passed,
+            "code": "" if passed else INVALID_CODE,
+            "issue_count": len(issues),
+            "result": result,
+        }
+
         return make_receipt(
             skill_id=SKILL_ID,
             status=status,
@@ -338,12 +365,12 @@ def execute(payload):
                 "block_on_fail": block_on_fail,
                 "block_extra_top_nodes": block_extra_top_nodes,
             },
-            output={"result": result},
+            output=report_output,
             summary_input=source_path,
             summary_action=action,
             summary_count=cache_mesh_count,
             summary_label="mesh",
-            outputs={"result": result},
+            report_sections=_report_sections(result),
             error=error,
         )
     except Exception as exc:

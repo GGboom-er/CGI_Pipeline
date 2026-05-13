@@ -168,6 +168,45 @@ def test_compare_result_renders_action_details_without_json_dump():
     print(f"✓ test_compare_result_renders_action_details_without_json_dump → {report}")
 
 
+def test_embedded_result_contract_stays_out_of_output_summary():
+    sbx = _sandbox("embedded_result")
+    report = sbx / "REPORT.md"
+    writer.init_report(report, {"task_id": "task-embedded-result", "asset_name": "demo", "run_dir": str(sbx)})
+    step_ctx = {"step_index": 0, "step_total": 1, "skill_id": "maya_check_asset_hierarchy", "parameters": {}}
+    full_result = {
+        "passed": False,
+        "code": "ASSET_HIERARCHY_INVALID",
+        "extra_top_nodes": ["|Asset", "|transform1"],
+        "manual_review_top_nodes": ["|Asset", "|transform1"],
+        "issues": [{"type": "extra_top_node", "node": "|Asset", "severity": "warning"}],
+    }
+    writer.upsert_step_finished(report, step_ctx, {
+        "skill_id": "maya_check_asset_hierarchy",
+        "status": "SUCCESS",
+        "elapsed_sec": 0.4,
+        "input": {"source_path": "rig.ma", "phase": "pre_sync"},
+        "output": {
+            "passed": False,
+            "code": "ASSET_HIERARCHY_INVALID",
+            "issue_count": 3,
+            "result": full_result,
+        },
+        "report_sections": [
+            {"title": "extra_top_nodes", "summary": "2", "items": full_result["extra_top_nodes"]},
+            {"title": "issues", "summary": "1", "items": full_result["issues"]},
+        ],
+    })
+    text = report.read_text(encoding="utf-8")
+    output_block = text.split("**Output**", 1)[1].split("**Details**", 1)[0]
+    assert "- `issue_count`: 3" in output_block
+    assert "- `phase`:" not in output_block
+    assert "- `extra_top_nodes`:" not in output_block
+    assert "- `issues`:" not in output_block
+    assert "<summary>extra_top_nodes (2)</summary>" in text
+    assert "<summary>issues (1)</summary>" in text
+    print(f"✓ test_embedded_result_contract_stays_out_of_output_summary → {report}")
+
+
 def test_file_flow_table_has_io_status_elapsed():
     sbx = _sandbox("file_flow")
     report = sbx / "REPORT.md"
@@ -287,6 +326,7 @@ if __name__ == "__main__":
     test_error_block_contains_full_detail()
     test_sections_and_report_content()
     test_compare_result_renders_action_details_without_json_dump()
+    test_embedded_result_contract_stays_out_of_output_summary()
     test_file_flow_table_has_io_status_elapsed()
     test_internal_chain_history_hidden_from_step_input()
     test_file_flow_merges_across_segments()
