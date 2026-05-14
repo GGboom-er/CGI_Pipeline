@@ -117,45 +117,12 @@ ysj_chr_mihouwang_rig_rigMaster_v007.ma
 
 禁止把 traceback、debug txt、临时报告散落在沙盒外或沙盒内多个文件中。
 
-从本规范开始，报告不再重新理解业务、不再重组自然语言结论。每个 skill 只返回一条标准执行记录，报告只按记录顺序渲染。新 skill 不得依赖 `summary`、`items`、`report_content`、`report_sections`、`recovery_hint` 作为对外契约；当前代码中仍存在的旧字段只用于历史任务兼容。
+从本规范开始，报告不再重新理解业务、不再重组自然语言结论。完整 skill 输入输出契约只维护在 `skills/build_pipeline_skill/SKILL.md`，本节只规定运行时边界：
 
-标准执行记录固定为 5 个字段：
-
-```json
-{
-  "skill": "save_scene",
-  "input": {
-    "source_path": "Y:/.../ysj_chr_maYouA_rig_rigMaster_v001.ma"
-  },
-  "output": {
-    "output_path": "Y:/.../ysj_chr_maYouA_rig_rigMaster_v002.ma"
-  },
-  "status": "SUCCESS",
-  "elapsed_sec": 21.0
-}
-```
-
-字段含义：
-
-| 字段 | 规则 |
-|---|---|
-| `skill` | 执行的 skill_id |
-| `input` | 本次 skill 实际生效的业务参数；路径必须是完整路径，不写 `A vs B`、`A + B` 这类拼接描述；保留给审计和排障，不作为报告可见章节 |
-| `output` | 本次 skill 实际产出的内容、下游连接数据和报告 Details 明细；文件产物必须写完整路径，统计和分组结果也放这里 |
-| `status` | 框架根据是否执行到最后、是否异常、输出是否符合 schema 判定 |
-| `elapsed_sec` | 实际执行耗时，单位秒 |
-
-报告渲染规则：
-
-- step 折叠头显示 `skill`、`status`、`elapsed_sec`。
-- 报告默认只露出 step 折叠头。
-- `input` 不渲染为可见章节。
-- `output` 是 `Details` 的默认来源。
-- `output` 中的标量进入 `Details/result` 表。
-- `output` 中的数组或分组对象按字段名渲染为明细表或列表。
-- `output.compare_result` 等大型机器对象不直接展开；报告只显示同级统计字段。
-- 报告层不生成业务结论，不从旧文本里反推统计，不展示 traceback/recovery hint。
-- 错误堆栈和调试信息保留在 audit / worker log；主报告只展示必要错误信息。
+- 每个 step 必须返回 `make_receipt(...)` 标准执行记录。
+- workflow 只读取上游记录的 `output` 字段。
+- `REPORT.md` 只按记录顺序渲染 step 折叠头、`Details` 和必要错误信息。
+- 旧展示字段只用于历史兼容，不得作为新增 skill 的设计入口。
 
 ## 6. 机器数据与人工报告分离
 
@@ -179,17 +146,10 @@ ysj_chr_mihouwang_rig_rigMaster_v007.ma
 - `compare_result.json` 是机器契约，不是报告正文。
 - Workflow 下游只消费上游标准记录的 `output` 字段。
 - 例如 `{{outputs.compare_pre.output_path}}` 指向的是 `compare_pre` 记录里的 `output.output_path`。
-- 报告只渲染标准记录；新 skill 不再提供 `summary`、`items`、`report_content`、`report_sections` 作为展示字段。
 
 ## 7. Skill 运行时契约
 
 完整 skill 构建规则只维护在 `skills/build_pipeline_skill/SKILL.md`。本运行时总规范不再复制 skill 文件结构、`SKILL.md`、`execute(payload)`、标准执行记录、DCC 约束等细节。
-
-运行时只认三条边界：
-
-- skill 必须按 `skills/build_pipeline_skill/SKILL.md` 返回标准执行记录。
-- workflow 只读取上游标准执行记录的 `output` 字段。
-- 报告只渲染标准执行记录，不读取 Markdown 作为机器数据。
 
 ## 8. Workflow 编排契约
 

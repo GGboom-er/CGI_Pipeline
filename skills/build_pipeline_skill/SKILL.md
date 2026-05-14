@@ -25,12 +25,11 @@ category: "system"
 
 - 不允许直接写散装脚本到 `skills/` 根目录。
 - 不允许新增第二套返回结构。
-- 不允许继续扩展旧字段：`summary`、`items`、`report_content`、`report_sections`、`recovery_hint`。
-- 不允许把 Markdown 报告当作下游机器数据。
-- 不允许照抄旧 skill 的兼容字段作为新增 skill 的设计依据；旧字段只为历史任务兼容存在。
-- 不允许在报告层另写 `Input` / `Output` 展示章节；报告默认只露 step 摘要，展开后显示 `Details`。
+- 新增或改造 skill 只设计标准执行记录的 `input/output`；旧展示字段只为历史兼容存在。
+- 不允许把 Markdown 报告当作下游机器数据，也不允许业务 skill 自行写报告或 audit。
 - 不允许让 sync 类 skill 只能消费临时 JSON 路径；能直接传 dict 时，应支持 dict 直连。
 - 修改 DCC 场景的 skill 必须只处理沙盒副本，不能覆盖源资产或发布目录。
+- 不允许写源文件同目录 fallback，不允许吞异常后返回成功。
 - 需要用户决策的设计变更，先给蓝图，不直接写代码。
 
 ## 🟢 核心功能 (CORE FUNCTION)
@@ -121,8 +120,7 @@ def execute(payload: dict) -> dict:
 - `REPORT.md` 不再渲染独立 `Input` / `Output` 章节。
 - 每个 step 默认只显示：`Step N/Total | skill_name | status | elapsed`。
 - 展开 step 后只显示 `Details` 和必要的错误信息。
-- 新 skill 要让报告看见什么，就把这些事实放进 `output` 的稳定字段；不要新增 `report_content` / `report_sections`。
-- 现有旧 skill 里仍出现的 `summary/items/report_sections` 是迁移兼容层，不能作为新增 skill 的模板。
+- 新 skill 要让报告看见什么，就把这些事实放进 `output` 的稳定字段。
 
 ## 1. 意图捕获
 
@@ -298,18 +296,7 @@ Pipeline：
 - 不依赖 DCC。
 - 适合路径解析、JSON 处理、文件系统和报告重建。
 
-## 8. 禁止事项
-
-- 禁止返回 `summary/items/report_content/report_sections/recovery_hint` 作为新契约。
-- 禁止业务 skill 写 Markdown 报告。
-- 禁止业务 skill 写 audit。
-- 禁止写源文件同目录 fallback。
-- 禁止吞异常后返回成功。
-- 禁止为了兼容旧字段继续扩大输入输出形态。
-- 禁止把报告展示需求实现成第二套字段；展示需求必须回到 `output` 字段设计。
-- 禁止在 `input` / `output` 中写“给人看的合成句子”替代结构化字段。
-
-## 9. 交付检查
+## 8. 交付检查
 
 交付前必须确认：
 

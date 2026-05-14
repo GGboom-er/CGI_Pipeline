@@ -20,7 +20,6 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 
-from core.receipt import get_report_path
 from core.skill_registry import get_skill_dcc, get_skip_audit_skills, reload as _reload_skill_registry
 from core.progress import (
     publish_event, persist_outputs, restore_outputs,

@@ -22,7 +22,6 @@ from contextlib import contextmanager
 from core.bootstrap import PROJECT_ROOT as _PROJECT_ROOT
 
 from core.receipt import make_receipt, make_item, _ms_to_min
-from core.receipt import make_receipt, make_item, _ms_to_min
 
 
 # ─── 常量 ───

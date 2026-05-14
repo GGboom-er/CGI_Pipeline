@@ -1,13 +1,7 @@
 import time
 import datetime
-from pathlib import Path
-
-from core.bootstrap import cfg as _cfg
 
 MAX_ITEMS = 20
-
-PROJECT_ROOT = Path(_cfg.PROJECT_ROOT)
-REPORTS_DIR = PROJECT_ROOT / 'reports'
 
 
 def _now_str():
@@ -54,6 +48,7 @@ def make_receipt(
 
     elapsed_sec = round(time.time() - start_time, 3)
     elapsed_min = _sec_to_min(elapsed_sec)
+    # 旧展示字段只为历史 skill 和 audit 回放保留；新增 skill 必须只设计 input/output。
     receipt = {
         'skill': skill_id,
         'input': input,
@@ -108,12 +103,3 @@ def _format_elapsed(elapsed_min: float) -> str:
     if secs < 60:
         return f'{secs:.1f}s'
     return f'{elapsed_min:.2f} min'
-
-
-def get_report_path(asset_name: str, task_id: str) -> str:
-    """兜底路径：全局 reports/ 目录。正常路径应使用 write_task_report skill
-    落沙盒（{run_dir}/REPORT.md）。保留此函数仅供诊断和 manifest 回填。
-    """
-    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
-    safe_asset = asset_name or 'untitled'
-    return str(REPORTS_DIR / f'{safe_asset}_{task_id}.md')

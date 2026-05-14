@@ -22,44 +22,15 @@
 
 ## 2. 数据来源
 
-报告只消费每个 step 的标准执行记录：
+报告只消费每个 step 的标准执行记录。记录字段和新增 skill 输出规则以 `skills/build_pipeline_skill/SKILL.md` 为准，本文不重复定义。
 
-```json
-{
-  "skill": "save_scene",
-  "input": {
-    "source_path": "Y:/.../ysj_chr_maYouA_rig_rigMaster_v001.ma"
-  },
-  "output": {
-    "output_path": "Y:/.../ysj_chr_maYouA_rig_rigMaster_v002.ma"
-  },
-  "status": "SUCCESS",
-  "elapsed_sec": 0.5
-}
-```
-
-`input` 和 `output` 仍保留在标准执行记录里，供审计、workflow 串联和排障使用；但 `REPORT.md` 不再把它们渲染成可见的 `Input` / `Output` 章节。可见明细统一来自 `output` 的稳定字段，并显示在 step 的 `Details` 中。
-
-业务 skill 新契约不再为报告返回 `summary`、`items`、`report_content`、`report_sections`、`recovery_hint`。当前代码里仍存在的旧字段只用于历史任务兼容，不能作为新增 skill 的模板。
+`REPORT.md` 不渲染独立 `Input` / `Output` 章节。可见明细来自标准记录的 `output`，并显示在 step 的 `Details` 中。
 
 ## 3. 职责边界
 
 ### 3.1 业务 skill
 
-业务 skill 只负责返回标准执行记录：
-
-- `input`: 本次实际生效的参数，路径必须是完整路径
-- `output`: 本次实际产物、下游连接数据和报告 Details 明细，文件产物必须使用 `output_path`
-- `status`: 执行状态
-- `elapsed_sec`: 执行耗时
-
-业务 skill 禁止：
-
-- 自行写零散 Markdown 报告
-- 把 Markdown 当作下游机器数据
-- 返回多套展示结构让报告系统二次理解
-- 在主报告字段中写 traceback 或恢复建议
-- 为了报告新增 `Input` / `Output` 展示字段
+业务 skill 只负责返回标准执行记录；具体字段、旧字段兼容边界、禁止事项均以 `skills/build_pipeline_skill/SKILL.md` 为准。
 
 ### 3.2 实时报告 writer
 
@@ -126,16 +97,7 @@ core/task_report_writer.py
 
 ## 6. 对比类报告
 
-对比类 skill 的报告字段必须使用标准执行记录 `output` 中的四类：
-
-- `matched_same`
-- `matched_different`
-- `only_source`
-- `only_target`
-
-这四个字段固定为数量。需要展开对象明细时使用 `matched_same_items`、`matched_different_items`、`only_source_items`、`only_target_items`，不要让同一个字段有时是数量、有时是列表。
-
-`compare_result.json` 可以继续保留机器字段 `paired`、`only_a`、`only_b`、`actionability`，但这些字段不直接作为主报告标题。
+对比类字段由 `skills/build_pipeline_skill/SKILL.md` 定义。报告层只负责把标准记录 `output` 中已有的统计和 `*_items` 明细渲染到 `Details`，不从 `compare_result.json` 反推展示字段。
 
 ## 7. 沙盒与命名
 
