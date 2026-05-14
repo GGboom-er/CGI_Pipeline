@@ -117,7 +117,7 @@ ysj_chr_mihouwang_rig_rigMaster_v007.ma
 
 禁止把 traceback、debug txt、临时报告散落在沙盒外或沙盒内多个文件中。
 
-从本规范开始，报告不再重新理解业务、不再重组自然语言结论、不再消费 `report_content` / `report_sections`。每个 skill 只返回一条标准执行记录，报告只按记录顺序渲染。
+从本规范开始，报告不再重新理解业务、不再重组自然语言结论。每个 skill 只返回一条标准执行记录，报告只按记录顺序渲染。新 skill 不得依赖 `summary`、`items`、`report_content`、`report_sections`、`recovery_hint` 作为对外契约；当前代码中仍存在的旧字段只用于历史任务兼容。
 
 标准执行记录固定为 5 个字段：
 
@@ -140,19 +140,22 @@ ysj_chr_mihouwang_rig_rigMaster_v007.ma
 | 字段 | 规则 |
 |---|---|
 | `skill` | 执行的 skill_id |
-| `input` | 本次 skill 实际收到的业务参数；路径必须是完整路径，不写 `A vs B`、`A + B` 这类拼接描述 |
-| `output` | 本次 skill 实际产出的内容；文件产物必须写完整路径，统计和分组结果也放这里 |
+| `input` | 本次 skill 实际生效的业务参数；路径必须是完整路径，不写 `A vs B`、`A + B` 这类拼接描述；保留给审计和排障，不作为报告可见章节 |
+| `output` | 本次 skill 实际产出的内容、下游连接数据和报告 Details 明细；文件产物必须写完整路径，统计和分组结果也放这里 |
 | `status` | 框架根据是否执行到最后、是否异常、输出是否符合 schema 判定 |
 | `elapsed_sec` | 实际执行耗时，单位秒 |
 
 报告渲染规则：
 
-- 标题显示 `skill`、`status`、`elapsed_sec`。
-- `input` 渲染为参数表。
-- `output` 渲染为输出表。
-- `output` 中的数组或分组对象按字段名渲染为明细表。
+- step 折叠头显示 `skill`、`status`、`elapsed_sec`。
+- 报告默认只露出 step 折叠头。
+- `input` 不渲染为可见章节。
+- `output` 是 `Details` 的默认来源。
+- `output` 中的标量进入 `Details/result` 表。
+- `output` 中的数组或分组对象按字段名渲染为明细表或列表。
+- `output.compare_result` 等大型机器对象不直接展开；报告只显示同级统计字段。
 - 报告层不生成业务结论，不从旧文本里反推统计，不展示 traceback/recovery hint。
-- 错误堆栈和调试信息保留在 audit / worker log；主报告只展示标准记录。
+- 错误堆栈和调试信息保留在 audit / worker log；主报告只展示必要错误信息。
 
 ## 6. 机器数据与人工报告分离
 
@@ -176,7 +179,7 @@ ysj_chr_mihouwang_rig_rigMaster_v007.ma
 - `compare_result.json` 是机器契约，不是报告正文。
 - Workflow 下游只消费上游标准记录的 `output` 字段。
 - 例如 `{{outputs.compare_pre.output_path}}` 指向的是 `compare_pre` 记录里的 `output.output_path`。
-- 报告只渲染标准记录；不再消费 `summary`、`items`、`report_content`、`report_sections`。
+- 报告只渲染标准记录；新 skill 不再提供 `summary`、`items`、`report_content`、`report_sections` 作为展示字段。
 
 ## 7. Skill 运行时契约
 
@@ -287,16 +290,18 @@ updated target rig
   "output": {
     "output_path": "Y:/.../.info/ysj_chr_maYouA_rig_rigMaster_v001_pre_compare_result.json",
     "matched_total": 25,
-    "matched_same": [
+    "matched_same": 24,
+    "matched_different": 1,
+    "only_source": 0,
+    "only_target": 0,
+    "matched_same_items": [
       {
         "source": "maYouA_M_eyebrow1Shape",
         "target": "eyebrow_mshShape",
         "action": "ORIG_INJECT"
       }
     ],
-    "matched_different": [],
-    "only_source": [],
-    "only_target": []
+    "matched_different_items": []
   },
   "status": "SUCCESS",
   "elapsed_sec": 1.2
@@ -307,10 +312,14 @@ updated target rig
 
 | 字段 | 含义 |
 |---|---|
-| `matched_same` | source 在 target 中找到可接受配对；包含 `IDENTICAL` 和 `ORIG_INJECT`，不算阻断问题 |
-| `matched_different` | source 在 target 中找到配对，但几何不同，需要后续处理或审查 |
-| `only_source` | 只存在于 source，target 中没有对应对象 |
-| `only_target` | 只存在于 target，source 中没有对应对象 |
+| `matched_same` | 数量：source 在 target 中找到可接受配对；包含 `IDENTICAL` 和 `ORIG_INJECT`，不算阻断问题 |
+| `matched_different` | 数量：source 在 target 中找到配对，但几何不同，需要后续处理或审查 |
+| `only_source` | 数量：只存在于 source，target 中没有对应对象 |
+| `only_target` | 数量：只存在于 target，source 中没有对应对象 |
+| `matched_same_items` | 可选明细：只放 source / target / action / layer 等核心字段 |
+| `matched_different_items` | 可选明细：只放需要审查的核心字段 |
+| `only_source_items` | 可选明细 |
+| `only_target_items` | 可选明细 |
 
 `matched_total` 只是 `matched_same + matched_different` 的数量。不要在报告里使用含义模糊的 `paired` / `identical` 作为主字段。
 
@@ -319,9 +328,9 @@ updated target rig
 | 旧字段 | 实际含义 | 新报告字段 |
 |---|---|---|
 | `paired` | source 与 target 成功建立配对的总数；例如 `paired: 25` 表示 25 个 source mesh 找到了 target mesh | `matched_total` |
-| `identical` | 已配对且几何可直接接受的对象列表；包含算法层 `IDENTICAL` 和 `ORIG_INJECT` | `matched_same` |
-| `only_a` | 只在 source 侧存在 | `only_source` |
-| `only_b` | 只在 target 侧存在 | `only_target` |
+| `identical` | 已配对且几何可直接接受的对象列表；包含算法层 `IDENTICAL` 和 `ORIG_INJECT` | `matched_same_items`，数量进入 `matched_same` |
+| `only_a` | 只在 source 侧存在 | `only_source_items`，数量进入 `only_source` |
+| `only_b` | 只在 target 侧存在 | `only_target_items`，数量进入 `only_target` |
 
 文件位置：
 

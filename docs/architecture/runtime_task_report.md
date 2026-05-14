@@ -13,10 +13,10 @@
 任务成功、失败、阻断、审计失败都必须进入同一份报告。报告只回答五件事：
 
 - 执行了什么 skill
-- 传入了什么参数
-- 输出了什么内容
 - 是否成功
 - 耗时多少
+- 展开后有哪些核心结果明细
+- 最终产物在哪里
 
 机器中间产物统一写入 `{sandbox}/.info/`。报告不承担下游数据传递职责。
 
@@ -38,7 +38,9 @@
 }
 ```
 
-业务 skill 不再为报告返回 `summary`、`items`、`report_content`、`report_sections`、`recovery_hint`。
+`input` 和 `output` 仍保留在标准执行记录里，供审计、workflow 串联和排障使用；但 `REPORT.md` 不再把它们渲染成可见的 `Input` / `Output` 章节。可见明细统一来自 `output` 的稳定字段，并显示在 step 的 `Details` 中。
+
+业务 skill 新契约不再为报告返回 `summary`、`items`、`report_content`、`report_sections`、`recovery_hint`。当前代码里仍存在的旧字段只用于历史任务兼容，不能作为新增 skill 的模板。
 
 ## 3. 职责边界
 
@@ -47,7 +49,7 @@
 业务 skill 只负责返回标准执行记录：
 
 - `input`: 本次实际生效的参数，路径必须是完整路径
-- `output`: 本次实际产物，文件产物必须使用 `output_path`
+- `output`: 本次实际产物、下游连接数据和报告 Details 明细，文件产物必须使用 `output_path`
 - `status`: 执行状态
 - `elapsed_sec`: 执行耗时
 
@@ -57,6 +59,7 @@
 - 把 Markdown 当作下游机器数据
 - 返回多套展示结构让报告系统二次理解
 - 在主报告字段中写 traceback 或恢复建议
+- 为了报告新增 `Input` / `Output` 展示字段
 
 ### 3.2 实时报告 writer
 
@@ -69,10 +72,10 @@ core/task_report_writer.py
 它负责：
 
 - 初始化 `REPORT.md`
-- 写入源文件与沙盒备份模块
 - step 开始时写入 `RUNNING`
 - step 完成时替换为最终标准执行记录
 - workflow / chain 结束时写入最终状态
+- 只渲染 step 折叠头、`Details` 和必要错误信息
 
 ### 3.3 write_task_report
 
@@ -102,19 +105,24 @@ core/task_report_writer.py
 
 每个 step 固定排版：
 
-```md
-### Step N | {skill} | {status} | {elapsed_sec}s
+```html
+<details>
+<summary>Step N/Total | {skill} | {status} | {elapsed}</summary>
 
-#### Input
-| key | value |
-|---|---|
+<h4>Details</h4>
+...
 
-#### Output
-| key | value |
-|---|---|
+</details>
 ```
 
-`output` 中的数组或分组对象按字段名展开为明细表。报告层不生成一句话结论，不从旧 Markdown 中反推统计。
+规则：
+
+- 报告打开时只露出每个 step 的折叠头。
+- 不渲染独立 `Input` / `Output` 标题。
+- `output` 中的标量进入 `Details/result` 表。
+- `output` 中的数组或分组对象按字段名展开为明细表或列表。
+- `output.compare_result` 这类大型机器对象不直接展开；报告只显示同级统计字段。
+- 报告层不生成业务结论，不从旧 Markdown 中反推统计。
 
 ## 6. 对比类报告
 
@@ -124,6 +132,8 @@ core/task_report_writer.py
 - `matched_different`
 - `only_source`
 - `only_target`
+
+这四个字段固定为数量。需要展开对象明细时使用 `matched_same_items`、`matched_different_items`、`only_source_items`、`only_target_items`，不要让同一个字段有时是数量、有时是列表。
 
 `compare_result.json` 可以继续保留机器字段 `paired`、`only_a`、`only_b`、`actionability`，但这些字段不直接作为主报告标题。
 

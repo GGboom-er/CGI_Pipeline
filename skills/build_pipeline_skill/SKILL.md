@@ -27,6 +27,8 @@ category: "system"
 - 不允许新增第二套返回结构。
 - 不允许继续扩展旧字段：`summary`、`items`、`report_content`、`report_sections`、`recovery_hint`。
 - 不允许把 Markdown 报告当作下游机器数据。
+- 不允许照抄旧 skill 的兼容字段作为新增 skill 的设计依据；旧字段只为历史任务兼容存在。
+- 不允许在报告层另写 `Input` / `Output` 展示章节；报告默认只露 step 摘要，展开后显示 `Details`。
 - 不允许让 sync 类 skill 只能消费临时 JSON 路径；能直接传 dict 时，应支持 dict 直连。
 - 修改 DCC 场景的 skill 必须只处理沙盒副本，不能覆盖源资产或发布目录。
 - 需要用户决策的设计变更，先给蓝图，不直接写代码。
@@ -86,28 +88,41 @@ def execute(payload: dict) -> dict:
 
 | 字段 | 规则 |
 |---|---|
-| `skill` | 必须等于 `skill_id` |
-| `input` | 本次实际生效的输入参数 |
-| `output` | 本次实际产物和可传给下游的数据 |
-| `status` | 执行框架判定的状态 |
-| `elapsed_sec` | 实际执行秒数 |
+| `skill` | 必须等于 `skill_id`。`skill_id` 兼容字段由 `make_receipt` 生成，不作为新契约依赖。 |
+| `input` | 本次实际生效的输入参数，只用于审计和排障，不作为报告可见章节。 |
+| `output` | 本次实际产物、下游连接数据和人工可展开明细的唯一来源。 |
+| `status` | 执行框架判定的状态。 |
+| `elapsed_sec` | 实际执行秒数。 |
 
 ### input
 
-- 只记录实际参与执行的参数。
+- 只记录实际参与执行的参数；不要记录默认未使用参数、内部 `_chain_history`、worker 临时变量。
 - 路径必须是完整路径。
-- 不写 `A vs B`、`A + B`、`当前文件` 这类拼接描述。
+- 不写 `A vs B`、`A + B`、`当前文件` 这类拼接描述；每个值必须能被人或下游单独理解。
 - 如果框架用 `payload.source_path` 打开文件，必须写入 `input.source_path`。
 - `payload.parameters` 中实际参与执行的字段按原参数名写入 `input`。
+- `payload.source_path` 是“本 step 打开的 DCC 场景”，不等于算法 source。语义冲突时必须在 SKILL.md 的核心限制中明示。
 
 ### output
 
+- `output` 是 workflow 下游读取的唯一接口，也是报告 `Details` 的默认数据来源。
 - 文件产物统一写 `output.output_path`，必须是完整路径。
+- 可以同时提供语义别名，例如 `abc_path`、`materials_path`、`compare_result_path`，但下游 workflow 新引用优先使用 `output_path` 或明确声明的语义字段，不能再新增同义混乱字段。
 - 无文件产物但修改当前 DCC 场景时，写 `output.scene = "current_maya_scene"` 或 `output.scene = "current_blender_scene"`。
 - 数量统计直接写在 `output`，例如 `mesh_count`、`failed_count`、`material_count`。
-- 业务明细按清晰字段命名写入 `output`。
+- 业务明细按清晰字段命名写入 `output`，例如 `material_names`、`created_nodes`、`extra_top_nodes`、`issues`。
+- `output` 里的 list/dict 会进入报告的 `Details`，字段名就是展开小节名；因此字段必须短、稳定、可读。
 - 机器对象可以直接写入 `output`，例如 `compare_result` dict；报告渲染器只能显示摘要，不展开为噪声正文。
 - 超大数据优先落 `.info` 文件，并用 `output.output_path` 暴露路径。
+- 禁止把完整原始场景快照、完整 compare JSON、traceback、Markdown 正文塞进 `output`。大对象落文件，`output` 只放路径、计数、关键明细列表。
+
+### 报告关系
+
+- `REPORT.md` 不再渲染独立 `Input` / `Output` 章节。
+- 每个 step 默认只显示：`Step N/Total | skill_name | status | elapsed`。
+- 展开 step 后只显示 `Details` 和必要的错误信息。
+- 新 skill 要让报告看见什么，就把这些事实放进 `output` 的稳定字段；不要新增 `report_content` / `report_sections`。
+- 现有旧 skill 里仍出现的 `summary/items/report_sections` 是迁移兼容层，不能作为新增 skill 的模板。
 
 ## 1. 意图捕获
 
@@ -140,6 +155,7 @@ def execute(payload: dict) -> dict:
 - 不负责:
 - input:
 - output:
+- report Details:
 - workflow 连接:
 - 风险:
 - 验证:
@@ -214,6 +230,8 @@ workflow 只读取上游 `output`：
 - 整串只有一个模板时保留原类型，dict/list 可以直接传给下游。
 - 模板和普通文本混写时转成字符串。
 - 下游 skill 不读 Markdown。
+- 新增或重命名 `output` 字段时，必须同步更新相关 workflow JSON 和测试。
+- 不允许让下游读取 `input`、`summary`、`items`、`report_sections` 或报告正文。
 
 ## 6. 对比类输出
 
@@ -222,10 +240,14 @@ workflow 只读取上游 `output`：
 | 字段 | 含义 |
 |---|---|
 | `matched_total` | `matched_same + matched_different` 数量 |
-| `matched_same` | source 在 target 中找到可接受配对，包含 `IDENTICAL` 和 `ORIG_INJECT` |
-| `matched_different` | source 在 target 中找到配对，但几何不同 |
-| `only_source` | 只存在于 source |
-| `only_target` | 只存在于 target |
+| `matched_same` | 数量：source 在 target 中找到可接受配对，包含 `IDENTICAL` 和 `ORIG_INJECT` |
+| `matched_different` | 数量：source 在 target 中找到配对，但几何不同 |
+| `only_source` | 数量：只存在于 source |
+| `only_target` | 数量：只存在于 target |
+| `matched_same_items` | 可选明细列表：只放 source / target / action / layer 等核心字段 |
+| `matched_different_items` | 可选明细列表：只放需要审查的核心字段 |
+| `only_source_items` | 可选明细列表 |
+| `only_target_items` | 可选明细列表 |
 
 推荐：
 
@@ -238,15 +260,24 @@ workflow 只读取上游 `output`：
     },
     "output_path": "Y:/.../.info/pre_compare_result.json",
     "matched_total": 25,
-    "matched_same": [],
-    "matched_different": [],
-    "only_source": [],
-    "only_target": []
+    "matched_same": 21,
+    "matched_different": 4,
+    "only_source": 0,
+    "only_target": 0,
+    "matched_same_items": [
+      {
+        "source": "bodyShape",
+        "target": "body_mshShape",
+        "action": "ORIG_INJECT",
+        "layer": "body_Layer"
+      }
+    ],
+    "matched_different_items": []
   }
 }
 ```
 
-`compare_result` 是机器对象，可以直接传给 sync；`output_path` 只是审计落盘路径。
+`compare_result` 是机器对象，可以直接传给 sync；`output_path` 是审计落盘路径。不要把完整 `compare_result` 展开成报告明细，报告只看统计字段和 `*_items` 精简列表。
 
 ## 7. DCC 约束
 
@@ -275,6 +306,8 @@ Pipeline：
 - 禁止写源文件同目录 fallback。
 - 禁止吞异常后返回成功。
 - 禁止为了兼容旧字段继续扩大输入输出形态。
+- 禁止把报告展示需求实现成第二套字段；展示需求必须回到 `output` 字段设计。
+- 禁止在 `input` / `output` 中写“给人看的合成句子”替代结构化字段。
 
 ## 9. 交付检查
 
@@ -283,9 +316,11 @@ Pipeline：
 - [ ] `skills/{skill_id}/SKILL.md` 存在。
 - [ ] `skills/{skill_id}/{skill_id}.py` 存在。
 - [ ] `skills/{skill_id}/__init__.py` re-export `execute`。
-- [ ] `input` 字段能解释本次 skill 接收了什么。
-- [ ] `output` 字段能直接给报告和下游 skill 使用。
+- [ ] `input` 字段只包含本次实际生效参数。
+- [ ] `output` 字段能直接给报告 `Details` 和下游 skill 使用。
+- [ ] `output` 字段名已在 SKILL.md 的 `io.outputs` 或标准记录章节写清楚。
 - [ ] 文件路径都是完整路径。
 - [ ] 无旧展示字段。
+- [ ] 报告不需要额外 Markdown 才能说明本 skill 的结果。
 - [ ] 修改 DCC 场景时有 undo / 沙盒保护。
 - [ ] 有测试或明确说明未跑测试的原因。

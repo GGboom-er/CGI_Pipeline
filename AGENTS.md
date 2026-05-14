@@ -103,7 +103,9 @@ def execute(payload: dict) -> dict:
 
 状态码：`SUCCESS / ERROR / BLOCKED / TIMEOUT / CHAIN_ABORTED / AUDIT_FAILED / CHAIN_AUDIT_FAILED / WORKFLOW_AUDIT_FAILED`。后台 pipeline 不等待人工决策；质检或契约不通过时返回 `AUDIT_FAILED` 并生成报告。
 
-标准执行记录固定为 `skill/input/output/status/elapsed_sec`。`input` 写实际生效参数，`output` 写实际产物；文件产物统一为 `output.output_path`，多字段结构化输出直接放在 `output`。不再返回或渲染 `summary/items/report_content/report_sections/recovery_hint`。
+标准执行记录固定为 `skill/input/output/status/elapsed_sec`。`input` 写实际生效参数，只用于审计、排障和复现；`output` 写实际产物、下游连接数据和报告 Details 明细，是 workflow 串联的唯一接口。文件产物统一为 `output.output_path`，多字段结构化输出直接放在 `output`。新增或改造 skill 时不得复制旧 `summary/items/report_content/report_sections/recovery_hint` 模式；这些旧字段只为历史兼容存在。
+
+运行时 `REPORT.md` 不再展示独立 `Input` / `Output` 章节，只展示每个 Step 折叠头和展开后的 `Details`。如果一个新 skill 需要让用户看到某些结果，必须把这些事实作为稳定字段写进 `output`，不要新增第二套报告字段。
 
 ### 节点化参数命名规范（SOP）
 
