@@ -93,6 +93,7 @@ def test_error_block_contains_full_detail():
     assert "绑定目标缺少 ShapeOrig" in text
     assert "Traceback line 2" in text
     assert "先运行命名修复" not in text
+    assert "report:block:" not in text
     print(f"✓ test_error_block_contains_full_detail → {report}")
 
 

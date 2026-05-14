@@ -72,6 +72,8 @@ core/task_report_writer.py
 
 同一个 block id 再写入时必须替换原模块，不能追加重复内容。
 
+这些 marker 只服务运行中的 upsert。`finalize_report` 写完最终状态后必须剥离 marker，最终交付给用户的 `REPORT.md` 不能显示任何 `report:block` 文本。
+
 ## 5. 默认排版规则
 
 每个 step 固定排版：

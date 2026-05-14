@@ -417,6 +417,20 @@ def upsert_block(report_path: str | Path, block_id: str, markdown: str,
         path.write_text(text.rstrip() + "\n", encoding="utf-8")
 
 
+def _strip_block_markers(report_path: str | Path) -> None:
+    """最终报告不保留内部 upsert marker，避免 Markdown 查看器显示实现细节。"""
+    path = Path(report_path)
+    if not path.exists():
+        return
+    marker_re = re.compile(
+        r"^\s*(?:<!--\s*report:block:(?:start|end)\s+.*?-->|"
+        r"\[//\]:\s*#\s*\(report:block:(?:start|end)\s+.*?\))\s*$"
+    )
+    text = path.read_text(encoding="utf-8")
+    lines = [line for line in text.splitlines() if not marker_re.match(line)]
+    path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+
+
 def init_report(report_path: str | Path, task_context: Dict[str, Any]) -> str:
     """初始化 REPORT.md。重复调用不会清空已有 step block。"""
     path = Path(report_path)
@@ -489,6 +503,7 @@ def finalize_report(report_path: str | Path, task_context: Dict[str, Any],
         render_final(context, final_status, elapsed_min, error, traceback_text),
         before_block_id="__never__",
     )
+    _strip_block_markers(report_path)
 
 
 def _step_block_id(step_context: Dict[str, Any]) -> str:
