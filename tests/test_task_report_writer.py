@@ -50,22 +50,21 @@ def test_step_upsert_no_duplicate():
     })
 
     text = report.read_text(encoding="utf-8")
-    assert text.count("[//]: # (report:block:start step:main:0:pipeline_compare_asset)") == 1, text
-    assert "<!-- report:block:start" not in text
+    assert text.count("<!-- report:block:start step:main:0:pipeline_compare_asset -->") == 1, text
+    assert "[//]: # (report:block:start" not in text
     step_block = text.split("report:block:start step:main:0:pipeline_compare_asset", 1)[1]
     step_block = step_block.split("report:block:end step:main:0:pipeline_compare_asset", 1)[0]
     assert "RUNNING" not in step_block, text
     assert "SUCCESS" in text
-    assert "<summary>Step 1/1 | pipeline_compare_geometry_sources | SUCCESS" in text
-    assert "## Step 1/1 | pipeline_compare_geometry_sources | SUCCESS" not in text
-    assert "\n<details>\n<summary>Step 1/1 | pipeline_compare_geometry_sources | SUCCESS" in step_block
-    assert text.count("<details>") == text.count("<summary>Step ")
+    assert "### Step 1/1 | pipeline_compare_geometry_sources | SUCCESS" in text
+    assert "<details>" not in text
+    assert "<summary>" not in text
     assert "<h4>Input</h4>" not in text
     assert "<h4>Output</h4>" not in text
     assert "**Input**" not in text
     assert "**Output**" not in text
-    assert "<h4>Details</h4>" in text
-    assert "<h5>result</h5>" in text
+    assert "#### Details" in text
+    assert "##### result" in text
     assert "compare_result.json" in text
     print(f"✓ test_step_upsert_no_duplicate → {report}")
 
@@ -90,7 +89,7 @@ def test_error_block_contains_full_detail():
     writer.finalize_report(report, {"task_id": "task-error", "asset_name": "demo", "run_dir": str(sbx)}, "ERROR", 0.02)
 
     text = report.read_text(encoding="utf-8")
-    assert "<h4>Error Detail</h4>" in text
+    assert "#### Error Detail" in text
     assert "绑定目标缺少 ShapeOrig" in text
     assert "Traceback line 2" in text
     assert "先运行命名修复" not in text
@@ -116,11 +115,12 @@ def test_sections_and_report_content():
         "report_content": "旧格式完整对比报告",
     })
     text = report.read_text(encoding="utf-8")
-    assert text.count("<details>") == text.count("<summary>Step ")
-    assert "<h4>Details</h4>" in text
-    assert "<h5>通过配对 (73 项)</h5>" in text
+    assert "<details>" not in text
+    assert "<summary>" not in text
+    assert "#### Details" in text
+    assert "##### 通过配对 (73 项)" in text
     assert "bodyShape" in text
-    assert "<h5>几何差异 (0 项)</h5>" in text
+    assert "##### 几何差异 (0 项)" in text
     assert "旧格式完整对比报告" not in text
     print(f"✓ test_sections_and_report_content → {report}")
 
@@ -170,8 +170,8 @@ def test_compare_result_renders_action_details_without_json_dump():
     text = report.read_text(encoding="utf-8")
     assert "compare_result" not in text
     assert "**Details**" not in text
-    assert "<h4>Details</h4>" in text
-    assert "<h5>result</h5>" in text
+    assert "#### Details" in text
+    assert "##### result" in text
     assert "matched_same" in text
     assert "<th>action</th>" not in text
     assert "bodyShape" not in text
@@ -214,9 +214,10 @@ def test_embedded_result_contract_stays_out_of_output_summary():
     assert "<code>phase</code>:" not in text
     assert "<code>extra_top_nodes</code>:" not in text
     assert "<code>issues</code>:" not in text
-    assert text.count("<details>") == text.count("<summary>Step ")
-    assert "<h5>extra_top_nodes (2)</h5>" in text
-    assert "<h5>issues (1)</h5>" in text
+    assert "<details>" not in text
+    assert "<summary>" not in text
+    assert "##### extra_top_nodes (2)" in text
+    assert "##### issues (1)" in text
     print(f"✓ test_embedded_result_contract_stays_out_of_output_summary → {report}")
 
 

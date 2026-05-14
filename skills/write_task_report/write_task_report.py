@@ -296,10 +296,10 @@ def _render_segment_context(seg_stage_entries: list, seg_open_entry: dict) -> li
 
 
 def _render_step(receipt: dict, step_idx: int) -> list:
-    """一级折叠结构：
-    - 顶层 summary：Step N: {label} — {一句话动作} ({耗时}) {icon}
-    - 展开后：最多 4 行核心信息（动作 / 主输出 / 关键指标 / 错误）
-    - items/完整 outputs/内嵌报告：在同一个 step 内用小标题和表格展示，不再嵌套 details
+    """Markdown step 结构：
+    - 标题：Step N: {label} — {一句话动作} ({耗时}) {icon}
+    - 正文：最多 4 行核心信息（动作 / 主输出 / 关键指标 / 错误）
+    - items/完整 outputs/内嵌报告：在同一个 step 内用小标题和表格展示
     """
     skill_id = receipt.get('skill_id', 'unknown')
     status = receipt.get('status', 'UNKNOWN')
@@ -323,8 +323,7 @@ def _render_step(receipt: dict, step_idx: int) -> list:
     summary_line += f' ({elapsed_str}) {icon}'
 
     lines = [
-        '<details>',
-        f'<summary>{summary_line}</summary>',
+        f'### {summary_line}',
         '',
     ]
 
@@ -406,7 +405,6 @@ def _render_step(receipt: dict, step_idx: int) -> list:
         lines.append('```')
         lines.append('')
 
-    lines.append('</details>')
     lines.append('')
     return lines
 

@@ -46,7 +46,7 @@ core/task_report_writer.py
 - step 开始时写入 `RUNNING`
 - step 完成时替换为最终标准执行记录
 - workflow / chain 结束时写入最终状态
-- 只渲染 step 折叠头、`Details` 和必要错误信息
+- 只渲染 step 标题、`Details` 和必要错误信息
 
 ### 3.3 write_task_report
 
@@ -63,11 +63,11 @@ core/task_report_writer.py
 报告中的每个模块必须用 block marker 包裹：
 
 ```md
-[//]: # (report:block:start step:main:0:maya_compare_asset_in_scene)
+<!-- report:block:start step:main:0:maya_compare_asset_in_scene -->
 ### Step 1 | maya_compare_asset_in_scene | SUCCESS | 2.4s
 
 ...
-[//]: # (report:block:end step:main:0:maya_compare_asset_in_scene)
+<!-- report:block:end step:main:0:maya_compare_asset_in_scene -->
 ```
 
 同一个 block id 再写入时必须替换原模块，不能追加重复内容。
@@ -76,19 +76,16 @@ core/task_report_writer.py
 
 每个 step 固定排版：
 
-```html
-<details>
-<summary>Step N/Total | {skill} | {status} | {elapsed}</summary>
+```md
+### Step N/Total | {skill} | {status} | {elapsed}
 
-<h4>Details</h4>
+#### Details
 ...
-
-</details>
 ```
 
 规则：
 
-- 报告打开时只露出每个 step 的折叠头。
+- `REPORT.md` 必须使用 Markdown 查看器友好的纯 Markdown 正文，不在正文里依赖 raw HTML。
 - 不渲染独立 `Input` / `Output` 标题。
 - `output` 中的标量进入 `Details/result` 表。
 - `output` 中的数组或分组对象按字段名展开为明细表或列表。

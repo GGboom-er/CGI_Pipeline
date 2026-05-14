@@ -110,7 +110,7 @@ def execute(payload: dict) -> dict:
 - 无文件产物但修改当前 DCC 场景时，写 `output.scene = "current_maya_scene"` 或 `output.scene = "current_blender_scene"`。
 - 数量统计直接写在 `output`，例如 `mesh_count`、`failed_count`、`material_count`。
 - 业务明细按清晰字段命名写入 `output`，例如 `material_names`、`created_nodes`、`extra_top_nodes`、`issues`。
-- `output` 里的 list/dict 会进入报告的 `Details`，字段名就是展开小节名；因此字段必须短、稳定、可读。
+- `output` 里的 list/dict 会进入报告的 `Details`，字段名就是明细小节名；因此字段必须短、稳定、可读。
 - 机器对象可以直接写入 `output`，例如 `compare_result` dict；报告渲染器只能显示摘要，不展开为噪声正文。
 - 超大数据优先落 `.info` 文件，并用 `output.output_path` 暴露路径。
 - 禁止把完整原始场景快照、完整 compare JSON、traceback、Markdown 正文塞进 `output`。大对象落文件，`output` 只放路径、计数、关键明细列表。
@@ -118,8 +118,8 @@ def execute(payload: dict) -> dict:
 ### 报告关系
 
 - `REPORT.md` 不再渲染独立 `Input` / `Output` 章节。
-- 每个 step 默认只显示：`Step N/Total | skill_name | status | elapsed`。
-- 展开 step 后只显示 `Details` 和必要的错误信息。
+- 每个 step 使用纯 Markdown 标题：`Step N/Total | skill_name | status | elapsed`。
+- step 正文只显示 `Details` 和必要的错误信息，禁止依赖 raw HTML 折叠语法。
 - 新 skill 要让报告看见什么，就把这些事实放进 `output` 的稳定字段。
 
 ## 1. 意图捕获

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import contextlib
 import datetime
-import html
 import json
 import os
 import re
@@ -191,56 +190,50 @@ def _normalize_report_io(values: Dict[str, Any], section: str) -> Dict[str, Any]
     return clean
 
 
-def _html_cell(value: Any) -> str:
+def _md_cell(value: Any) -> str:
     if value is None:
         return ""
     text = str(value).replace("\r\n", " / ").replace("\n", " / ")
     if _looks_like_path(text):
-        return f"<code>{html.escape(text)}</code>"
-    return html.escape(text)
+        if "|" in text:
+            return text.replace("|", "&#124;").replace("`", "\\`")
+        escaped = text.replace("`", "\\`")
+        return f"`{escaped}`"
+    return text.replace("|", "&#124;").replace("`", "\\`")
 
 
-def _render_html_table(headers: List[str], rows: List[List[Any]]) -> List[str]:
-    lines = ["<table>", "<thead>", "<tr>"]
-    for header in headers:
-        lines.append(f"<th>{html.escape(str(header))}</th>")
-    lines.extend(["</tr>", "</thead>", "<tbody>"])
+def _render_md_table(headers: List[str], rows: List[List[Any]]) -> List[str]:
+    clean_headers = [_md_cell(header) for header in headers]
+    lines = [
+        "| " + " | ".join(clean_headers) + " |",
+        "| " + " | ".join("---" for _ in clean_headers) + " |",
+    ]
     for row in rows:
-        lines.append("<tr>")
-        for value in row:
-            lines.append(f"<td>{_html_cell(value)}</td>")
-        lines.append("</tr>")
-    lines.extend(["</tbody>", "</table>"])
+        lines.append("| " + " | ".join(_md_cell(value) for value in row) + " |")
     return lines
 
 
-def _render_html_list(items: Iterable[Any]) -> List[str]:
-    lines = ["<ul>"]
-    for item in items:
-        lines.append(f"<li>{_html_cell(item)}</li>")
-    lines.append("</ul>")
-    return lines
+def _render_md_list(items: Iterable[Any]) -> List[str]:
+    return [f"- {_md_cell(item)}" for item in items]
 
 
-def _render_html_pre(text: str) -> List[str]:
-    return ["<pre>", html.escape(str(text)), "</pre>"]
+def _render_md_pre(text: str) -> List[str]:
+    safe_text = str(text).replace("```", "` ` `")
+    return ["```text", safe_text, "```"]
 
 
-def _render_html_subsection(title: str, body_lines: List[str]) -> List[str]:
+def _render_md_subsection(title: str, body_lines: List[str]) -> List[str]:
     return [
-        f"<h5>{html.escape(str(title))}</h5>",
+        f"##### {title}",
         *body_lines,
     ]
 
 
 def _wrap_summary_body(summary_line: str, body_lines: List[str]) -> str:
     return "\n".join([
-        "<details>",
-        f"<summary>{html.escape(summary_line)}</summary>",
-        "",
+        f"### {summary_line}",
         *body_lines,
         "",
-        "</details>",
     ])
 
 
@@ -256,9 +249,9 @@ def _render_structured_sections(sections: Any) -> List[str]:
         heading = f"{title} ({summary})" if summary else title
         body: List[str] = []
         if section.get("content"):
-            body.extend(_render_html_pre(str(section.get("content"))))
+            body.extend(_render_md_pre(str(section.get("content"))))
         if section.get("markdown"):
-            body.extend(_render_html_pre(str(section.get("markdown"))))
+            body.extend(_render_md_pre(str(section.get("markdown"))))
         items = section.get("items") or []
         if items:
             if all(isinstance(item, dict) for item in items):
@@ -267,12 +260,12 @@ def _render_structured_sections(sections: Any) -> List[str]:
                     for key in item.keys():
                         if key not in keys:
                             keys.append(key)
-                body.extend(_render_html_table(keys, [[item.get(key, "") for key in keys] for item in items]))
+                body.extend(_render_md_table(keys, [[item.get(key, "") for key in keys] for item in items]))
             else:
-                body.extend(_render_html_list(items))
+                body.extend(_render_md_list(items))
         if not body:
-            body = ["<p>none</p>"]
-        lines.extend(_render_html_subsection(heading, body))
+            body = ["none"]
+        lines.extend(_render_md_subsection(heading, body))
     return lines
 
 
@@ -289,9 +282,9 @@ def _render_items_details(items: Any) -> List[str]:
             ])
         else:
             rows.append([str(item), "", ""])
-    return _render_html_subsection(
+    return _render_md_subsection(
         f"ITEMS ({len(rows)})",
-        _render_html_table(["name", "detail", "elapsed"], rows),
+        _render_md_table(["name", "detail", "elapsed"], rows),
     )
 
 
@@ -308,22 +301,22 @@ def _render_output_field_details(outputs: Dict[str, Any]) -> List[str]:
                         if item_key not in keys:
                             keys.append(item_key)
                 rows = [[item.get(item_key, "") for item_key in keys] for item in value]
-                body = _render_html_table(keys, rows)
+                body = _render_md_table(keys, rows)
             else:
-                body = _render_html_list(value)
-            lines.extend(_render_html_subsection(f"{key} ({len(value)})", body))
+                body = _render_md_list(value)
+            lines.extend(_render_md_subsection(f"{key} ({len(value)})", body))
         elif isinstance(value, dict) and value:
             rows = [[sub_key, sub_value] for sub_key, sub_value in value.items()]
-            lines.extend(_render_html_subsection(
+            lines.extend(_render_md_subsection(
                 f"{key} ({len(value)} fields)",
-                _render_html_table(["field", "value"], rows),
+                _render_md_table(["field", "value"], rows),
             ))
         elif value not in (None, "", [], {}):
             scalar_rows.append([key, value])
     if scalar_rows:
-        lines[0:0] = _render_html_subsection(
+        lines[0:0] = _render_md_subsection(
             "result",
-            _render_html_table(["field", "value"], scalar_rows),
+            _render_md_table(["field", "value"], scalar_rows),
         )
     return lines
 
@@ -379,16 +372,16 @@ def _locked_file(path: Path):
 def _block_markers(block_id: str) -> tuple[str, str]:
     safe = str(block_id).replace("\n", " ").strip()
     return (
-        f"[//]: # (report:block:start {safe})",
-        f"[//]: # (report:block:end {safe})",
+        f"<!-- report:block:start {safe} -->",
+        f"<!-- report:block:end {safe} -->",
     )
 
 
 def _legacy_block_markers(block_id: str) -> tuple[str, str]:
     safe = str(block_id).replace("\n", " ").strip()
     return (
-        f"<!-- report:block:start {safe} -->",
-        f"<!-- report:block:end {safe} -->",
+        f"[//]: # (report:block:start {safe})",
+        f"[//]: # (report:block:end {safe})",
     )
 
 
@@ -550,25 +543,25 @@ def render_step_finished(step_context: Dict[str, Any], receipt: Dict[str, Any],
     if not has_report_sections and not detail_lines:
         detail_lines.extend(_render_items_details(receipt.get("items")))
     if detail_lines:
-        body_lines.extend(["", "<h4>Details</h4>"])
+        body_lines.extend(["", "#### Details"])
         body_lines.extend(detail_lines)
 
     error = receipt.get("error", "")
     tb = receipt.get("traceback", "") or receipt.get("traceback_text", "")
     if error or tb or (status not in ("SUCCESS", "RUNNING") and raw_detail):
-        body_lines.extend(["", "<h4>Error Detail</h4>"])
+        body_lines.extend(["", "#### Error Detail"])
         if error:
-            body_lines.extend(_render_html_pre(str(error)))
+            body_lines.extend(_render_md_pre(str(error)))
         if tb:
-            body_lines.extend(["<h4>Traceback</h4>", *_render_html_pre(str(tb))])
+            body_lines.extend(["#### Traceback", *_render_md_pre(str(tb))])
         elif raw_detail and status != "SUCCESS":
-            body_lines.extend(["<h4>Raw Detail</h4>", *_render_html_pre(str(raw_detail))])
+            body_lines.extend(["#### Raw Detail", *_render_md_pre(str(raw_detail))])
 
     if raw_detail and not receipt.get("_parsed", True) and status == "SUCCESS":
         body_lines.extend([
             "",
-            "<h4>Raw Detail</h4>",
-            *_render_html_pre(str(raw_detail)),
+            "#### Raw Detail",
+            *_render_md_pre(str(raw_detail)),
         ])
 
     return _wrap_summary_body(summary_line, body_lines)

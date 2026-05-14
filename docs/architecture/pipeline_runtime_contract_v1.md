@@ -121,7 +121,7 @@ ysj_chr_mihouwang_rig_rigMaster_v007.ma
 
 - 每个 step 必须返回 `make_receipt(...)` 标准执行记录。
 - workflow 只读取上游记录的 `output` 字段。
-- `REPORT.md` 只按记录顺序渲染 step 折叠头、`Details` 和必要错误信息。
+- `REPORT.md` 只按记录顺序渲染 step 标题、`Details` 和必要错误信息。
 - 旧展示字段只用于历史兼容，不得作为新增 skill 的设计入口。
 
 ## 6. 机器数据与人工报告分离
