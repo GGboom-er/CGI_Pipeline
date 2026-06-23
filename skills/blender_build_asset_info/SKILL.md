@@ -2,6 +2,10 @@
 skill_id: "blender_build_asset_info"
 name: "Blender 资产信息采集"
 dcc: "blender"
+tier: "read"
+pairs_with:
+  - "maya_build_asset_info"
+  - "pipeline_compare_asset"
 description: "遍历指定 Blender 几何根组下所有 mesh，采集拓扑指纹（顶点数+世界空间坐标），输出标准 _info.json。只负责几何信息，不采集贴图或面级材质。"
 parameters:
   info_path:
@@ -48,8 +52,11 @@ category: "inspect"
 - `info_path` (string): 选填 | 任务沙盒 `.info/{source_stem}_info.json` | workflow 中必须显式传入。
 - `cache_group` (string): 必填 | 无 | 采集根对象名，可传 `cache` 或 Maya 风格路径，代码会取最后一段在 Blender 对象表中查找。
 
-### 🟣 输出字段 (OUTPUTS)
-receipt.outputs:
+
+**框架注入参数**（由 workflow/chain 框架自动注入，用户不需要手动传入）：
+- `asset_name`、`project`、`run_dir`、`task_id`、`info_dir`、`extra_params`、`submitted_at` 等由调度框架根据当前任务上下文自动填充。
+### 🟣 标准执行记录 (RECORD)
+标准记录 `output`:
 - `output_path` (str): `_info.json` 绝对路径。
 
 `_info.json`:

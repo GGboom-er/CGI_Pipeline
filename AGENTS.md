@@ -1,3 +1,8 @@
+# >>> Notes Global Bridge <<<
+# 自动追加 — 让本项目继承 Notes 治理层（红线/准则/触发条件/启动协议）
+@Y:/GGbommer/scripts/Notes/AGENTS.md
+# <<< Notes Global Bridge >>>
+
 # AGENTS.md
 
 This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
@@ -7,6 +12,25 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 CGI Pipeline v2.0 —— 一套自动化 DCC 资产管线。技能（skill）跑在后台的 Maya / Blender / 纯 Python worker 上，由 Celery 调度，FastMCP server 把每个技能包装成强类型 MCP tool 暴露出去。技能是 `skills/` 下的自包含文件夹；`core/skill_registry.py` 启动时扫 `SKILL.md` 自动生成 tool 元数据，**加新技能基本不需要动 registry 或 MCP 代码**，放好文件夹重启即可。
 
 运行平台：**Windows 10+**、**Maya 2025**、**Blender 4.x**、conda 环境 `cgi_pipeline`（Python 3.11）。Shell 是 Windows 上的 bash，用 `/dev/null`、正斜杠。
+
+## 开工必读协议
+
+每个任务开工前必须主动读取 `docs/ai_startup/` 固定必读包，按文件名前缀顺序读完 `00_STARTUP_PROTOCOL.md`、`01_PROJECT_FOUNDATION.md`、`02_KNOWLEDGE_BASE.md`、`03_DOC_INDEX.md`，并按其中的“后续开发基线”打开相关专项文档。不要等用户提醒再读，也不要只凭聊天上下文、历史记忆或上一次任务结论判断当前规则。
+
+上下文压缩、重新登录或新会话接手时，先读取本文件，再读取 `docs/ai_startup/` 固定必读包。涉及具体问题时，用 `rg` 在 `tasks/lessons.md` 查关键词，避免把整份历史流水账当当前规范。
+
+开工读文档的目标是先理解用户需求场景：项目全局框架、当前主 workflow、skill 输出契约、报告格式、测试门禁和已知未完成专题都以知识库链接到的权威文档为准。
+
+规则更新必须落地到知识库：
+
+- 会话启动、问题闭环、经验归档归属规则写 `docs/ai_startup/00_STARTUP_PROTOCOL.md`。
+- 项目全局框架、新手地图、能力边界和目录职责写 `docs/ai_startup/01_PROJECT_FOUNDATION.md`。
+- 当前稳定事实写入 `docs/ai_startup/02_KNOWLEDGE_BASE.md` 或其链接的权威专项文档。
+- 文档地图、专项入口和文档合并规则写 `docs/ai_startup/03_DOC_INDEX.md`。
+- 新增/改造 skill 的规则只写 `skills/build_pipeline_skill/SKILL.md`。
+- 任务闭环和待办写 `tasks/todo.md`。
+- 已踩坑经验写 `tasks/lessons.md`，格式保持 `[触发条件] → [根因] → [正确方案] → [避坑规则]`。
+- `docs/archive/`、`backups/`、`projects/` 和 `.info/` 只作追溯或运行产物，不作为当前实现依据。
 
 ## 常用命令
 
@@ -149,23 +173,29 @@ Maya 场景内几何采集放在 `dccs/maya/asset_info_collector.py`，不要放
 
 - 从 `cache_group` 全层级子孙里自身带 mesh shape 的 transform 出发。
 - mesh key 使用标准非 intermediate mesh shape 的绝对 DAG 路径；transform 可见性不参与过滤。
-- 顶点数据只来自同 transform 下命名规范且唯一有效的 `{transform}ShapeOrig`。
-- 找不到标准 Orig 时保留 mesh 条目但写空几何；诊断由对比/报告暴露，不由采集器修复。
+- 顶点数据优先来自 Maya 图关系求出的唯一 Orig，不靠名称猜测；兜底才接受同 transform 下唯一有效的 intermediate mesh。
+- 找不到唯一 Orig 时保留 mesh 条目但写空几何；诊断由对比/报告暴露，不由采集器修复。
 
 ### 对比/拼装主线
 
 推荐工作流不再“导出 Maya JSON 再开 Maya 拼装”。主线是：
 
 ```text
-resolve_asset_files -> 只传 asset_name 时查服务器最新 tex/rig；显式传 source_path/rig_path 时直接透传
-Blender source -> blender_export_abc + blender_extract_materials
-Maya target rig -> maya_compare_asset_in_scene 采集当前场景并写 pre compare_result
-pre compare_result + source_abc -> maya_sync_rig_incremental 执行拼装
-maya_compare_asset_in_scene -> post compare_result
-save_scene -> 沙盒内按版本递增保存
+resolve_asset_files
+-> blender_export_abc
+-> blender_extract_materials
+-> maya_check_asset_hierarchy
+-> maya_fix_asset_hierarchy
+-> maya_compare_asset_in_scene
+-> maya_sync_rig_incremental
+-> maya_check_asset_hierarchy
+-> maya_fix_shape_names
+-> maya_apply_materials
+-> maya_compare_asset_in_scene
+-> save_scene
 ```
 
-`pipeline_compare_asset` 保留为纯数据入口：只有当 source/target 都已经是 `_info.json` 或 ABC 时使用。`maya_sync_rig_incremental` 是执行器，必须消费前置 `compare_result`，不再独立重算对比。主 workflow 的文件入口必须节点化：路径查找属于 `resolve_asset_files`，文件隔离属于调度层，DCC skill 只消费解析后的路径。
+`pipeline_compare_asset` 保留为纯数据入口：只有当 source/target 都已经是 `_info.json` 或 ABC 时使用。`maya_sync_rig_incremental` 是执行器，必须消费前置 `compare_result`，不再独立重算对比。主 workflow 的文件入口必须节点化：路径查找属于 `resolve_asset_files`，层级修复属于 `maya_check_asset_hierarchy` / `maya_fix_asset_hierarchy`，文件隔离属于调度层，DCC skill 只消费解析后的路径。
 
 ### 配置金字塔（四层）
 
@@ -187,7 +217,7 @@ save_scene -> 沙盒内按版本递增保存
 
 ### 资产路径规范
 
-资产路径走 `{root}/{project}/{pub|runs}/assets/{type}/{asset}/{dept}/{task}/`。从 `pub` 读（受保护），AI 的产出写到 `runs`。路径解析交给 `core/asset_resolver.py` + `config/path_templates.json`。**不要硬编码路径。**
+资产发布源走 `{root}/{project}/pub/assets/{type}/{asset}/{dept}/{task}/`，从 `pub` 读且视为受保护。AI 处理产物写任务沙盒 `projects/{project}/{YYYYMMDD_HHMMSS}_{asset}/`；正式发布另走独立 publish 节点。路径解析交给 `core/asset_resolver.py` + 项目配置。**不要硬编码路径。**
 
 ## 红线（运行时强制）
 
@@ -210,7 +240,7 @@ save_scene -> 沙盒内按版本递增保存
 - 技能代码放在各自文件夹里（`skills/{id}/{id}.py`），不能放 `skills/` 根目录。`__init__.py` 负责 re-export `execute`。
 - `exec_code` / `blender_exec_code` 传了 `source_path` 时，Celery 会**自动打开文件**再跑代码 —— 别在代码片段里再调 `cmds.file(open=...)`。
 - 链式执行已经打开了初始 `source_path`，第一步别再打开一次。
-- 跨 DCC workflow 的段间数据走标准执行记录 `output` 字段，在 `workflows/*.json` 里用 `{{outputs.step_id.output_path}}` 或 `{{outputs.step_id.rig_path}}` 表达；JSON/ABC/materials/compare_result 等机器中间产物统一写任务沙盒 `.info`。
+- 跨 DCC workflow 的段间数据走标准执行记录 `output` 字段，在 `workflows/*.json` 里用 `{{outputs.step_id.output_path}}` 或 `{{outputs.step_id.result.rig_path}}` 表达；JSON/ABC/materials/compare_result 等机器中间产物统一写任务沙盒 `.info`。
 
 ## 第三方及研究资料隔离 (Vendor & Research Exclusion)
 

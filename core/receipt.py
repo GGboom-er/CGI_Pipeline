@@ -31,7 +31,6 @@ def make_receipt(
     error: str = '',
     recovery_hint: str = '',
     report_content: str = '',
-    report_sections: list = None,
 ) -> dict:
     if output is None:
         output = outputs or {}
@@ -72,8 +71,6 @@ def make_receipt(
         receipt['recovery_hint'] = recovery_hint
     if report_content:
         receipt['report_content'] = report_content
-    if report_sections:
-        receipt['report_sections'] = report_sections
     return receipt
 
 

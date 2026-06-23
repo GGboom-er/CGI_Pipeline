@@ -1,7 +1,7 @@
 {
   "workflow_id": "tex_to_rig_verify_and_sync",
   "name": "贴图资产 → 绑定校验 + ABC拼装 + 材质赋予 + 升版本",
-  "description": "解析资产 tex/rig 文件（支持只传资产名或显式路径）→ Blender 导出 ABC + 抽材质 → Maya 打开 rig 一次 → 场景内对比生成 compare_result → 按 compare_result 增量拼装 → 后置场景内对比验证 → 升版本。",
+  "description": "解析资产 tex/rig 文件（支持只传资产名或显式路径）→ Blender 导出 ABC + 抽材质 → Maya 打开 rig 一次 → 层级预检与修复 → 场景内对比生成 compare_result → 按 compare_result 增量拼装 → 拼装后层级与对比验证 → 升版本。",
   "steps": [
     {
       "step_id": "resolve_files",
@@ -41,17 +41,7 @@
       "skill_id": "maya_fix_asset_hierarchy",
       "parameters": {
         "check_result": "{{outputs.check_hierarchy_pre.result}}",
-        "delete_extra_top_nodes": false
-      }
-    },
-    {
-      "step_id": "check_hierarchy_ready",
-      "skill_id": "maya_check_asset_hierarchy",
-      "parameters": {
-        "stage": "rig",
-        "phase": "pre_sync",
-        "block_on_fail": true,
-        "block_extra_top_nodes": false
+        "delete_extra_top_nodes": true
       }
     },
     {

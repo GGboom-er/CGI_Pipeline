@@ -2,6 +2,10 @@
 skill_id: "maya_assign_udim_materials"
 name: "UDIM 材质分配"
 dcc: "maya"
+tier: "write"
+pairs_with:
+  - "blender_extract_materials"
+  - "maya_apply_materials"
 description: "根据 ABC FaceSet + 精简贴图映射 + Maya UV 分析，为 mesh 按 UDIM 象限创建材质球、连接贴图并按面赋予。"
 parameters:
   texmap_path:
@@ -32,6 +36,14 @@ parameters:
     type: "string"
     default: ""
     description: "限定处理范围的组名，为空则处理全场景"
+  asset_name:
+    type: "string"
+    default: ""
+    description: "资产名称，用于匹配 sourceimages 目录"
+  info_path:
+    type: "string"
+    default: ""
+    description: "任务 .info 产物目录路径"
 io:
   inputs:
     - name: "scene"

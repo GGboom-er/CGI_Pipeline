@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from skills.maya_sync_rig_incremental.sync_contract import (
     SyncContractError,
-    build_sync_report_sections,
+    build_sync_output_details,
     format_action_summary,
     load_compare_result_file,
     load_compare_result_value,
@@ -156,22 +156,21 @@ def test_action_summary():
     _ok("IDENTICAL: 1" in summary and "target_only: 1" in summary, "摘要格式稳定")
 
 
-def test_report_sections_use_action_labels():
-    print("\n=== Test 5: 同步报告结构化章节 ===")
+def test_output_details_use_action_labels():
+    print("\n=== Test 5: 同步 output 明细 ===")
     _, report, _ = load_compare_result_file_from_dict(_valid_compare_result())
     counts = summarize_sync_actions(report)
-    sections = build_sync_report_sections(
+    details = build_sync_output_details(
         report,
         counts,
         compare_result_path="compare_result.json",
         source_abc="source.abc",
         cache_group="|Group|Geometry|cache",
     )
-    titles = [section.get("title") for section in sections]
-    _ok(titles == ["ACTION_SUMMARY"], "同步报告只保留动作概览")
-    overview = next((section for section in sections if section.get("title") == "ACTION_SUMMARY"), {})
-    actions = [item.get("action") for item in overview.get("items", [])]
+    _ok(details.get("action_summary") == format_action_summary(counts), "同步摘要写入 output.action_summary")
+    actions = [item.get("action") for item in details.get("action_items", [])]
     _ok("IDENTICAL" in actions and "target_only" in actions, "同步概览使用 action 标签")
+    _ok(details.get("compare_result_path") == "compare_result.json", "compare_result_path 写入 output")
 
 
 def load_compare_result_file_from_dict(data):
@@ -186,5 +185,5 @@ if __name__ == "__main__":
     test_input_file_validation()
     test_compare_result_contract()
     test_action_summary()
-    test_report_sections_use_action_labels()
+    test_output_details_use_action_labels()
     print("\nALL SYNC CONTRACT TESTS PASSED!")

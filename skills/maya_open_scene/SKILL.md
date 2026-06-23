@@ -2,6 +2,8 @@
 skill_id: "maya_open_scene"
 name: "打开场景"
 dcc: "maya"
+tier: "destructive"
+pairs_with: []
 description: "打开 Maya 场景文件（.ma/.mb）或创建新空场景。支持 force 强制打开（忽略未保存修改）。"
 parameters:
   file_path:

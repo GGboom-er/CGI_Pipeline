@@ -2,6 +2,8 @@
 skill_id: "write_task_report"
 name: "任务汇总报告"
 dcc: "pipeline"
+tier: "write"
+pairs_with: []
 skip_audit: true
 description: "从 audit JSONL 重建/修复统一 REPORT.md。pipeline 类 skill，不开 DCC，主进程内直接执行。运行中报告由 core/task_report_writer.py 负责。"
 parameters:
@@ -70,7 +72,7 @@ category: "output"
 ### 🔵 核心代码与扩展 (IMPLEMENTATION)
 - 读取：`_read_audit(path)` 逐行 `json.loads`，容错
 - STEP 分派：`_render_step_for(receipt, entry)`，按 `skill_id` 前缀/后缀命中分派表
-- SEGMENT 渲染：`_render_segment(rc, seg_idx)`，字段结构 `{dcc, step_count, elapsed_min, summary, outputs.report_path}`
+- SEGMENT 渲染：`_render_segment(rc, seg_idx)`，字段结构 `{dcc, step_count, elapsed_min, summary, output.report_path}`
 - 扩展新 action 类型：只在 `write_task_report.py` 的 `_DISPATCH` 字典加条目
 
 ### 🟡 参数规则 (PARAMETERS)
@@ -83,6 +85,9 @@ category: "output"
 - `source_path` (string): 选填 | 空 | 展示用
 - `hold_*` (多个): 选填 | 空 | 仅用于渲染旧版暂停审计
 
+
+**框架注入参数**（由 workflow/chain 框架自动注入，用户不需要手动传入）：
+- `asset_name` 由调度框架根据当前任务上下文自动填充。
 ### 🟣 输出字段 (OUTPUTS)
 - `output_path` (str): 沙盒内 `REPORT.md` 的绝对路径
 - `result.entries_count` (int): audit 中的总 entry 数

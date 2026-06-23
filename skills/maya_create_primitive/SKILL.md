@@ -2,6 +2,8 @@
 skill_id: "maya_create_primitive"
 name: "创建基础几何体"
 dcc: "maya"
+tier: "write"
+pairs_with: []
 category: "process"
 description: "快速创建一个基础的 Polygon 几何体，如立方体、球体、平面等。"
 parameters:

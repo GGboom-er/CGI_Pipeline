@@ -2,6 +2,9 @@
 skill_id: "copy_files"
 name: "pipeline_stage_file_to_sandbox"
 dcc: "pipeline"
+tier: "write"
+pairs_with:
+  - "resolve_asset_files"
 skip_audit: true
 description: "通用文件拷贝：source → destination，文件或目录均可。纯文件系统操作，不启动任何 DCC。"
 parameters:

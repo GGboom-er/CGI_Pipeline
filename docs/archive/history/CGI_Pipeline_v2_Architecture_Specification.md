@@ -1,5 +1,7 @@
 # CGI Pipeline v2 架构与设计细则规范 (Architecture & Specification)
 
+> 历史归档：本文已被 `docs/KNOWLEDGE_BASE.md`、`docs/architecture/pipeline_runtime_contract_v1.md` 和 `skills/build_pipeline_skill/SKILL.md` 替代，不作为当前执行规范。正文保留原样仅供追溯。
+
 这份文档汇总了 CGI Pipeline v2 在经过重构后的核心运行架构、设计规则以及强制规范。任何后续对该管线的开发、维护和技能（Skill）扩展，必须**无条件遵循**本规范，以此保证系统的健壮性、可追溯性和零幻觉执行。
 
 ---

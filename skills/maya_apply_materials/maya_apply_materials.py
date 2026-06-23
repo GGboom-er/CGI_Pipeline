@@ -12,6 +12,7 @@ import logging
 import maya.cmds as cmds
 
 from core.receipt import make_receipt, make_item
+from core.material_semantics import should_use_as_color_texture
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +47,7 @@ def _create_material_and_sg(mat_name, color_info, alpha_info):
         cmds.setAttr(shader + ".color", rgba[0], rgba[1], rgba[2], type="double3")
     elif color_info.get("type") == "texture":
         tex_path = color_info.get("path", "")
-        if tex_path:
+        if tex_path and should_use_as_color_texture(tex_path):
             file_node = cmds.shadingNode("file", asTexture=True, name=safe_name + "_file")
             p2d = cmds.shadingNode("place2dTexture", asUtility=True, name=safe_name + "_p2d")
             cmds.connectAttr(p2d + ".outUV", file_node + ".uvCoord")
@@ -60,6 +61,9 @@ def _create_material_and_sg(mat_name, color_info, alpha_info):
             if color_info.get("is_udim"):
                 cmds.setAttr(file_node + ".uvTilingMode", 3)
             cmds.connectAttr(file_node + ".outColor", shader + ".color", force=True)
+        else:
+            rgba = color_info.get("value", [0.8, 0.8, 0.8, 1.0])
+            cmds.setAttr(shader + ".color", rgba[0], rgba[1], rgba[2], type="double3")
 
     # 透明度
     semantic = alpha_info.get("semantic", "alpha")

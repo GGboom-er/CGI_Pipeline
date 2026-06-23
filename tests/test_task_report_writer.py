@@ -97,10 +97,40 @@ def test_error_block_contains_full_detail():
     print(f"✓ test_error_block_contains_full_detail → {report}")
 
 
-def test_sections_and_report_content():
-    sbx = _sandbox("sections")
+def test_output_path_result_artifact_details_render():
+    sbx = _sandbox("artifact_result")
     report = sbx / "REPORT.md"
-    writer.init_report(report, {"task_id": "task-sections", "asset_name": "demo", "run_dir": str(sbx)})
+    writer.init_report(report, {"task_id": "task-artifact-result", "asset_name": "demo", "run_dir": str(sbx)})
+    step_ctx = {"step_index": 0, "step_total": 1, "skill_id": "blender_export_abc", "parameters": {}}
+    abc_path = str(sbx / ".info" / "demo.abc")
+    writer.upsert_step_finished(report, step_ctx, {
+        "skill_id": "blender_export_abc",
+        "status": "SUCCESS",
+        "elapsed_sec": 0.1,
+        "output": {
+            "output_path": abc_path,
+            "result": {
+                "abc_path": abc_path,
+                "mesh_count": 21,
+                "cache_group": "|Group|cache",
+            },
+        },
+    })
+
+    text = report.read_text(encoding="utf-8")
+    assert "abc_path" in text
+    assert "mesh_count" in text
+    assert "&#124;Group&#124;cache" in text
+    assert "output_path" not in text
+    assert "<details>" not in text
+    assert "<summary>" not in text
+    print(f"✓ test_output_path_result_artifact_details_render → {report}")
+
+
+def test_output_items_and_report_content():
+    sbx = _sandbox("output_items")
+    report = sbx / "REPORT.md"
+    writer.init_report(report, {"task_id": "task-output-items", "asset_name": "demo", "run_dir": str(sbx)})
     step_ctx = {"step_index": 0, "step_total": 1, "skill_id": "maya_compare_asset_in_scene", "parameters": {}}
     writer.upsert_step_finished(report, step_ctx, {
         "skill_id": "maya_compare_asset_in_scene",
@@ -108,22 +138,22 @@ def test_sections_and_report_content():
         "elapsed_min": 0.03,
         "summary": {"action": "配对 73, 差异 0"},
         "items": [],
-        "outputs": {},
-        "report_sections": [
-            {"title": "通过配对", "summary": "73 项", "items": [{"name": "bodyShape", "detail": "一致"}]},
-            {"title": "几何差异", "summary": "0 项", "items": []},
-        ],
+        "output": {
+            "matched_same": 73,
+            "matched_different": 0,
+            "matched_same_items": [{"source": "bodyShape", "target": "body_mshShape", "action": "ORIG_INJECT"}],
+            "matched_different_items": [],
+        },
         "report_content": "旧格式完整对比报告",
     })
     text = report.read_text(encoding="utf-8")
     assert "<details>" not in text
     assert "<summary>" not in text
     assert "#### Details" in text
-    assert "##### 通过配对 (73 项)" in text
+    assert "##### matched_same_items (1)" in text
     assert "bodyShape" in text
-    assert "##### 几何差异 (0 项)" in text
     assert "旧格式完整对比报告" not in text
-    print(f"✓ test_sections_and_report_content → {report}")
+    print(f"✓ test_output_items_and_report_content → {report}")
 
 
 def test_compare_result_renders_action_details_without_json_dump():
@@ -166,6 +196,12 @@ def test_compare_result_renders_action_details_without_json_dump():
             "only_source": 0,
             "only_target": 1,
             "compare_result": compare_result,
+            "matched_same_items": [
+                {"source": "bodyShape", "target": "body_mshShape", "action": "ORIG_INJECT", "layer": "body"}
+            ],
+            "matched_different_items": [
+                {"source": "hatA, hatB", "target": "hat_mshShape", "action": "PAIRED", "layer": "hatA_hatB_Layer"}
+            ],
         },
     })
     text = report.read_text(encoding="utf-8")
@@ -175,8 +211,8 @@ def test_compare_result_renders_action_details_without_json_dump():
     assert "##### result" in text
     assert "matched_same" in text
     assert "<th>action</th>" not in text
-    assert "bodyShape" not in text
-    assert "hatA_hatB_Layer" not in text
+    assert "bodyShape" in text
+    assert "hatA_hatB_Layer" in text
     print(f"✓ test_compare_result_renders_action_details_without_json_dump → {report}")
 
 
@@ -201,17 +237,15 @@ def test_embedded_result_contract_stays_out_of_output_summary():
             "passed": False,
             "code": "ASSET_HIERARCHY_INVALID",
             "issue_count": 3,
+            "extra_top_nodes": full_result["extra_top_nodes"],
+            "issues": full_result["issues"],
             "result": full_result,
         },
-        "report_sections": [
-            {"title": "extra_top_nodes", "summary": "2", "items": full_result["extra_top_nodes"]},
-            {"title": "issues", "summary": "1", "items": full_result["issues"]},
-        ],
     })
     text = report.read_text(encoding="utf-8")
     assert "<h4>Input</h4>" not in text
     assert "<h4>Output</h4>" not in text
-    assert "issue_count" not in text
+    assert "issue_count" in text
     assert "<code>phase</code>:" not in text
     assert "<code>extra_top_nodes</code>:" not in text
     assert "<code>issues</code>:" not in text
@@ -255,7 +289,8 @@ if __name__ == "__main__":
     print("=== task_report_writer unit tests ===\n")
     test_step_upsert_no_duplicate()
     test_error_block_contains_full_detail()
-    test_sections_and_report_content()
+    test_output_path_result_artifact_details_render()
+    test_output_items_and_report_content()
     test_compare_result_renders_action_details_without_json_dump()
     test_embedded_result_contract_stays_out_of_output_summary()
     test_internal_chain_history_hidden_from_step_input()

@@ -2,6 +2,9 @@
 skill_id: "rename_asset"
 name: "标准化资产重命名"
 dcc: "maya"
+tier: "write"
+pairs_with:
+  - "save_scene"
 description: "将当前场景按管线命名规范重命名并另存为。格式: {project}_{category}_{asset}_{stage}_{task}_v{version}.ma。不修改场景内容。"
 parameters:
   project:

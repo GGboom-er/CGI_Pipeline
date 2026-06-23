@@ -2,6 +2,8 @@
 skill_id: "blender_exec_code"
 name: "Blender 动态代码执行"
 dcc: "blender"
+tier: "destructive"
+pairs_with: []
 skip_audit: true
 description: "在 Blender Python 环境中执行任意代码并返回结果。代码中将结果赋值给 result 变量即可。链引擎打开文件时内部使用。"
 parameters:

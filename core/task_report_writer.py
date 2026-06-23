@@ -71,7 +71,6 @@ _HIDDEN_INPUT_KEYS = {
 _HIDDEN_OUTPUT_KEYS = {
     "compare_result",
     "report_content",
-    "report_sections",
 }
 
 
@@ -148,15 +147,21 @@ def _normalize_report_io(values: Dict[str, Any], section: str) -> Dict[str, Any]
     if not isinstance(values, dict):
         return {}
     result = values.get("result")
-    if section == "output" and isinstance(result, dict) and len(values) == 1:
-        if result.get("source_path") or result.get("rig_path"):
-            values = {
-                key: result.get(key)
-                for key in ("source_path", "rig_path", "source_version", "rig_version")
-                if result.get(key) not in (None, "")
-            }
+    if section == "output" and isinstance(result, dict):
+        if len(values) == 1:
+            if result.get("source_path") or result.get("rig_path"):
+                values = {
+                    key: result.get(key)
+                    for key in ("source_path", "rig_path", "source_version", "rig_version")
+                    if result.get(key) not in (None, "")
+                }
+            else:
+                values = dict(result)
+        elif set(values.keys()).issubset({"output_path", "result"}):
+            values = {key: value for key, value in values.items() if key != "result"}
+            values.update(result)
         else:
-            values = dict(result)
+            values = dict(values)
     else:
         values = dict(values)
     if section == "output":
@@ -237,38 +242,6 @@ def _wrap_summary_body(summary_line: str, body_lines: List[str]) -> str:
     ])
 
 
-def _render_structured_sections(sections: Any) -> List[str]:
-    if not isinstance(sections, list):
-        return []
-    lines: List[str] = []
-    for section in sections:
-        if not isinstance(section, dict):
-            continue
-        title = str(section.get("title") or section.get("name") or "details")
-        summary = str(section.get("summary") or "")
-        heading = f"{title} ({summary})" if summary else title
-        body: List[str] = []
-        if section.get("content"):
-            body.extend(_render_md_pre(str(section.get("content"))))
-        if section.get("markdown"):
-            body.extend(_render_md_pre(str(section.get("markdown"))))
-        items = section.get("items") or []
-        if items:
-            if all(isinstance(item, dict) for item in items):
-                keys: List[str] = []
-                for item in items:
-                    for key in item.keys():
-                        if key not in keys:
-                            keys.append(key)
-                body.extend(_render_md_table(keys, [[item.get(key, "") for key in keys] for item in items]))
-            else:
-                body.extend(_render_md_list(items))
-        if not body:
-            body = ["none"]
-        lines.extend(_render_md_subsection(heading, body))
-    return lines
-
-
 def _render_items_details(items: Any) -> List[str]:
     if not isinstance(items, list) or not items:
         return []
@@ -335,7 +308,7 @@ def _report_safe_value(value: Any) -> Any:
                 safe[key] = _report_safe_value(item)
         return safe
     if isinstance(value, list):
-        return [_report_safe_value(item) for item in value[:20]]
+        return [_report_safe_value(item) for item in value]
     return value
 
 
@@ -548,14 +521,8 @@ def render_step_finished(step_context: Dict[str, Any], receipt: Dict[str, Any],
     body_lines: List[str] = []
 
     detail_lines: List[str] = []
-    has_report_sections = isinstance(receipt.get("report_sections"), list) and bool(receipt.get("report_sections"))
-    if isinstance(outputs.get("compare_result"), dict):
-        detail_lines.extend(_render_output_field_details(outputs))
-    else:
-        if not has_report_sections:
-            detail_lines.extend(_render_output_field_details(outputs))
-        detail_lines.extend(_render_structured_sections(receipt.get("report_sections")))
-    if not has_report_sections and not detail_lines:
+    detail_lines.extend(_render_output_field_details(outputs))
+    if not detail_lines:
         detail_lines.extend(_render_items_details(receipt.get("items")))
     if detail_lines:
         body_lines.extend(["", "#### Details"])
@@ -569,7 +536,7 @@ def render_step_finished(step_context: Dict[str, Any], receipt: Dict[str, Any],
             body_lines.extend(_render_md_pre(str(error)))
         if tb:
             body_lines.extend(["#### Traceback", *_render_md_pre(str(tb))])
-        elif raw_detail and status != "SUCCESS":
+        elif raw_detail and status != "SUCCESS" and not receipt.get("_parsed", True):
             body_lines.extend(["#### Raw Detail", *_render_md_pre(str(raw_detail))])
 
     if raw_detail and not receipt.get("_parsed", True) and status == "SUCCESS":

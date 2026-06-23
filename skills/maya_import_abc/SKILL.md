@@ -2,6 +2,10 @@
 skill_id: "maya_import_abc"
 name: "导入 ABC 缓存"
 dcc: "maya"
+tier: "write"
+pairs_with:
+  - "blender_export_abc"
+  - "maya_export_abc"
 description: "将 Alembic (.abc) 文件导入 Maya 场景，支持坐标系缩放对齐（默认 100x Blender→Maya）并冻结变换。"
 parameters:
   abc_path:

@@ -42,7 +42,11 @@ def test_explicit_paths():
         ok &= _check("rig_path 透传", result.get("rig_path") == str(rig), result)
         ok &= _check("source 版本解析", result.get("source_version") == 1, result)
         ok &= _check("rig 版本解析", result.get("rig_version") == 2, result)
-        ok &= _check("结构化 result 输出", set(receipt.get("outputs", {}).keys()) == {"result"}, receipt)
+        ok &= _check(
+            "结构化 result 和报告明细输出",
+            set(receipt.get("outputs", {}).keys()) == {"result", "resolved_files", "searched_paths"},
+            receipt,
+        )
         return ok
 
 

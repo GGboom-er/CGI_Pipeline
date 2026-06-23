@@ -2,6 +2,8 @@
 skill_id: "blender_capture_viewport"
 name: "Blender 视口截图"
 dcc: "blender"
+tier: "read"
+pairs_with: []
 description: "获取 Blender 当前活动视口或后台渲染截图，并保存为 PNG。"
 parameters:
   width:

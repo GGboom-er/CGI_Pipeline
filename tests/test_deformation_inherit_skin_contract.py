@@ -29,6 +29,65 @@ def main():
     _check("prune keeps two influences", int((pruned[0] > 0).sum()) == 2)
     _check("prune normalized", abs(float(pruned[0].sum()) - 1.0) < 1e-9)
 
+    faces = np.array([[0, 1, 2], [3, 4, 5]], dtype=int)
+    components = mod._connected_components(6, faces)
+    _check("connected components split disconnected shells", len(components) == 2)
+    _check("component vertex count", sorted(len(c["vertex_indices"]) for c in components) == [3, 3])
+
+    group = mod.SourceGroup(
+        label="body",
+        owner="body",
+        dags=["|old|body_msh|body_mshShape"],
+        vertices=np.array(
+            [
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [10.0, 10.0, 0.0],
+            ],
+            dtype=float,
+        ),
+        vertex_count=4,
+    )
+    subset = {"dag": "|new|unknownShape#component_0", "vertices": group.vertices[:3]}
+    owner = mod._best_owner(subset, [group], partial=True)
+    _check("partial owner accepts source superset", owner["best_candidate"]["label"] == "body")
+
+    belt_group = mod.SourceGroup(
+        label="waistband1",
+        owner="belt",
+        dags=["|old|belt_002_msh|belt_002_mshShape"],
+        vertices=np.array(
+            [
+                [10.0, 0.0, 0.0],
+                [11.0, 0.0, 0.0],
+                [10.0, 1.0, 0.0],
+                [11.0, 1.0, 0.0],
+            ],
+            dtype=float,
+        ),
+        vertex_count=4,
+    )
+    patch_target = {
+        "dag": "|new|cdfBaiXingG_welded_all1|cdfBaiXingG_welded_all1Shape#component_0",
+        "mesh": "cdfBaiXingG_welded_all1#component_0",
+        "vertices": np.array(
+            [
+                [0.1, 0.0, 0.0],
+                [0.8, 0.0, 0.0],
+                [0.1, 0.9, 0.0],
+                [10.1, 0.0, 0.0],
+                [10.9, 0.0, 0.0],
+                [10.1, 0.9, 0.0],
+            ],
+            dtype=float,
+        ),
+    }
+    assignments = mod._patch_owner_assignments(patch_target, [group, belt_group])
+    labels = sorted(row["label"] for row in assignments)
+    _check("patch owner splits mixed component", labels == ["body", "waistband1"])
+    _check("patch owner keeps all vertices", sum(row["vertices"] for row in assignments) == 6)
+
     print("[PASS] deformation inherit skin contract")
 
 

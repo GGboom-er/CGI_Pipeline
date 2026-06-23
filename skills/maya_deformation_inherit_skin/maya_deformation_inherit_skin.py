@@ -184,8 +184,19 @@ def _chamfer(a: np.ndarray, b: np.ndarray) -> float:
     return float((np.mean(da) + np.mean(db)) * 0.5)
 
 
-def _score_group(target_vertices: np.ndarray, target_count: int, intent: dict, group: SourceGroup) -> dict:
+def _directed_distance(a: np.ndarray, b: np.ndarray) -> float:
+    from scipy.spatial import cKDTree
+
+    aa = _sample_vertices(a)
+    bb = _sample_vertices(b)
+    tb = cKDTree(bb)
+    da, _ = tb.query(aa, k=1)
+    return float(np.mean(da))
+
+
+def _score_group(target_vertices: np.ndarray, target_count: int, intent: dict, group: SourceGroup, partial: bool = False) -> dict:
     chamfer = _chamfer(target_vertices, group.vertices)
+    directed = _directed_distance(target_vertices, group.vertices)
     diag = float(np.linalg.norm(target_vertices.max(axis=0) - target_vertices.min(axis=0)))
     diag = max(diag, 1e-6)
     bbox_iou = _bbox_iou(target_vertices, group.vertices)
@@ -204,17 +215,28 @@ def _score_group(target_vertices: np.ndarray, target_count: int, intent: dict, g
     elif group.owner == intent.get("owner") and intent.get("owner") != "unknown":
         semantic_score = 0.82
 
-    geo_score = math.exp(-chamfer / (diag * 0.08))
+    geo_distance = directed if partial else chamfer
+    geo_scale = diag * (0.05 if partial else 0.08)
+    geo_score = math.exp(-geo_distance / max(geo_scale, 1e-6))
     bbox_score = min(1.0, bbox_iou * 4.0)
     count_ratio = min(group.vertex_count, target_count) / max(group.vertex_count, target_count, 1)
 
-    score = (
-        0.42 * semantic_score
-        + 0.24 * geo_score
-        + 0.16 * bbox_score
-        + 0.18 * count_ratio
-        + composite_bonus
-    )
+    if partial:
+        score = (
+            0.45 * semantic_score
+            + 0.45 * geo_score
+            + 0.06 * bbox_score
+            + 0.04 * count_ratio
+            + composite_bonus
+        )
+    else:
+        score = (
+            0.42 * semantic_score
+            + 0.24 * geo_score
+            + 0.16 * bbox_score
+            + 0.18 * count_ratio
+            + composite_bonus
+        )
     if forbidden:
         score *= 0.15
     return {
@@ -223,6 +245,7 @@ def _score_group(target_vertices: np.ndarray, target_count: int, intent: dict, g
         "dags": list(group.dags),
         "source_vertex_count": group.vertex_count,
         "chamfer": round(chamfer, 6),
+        "directed_distance": round(directed, 6),
         "bbox_iou": round(bbox_iou, 6),
         "semantic_score": round(semantic_score, 6),
         "geo_score": round(geo_score, 6),
@@ -271,11 +294,11 @@ def _build_source_groups(source_meshes: list[dict]) -> list[SourceGroup]:
     return groups
 
 
-def _best_owner(target_mesh: dict, groups: list[SourceGroup]) -> dict:
+def _best_owner(target_mesh: dict, groups: list[SourceGroup], partial: bool = False) -> dict:
     intent = _target_intent(target_mesh["dag"])
     target_vertices = np.asarray(target_mesh["vertices"], dtype=np.float64)
     candidates = [
-        _score_group(target_vertices, int(target_vertices.shape[0]), intent, group)
+        _score_group(target_vertices, int(target_vertices.shape[0]), intent, group, partial=partial)
         for group in groups
     ]
     candidates.sort(key=lambda row: row["score"], reverse=True)
@@ -283,8 +306,10 @@ def _best_owner(target_mesh: dict, groups: list[SourceGroup]) -> dict:
     margin = 0.0
     if len(candidates) > 1:
         margin = round(best["score"] - candidates[1]["score"], 6)
+    min_score = 0.35 if partial else 0.55
+    min_margin = 0.01 if partial else 0.03
     verdict = "ACCEPT"
-    if not best or best.get("score", 0.0) < 0.55 or margin < 0.03:
+    if not best or best.get("score", 0.0) < min_score or margin < min_margin:
         verdict = "LOW_CONF"
     return {
         "intent": intent,
@@ -339,6 +364,206 @@ def _weight_metrics(pred: np.ndarray, gt: np.ndarray | None) -> dict | None:
         "l1_max": float(np.max(l1)),
         "top1_match": float(np.mean(top_pred == top_gt)),
     }
+
+
+def _connected_components(vertex_count: int, faces: np.ndarray) -> list[dict]:
+    faces = np.asarray(faces, dtype=np.int64)
+    if vertex_count <= 0:
+        return []
+    if faces.size == 0:
+        return [
+            {
+                "component_index": 0,
+                "vertex_indices": np.arange(vertex_count, dtype=np.int64),
+                "faces": np.zeros((0, 3), dtype=np.int64),
+            }
+        ]
+
+    parent = list(range(vertex_count))
+    used = np.zeros(vertex_count, dtype=bool)
+
+    def find(value: int) -> int:
+        while parent[value] != value:
+            parent[value] = parent[parent[value]]
+            value = parent[value]
+        return value
+
+    def union(a: int, b: int) -> None:
+        ra = find(a)
+        rb = find(b)
+        if ra != rb:
+            parent[rb] = ra
+
+    for tri in faces:
+        valid = [int(v) for v in tri if 0 <= int(v) < vertex_count]
+        if not valid:
+            continue
+        used[valid] = True
+        head = valid[0]
+        for value in valid[1:]:
+            union(head, value)
+
+    face_groups: dict[int, list[int]] = {}
+    for face_index, tri in enumerate(faces):
+        valid = [int(v) for v in tri if 0 <= int(v) < vertex_count]
+        if not valid:
+            continue
+        face_groups.setdefault(find(valid[0]), []).append(face_index)
+
+    components = []
+    for comp_index, face_indices in enumerate(sorted(face_groups.values(), key=lambda items: int(np.min(faces[items])))):
+        comp_faces_old = faces[face_indices]
+        vertex_indices = np.unique(comp_faces_old.reshape(-1)).astype(np.int64)
+        remap = {int(old): i for i, old in enumerate(vertex_indices.tolist())}
+        comp_faces = np.array([[remap[int(v)] for v in tri] for tri in comp_faces_old], dtype=np.int64)
+        components.append(
+            {
+                "component_index": comp_index,
+                "vertex_indices": vertex_indices,
+                "faces": comp_faces,
+            }
+        )
+
+    isolated = np.where(~used)[0].astype(np.int64)
+    if isolated.size:
+        components.append(
+            {
+                "component_index": len(components),
+                "vertex_indices": isolated,
+                "faces": np.zeros((0, 3), dtype=np.int64),
+            }
+        )
+    return components
+
+
+def _component_target(target: dict, component: dict) -> dict:
+    vertex_indices = component["vertex_indices"]
+    normals = target.get("normals")
+    comp_normals = normals[vertex_indices] if normals is not None and len(normals) == len(target["vertices"]) else None
+    return {
+        "dag": f"{target['dag']}#component_{component['component_index']}",
+        "mesh": f"{target['mesh']}#component_{component['component_index']}",
+        "vertices": target["vertices"][vertex_indices],
+        "faces": component["faces"],
+        "normals": comp_normals,
+        "weights": target["weights"][vertex_indices] if target.get("weights") is not None else None,
+        "has_skin": bool(target.get("has_skin")),
+    }
+
+
+def _patch_owner_assignments(target_mesh: dict, groups: list[SourceGroup]) -> list[dict]:
+    from scipy.spatial import cKDTree
+
+    vertices = np.asarray(target_mesh["vertices"], dtype=np.float64)
+    if vertices.size == 0 or not groups:
+        return []
+
+    best_distance = np.full(vertices.shape[0], np.inf, dtype=np.float64)
+    best_group = np.full(vertices.shape[0], -1, dtype=np.int64)
+    group_distances: list[np.ndarray | None] = []
+
+    for group_index, group in enumerate(groups):
+        source_vertices = np.asarray(group.vertices, dtype=np.float64)
+        if source_vertices.size == 0:
+            group_distances.append(None)
+            continue
+        tree = cKDTree(source_vertices)
+        distances, _ = tree.query(vertices, k=1)
+        group_distances.append(distances)
+        replace = distances < best_distance
+        best_distance[replace] = distances[replace]
+        best_group[replace] = group_index
+
+    assignments = []
+    total = max(int(vertices.shape[0]), 1)
+    for group_index in np.unique(best_group):
+        if group_index < 0:
+            continue
+        local_indices = np.where(best_group == group_index)[0].astype(np.int64)
+        distances = group_distances[int(group_index)]
+        patch_distances = distances[local_indices] if distances is not None else np.zeros(local_indices.shape[0], dtype=np.float64)
+        group = groups[int(group_index)]
+        assignments.append(
+            {
+                "group_index": int(group_index),
+                "label": group.label,
+                "owner": group.owner,
+                "dags": list(group.dags),
+                "source_vertex_count": int(group.vertex_count),
+                "vertices": int(local_indices.shape[0]),
+                "ratio": round(float(local_indices.shape[0] / total), 6),
+                "mean_distance": round(float(np.mean(patch_distances)), 6),
+                "p95_distance": round(float(np.percentile(patch_distances, 95)), 6),
+                "max_distance": round(float(np.max(patch_distances)), 6),
+                "local_indices": local_indices,
+            }
+        )
+
+    assignments.sort(key=lambda row: row["vertices"], reverse=True)
+    return assignments
+
+
+def _coalesce_noisy_patch_assignments(assignments: list[dict]) -> list[dict]:
+    if len(assignments) < 2:
+        return assignments
+
+    total = sum(int(row["vertices"]) for row in assignments)
+    if total <= 0:
+        return assignments
+
+    dominant = dict(assignments[0])
+    dominant["local_indices"] = np.array(dominant["local_indices"], dtype=np.int64)
+    kept = [dominant]
+    absorbed = []
+    min_keep_vertices = max(16, int(total * 0.02))
+    dominant_distance = float(dominant.get("mean_distance") or 0.0)
+    far_distance = max(0.03, dominant_distance * 4.0)
+
+    for row in assignments[1:]:
+        row_distance = float(row.get("mean_distance") or 0.0)
+        is_tiny = int(row["vertices"]) < min_keep_vertices
+        is_far = row_distance > far_distance
+        if is_tiny and is_far:
+            dominant["local_indices"] = np.concatenate(
+                [dominant["local_indices"], np.array(row["local_indices"], dtype=np.int64)]
+            )
+            absorbed.append(
+                {
+                    "label": row["label"],
+                    "owner": row["owner"],
+                    "vertices": int(row["vertices"]),
+                    "mean_distance": row.get("mean_distance"),
+                }
+            )
+            continue
+        kept.append(row)
+
+    if absorbed:
+        dominant["vertices"] = int(dominant["local_indices"].shape[0])
+        dominant["ratio"] = round(float(dominant["vertices"] / total), 6)
+        dominant["absorbed_noisy_patches"] = absorbed
+
+    kept.sort(key=lambda row: row["vertices"], reverse=True)
+    return kept
+
+
+def _should_use_patch_ownership(parent_target: dict, sample_target: dict, owner: dict, assignments: list[dict]) -> bool:
+    if len(assignments) < 2:
+        return False
+    vertex_count = int(np.asarray(sample_target["vertices"]).shape[0])
+    if vertex_count < 128:
+        return False
+
+    second_count = int(assignments[1]["vertices"])
+    if second_count < max(16, int(vertex_count * 0.02)):
+        return False
+
+    text = _lower_text(parent_target.get("dag") or parent_target.get("mesh") or "")
+    if "welded" in text or "merged" in text:
+        return True
+    if owner.get("verdict") != "ACCEPT":
+        return True
+    return int(assignments[0]["vertices"]) < int(vertex_count * 0.94)
 
 
 def _resolve_info_dir(payload: dict, params: dict, source_path: str) -> Path:
@@ -460,13 +685,13 @@ def _predict_owner_filtered(source_data: dict, target_data: dict, max_influences
     arrays = {
         "meta_joints": np.array(json.dumps(joints, ensure_ascii=False)),
         "meta_mesh_keys": np.array(json.dumps([mesh["dag"] for mesh in target_data["meshes"]], ensure_ascii=False)),
-        "meta_algorithm": np.array("owner_filtered"),
+        "meta_algorithm": np.array("owner_filtered_components_patches"),
     }
     rows = []
     low_conf = 0
+    field_cache = {}
 
-    for idx, target in enumerate(target_data["meshes"]):
-        owner = _best_owner(target, groups)
+    def resolve_sources(owner: dict) -> tuple[dict, list[str], list[dict], str]:
         best = owner.get("best_candidate") or {}
         source_dags = best.get("dags") or []
         selected_sources = [source_by_dag[dag] for dag in source_dags if dag in source_by_dag]
@@ -474,22 +699,187 @@ def _predict_owner_filtered(source_data: dict, target_data: dict, max_influences
         if not selected_sources:
             status = "NO_OWNER_SOURCE"
             selected_sources = source_meshes
-        if owner["verdict"] != "ACCEPT":
-            low_conf += 1
+        return best, source_dags, selected_sources, status
 
-        field = _field_for_sources(joints, selected_sources)
+    def cached_field(selected_sources: list[dict]):
+        key = tuple(mesh["dag"] for mesh in selected_sources)
+        if key not in field_cache:
+            field_cache[key] = _field_for_sources(joints, selected_sources)
+        return field_cache[key]
+
+    def sample_with_owner(sample_target: dict, owner: dict, selected_sources: list[dict]) -> tuple[np.ndarray, dict]:
+        field = cached_field(selected_sources)
         if field is None:
-            raise RuntimeError(f"无法为 {target['mesh']} 构建 source field")
-        weights, stats = field.sample_weights(
-            target["vertices"],
-            target["faces"],
-            new_normals=target.get("normals"),
+            raise RuntimeError(f"无法为 {sample_target['mesh']} 构建 source field")
+        return field.sample_weights(
+            sample_target["vertices"],
+            sample_target["faces"],
+            new_normals=sample_target.get("normals"),
             use_winding=False,
             max_normal_angle_deg=90.0,
             smooth_iterations=0,
             idw_k=8,
             idw_blend=0.3,
         )
+
+    def sample_with_patch_owner(sample_target: dict, assignments: list[dict]) -> tuple[np.ndarray, list[str], str, dict, list[dict]]:
+        weights = np.zeros((sample_target["vertices"].shape[0], len(joints)), dtype=np.float64)
+        patch_rows = []
+        all_source_dags = []
+        status = "SUCCESS"
+        ground_truth = sample_target.get("weights")
+
+        for patch_index, assignment in enumerate(assignments):
+            patch_owner = {
+                "best_candidate": {
+                    "label": assignment["label"],
+                    "owner": assignment["owner"],
+                    "dags": list(assignment["dags"]),
+                    "source_vertex_count": assignment["source_vertex_count"],
+                    "score": None,
+                },
+                "verdict": "ACCEPT",
+                "margin": None,
+                "candidates": [],
+            }
+            best, patch_source_dags, selected_sources, patch_status = resolve_sources(patch_owner)
+            if patch_status != "SUCCESS":
+                status = patch_status
+            patch_weights_full, patch_stats = sample_with_owner(sample_target, patch_owner, selected_sources)
+            local_indices = assignment["local_indices"]
+            weights[local_indices] = patch_weights_full[local_indices]
+            all_source_dags.extend(patch_source_dags)
+
+            patch_gt = ground_truth[local_indices] if ground_truth is not None else None
+            patch_diag = {key: value for key, value in assignment.items() if key != "local_indices"}
+            patch_diag.update(
+                {
+                    "patch_index": int(patch_index),
+                    "status": patch_status,
+                    "source_dags": patch_source_dags,
+                    "top_joints": _top_joints(patch_weights_full[local_indices], joints),
+                    "metrics_vs_ground_truth": _weight_metrics(patch_weights_full[local_indices], patch_gt),
+                    "stats": patch_stats,
+                    "owner": best.get("owner"),
+                    "owner_label": best.get("label"),
+                }
+            )
+            patch_rows.append(patch_diag)
+
+        stats = {
+            "mode": "patch_owner",
+            "patch_count": len(patch_rows),
+            "patches": [
+                {key: value for key, value in row.items() if key not in {"stats", "metrics_vs_ground_truth", "top_joints"}}
+                for row in patch_rows
+            ],
+        }
+        return weights, list(dict.fromkeys(all_source_dags)), status, stats, patch_rows
+
+    for idx, target in enumerate(target_data["meshes"]):
+        components = _connected_components(int(target["vertices"].shape[0]), target["faces"])
+        component_rows = []
+        mesh_low_conf = False
+        source_dags = []
+        status = "SUCCESS"
+
+        if len(components) > 1:
+            weights = np.zeros((target["vertices"].shape[0], len(joints)), dtype=np.float64)
+            for component in components:
+                comp_target = _component_target(target, component)
+                owner = _best_owner(comp_target, groups, partial=True)
+                best, comp_source_dags, selected_sources, comp_status = resolve_sources(owner)
+                if comp_status != "SUCCESS":
+                    status = comp_status
+                if owner["verdict"] != "ACCEPT":
+                    mesh_low_conf = True
+                patch_assignments = _coalesce_noisy_patch_assignments(_patch_owner_assignments(comp_target, groups))
+                use_patches = _should_use_patch_ownership(target, comp_target, owner, patch_assignments)
+                if use_patches:
+                    comp_weights, comp_source_dags, comp_status, comp_stats, patch_rows = sample_with_patch_owner(
+                        comp_target,
+                        patch_assignments,
+                    )
+                    if comp_status != "SUCCESS":
+                        status = comp_status
+                else:
+                    comp_weights, comp_stats = sample_with_owner(comp_target, owner, selected_sources)
+                    patch_rows = []
+                vertex_indices = component["vertex_indices"]
+                weights[vertex_indices] = comp_weights
+                source_dags.extend(comp_source_dags)
+                component_rows.append(
+                    {
+                        "component_index": int(component["component_index"]),
+                        "vertices": int(vertex_indices.shape[0]),
+                        "faces": int(component["faces"].shape[0]),
+                        "status": comp_status,
+                        "owner_verdict": owner["verdict"],
+                        "owner": best.get("owner"),
+                        "owner_label": best.get("label"),
+                        "owner_score": best.get("score"),
+                        "owner_margin": owner.get("margin"),
+                        "source_dags": comp_source_dags,
+                        "top_joints": _top_joints(comp_weights, joints),
+                        "metrics_vs_ground_truth": _weight_metrics(comp_weights, comp_target.get("weights")),
+                        "stats": comp_stats,
+                        "patch_owner_used": bool(use_patches),
+                        "patches": patch_rows,
+                        "candidates": owner.get("candidates", [])[:5],
+                    }
+                )
+            source_dags = list(dict.fromkeys(source_dags))
+            labels = [row.get("owner_label") for row in component_rows if row.get("owner_label")]
+            owners = [row.get("owner") for row in component_rows if row.get("owner")]
+            best = {
+                "owner": "component_mixed" if len(set(owners)) > 1 else (owners[0] if owners else None),
+                "label": "component_mixed" if len(set(labels)) > 1 else (labels[0] if labels else None),
+                "score": min((row.get("owner_score") or 0.0) for row in component_rows) if component_rows else 0.0,
+            }
+            owner = {
+                "verdict": "LOW_CONF" if mesh_low_conf else "ACCEPT",
+                "margin": min((row.get("owner_margin") or 0.0) for row in component_rows) if component_rows else 0.0,
+                "candidates": [],
+            }
+            stats = {
+                "mode": "connected_component",
+                "component_count": len(component_rows),
+                "component_stats": [row["stats"] for row in component_rows],
+            }
+        else:
+            owner = _best_owner(target, groups)
+            best, source_dags, selected_sources, status = resolve_sources(owner)
+            if owner["verdict"] != "ACCEPT":
+                mesh_low_conf = True
+            patch_assignments = _coalesce_noisy_patch_assignments(_patch_owner_assignments(target, groups))
+            use_patches = _should_use_patch_ownership(target, target, owner, patch_assignments)
+            if use_patches:
+                weights, source_dags, status, stats, patch_rows = sample_with_patch_owner(target, patch_assignments)
+                component_rows.append(
+                    {
+                        "component_index": 0,
+                        "vertices": int(target["vertices"].shape[0]),
+                        "faces": int(target["faces"].shape[0]),
+                        "status": status,
+                        "owner_verdict": owner["verdict"],
+                        "owner": best.get("owner"),
+                        "owner_label": best.get("label"),
+                        "owner_score": best.get("score"),
+                        "owner_margin": owner.get("margin"),
+                        "source_dags": source_dags,
+                        "top_joints": _top_joints(weights, joints),
+                        "metrics_vs_ground_truth": _weight_metrics(weights, target.get("weights")),
+                        "stats": stats,
+                        "patch_owner_used": True,
+                        "patches": patch_rows,
+                        "candidates": owner.get("candidates", [])[:5],
+                    }
+                )
+            else:
+                weights, stats = sample_with_owner(target, owner, selected_sources)
+
+        if mesh_low_conf:
+            low_conf += 1
         weights = _prune_weights(weights, max_influences)
         arrays[f"{idx}_weights"] = weights
         rows.append(
@@ -505,6 +895,8 @@ def _predict_owner_filtered(source_data: dict, target_data: dict, max_influences
                 "owner_score": best.get("score"),
                 "owner_margin": owner.get("margin"),
                 "source_dags": source_dags,
+                "component_count": len(components),
+                "components": component_rows,
                 "top_joints": _top_joints(weights, joints),
                 "metrics_vs_ground_truth": _weight_metrics(weights, target.get("weights")),
                 "stats": stats,
@@ -513,7 +905,7 @@ def _predict_owner_filtered(source_data: dict, target_data: dict, max_influences
         )
 
     diagnostic = {
-        "algorithm": "owner_filtered",
+        "algorithm": "owner_filtered_components_patches",
         "joint_count": len(joints),
         "mesh_count": len(rows),
         "predicted_count": len(rows),

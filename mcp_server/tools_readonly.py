@@ -16,7 +16,7 @@ def register_readonly_tools(mcp):
     @mcp.tool(
         name="maya_list_skills",
         annotations={
-            "title": "列出可用技能",
+            "title": "List available skills",
             "readOnlyHint": True,
             "destructiveHint": False,
             "idempotentHint": True,
@@ -24,20 +24,21 @@ def register_readonly_tools(mcp):
         }
     )
     async def maya_list_skills() -> dict:
-        """列出所有已注册技能及其参数 Schema。
+        """List all registered skills and their parameter schemas.
 
-        只读查询，不启动任何 DCC 进程。
-        返回每个技能的 skill_id、名称、所属 DCC（maya/blender）和参数定义。
-        在不确定该调用哪个 Tool 时，先调此接口查看系统能力。
+        Read-only query, no DCC process started.
+        Call this when unsure which tool to use for a task.
+        Returns skill_id, name, DCC type, and parameter definitions.
+
+        列出所有已注册技能及其参数定义。不启动 DCC。
         """
-        from mcp_server.internals import _SKILLS
         return {'total': len(_SKILLS), 'skills': _SKILLS}
 
 
     @mcp.tool(
         name="maya_query_task",
         annotations={
-            "title": "查询任务状态",
+            "title": "Poll async task status",
             "readOnlyHint": True,
             "destructiveHint": False,
             "idempotentHint": True,
@@ -45,13 +46,15 @@ def register_readonly_tools(mcp):
         }
     )
     async def maya_query_task(params: TaskQueryInput) -> dict:
-        """轮询异步任务的执行状态。
+        """Poll the execution status of an async task.
 
-        所有操作类 Tool 提交后都返回 task_id，必须用此接口轮询直到终态。
-        状态流转：NOT_FOUND → STARTED/PROGRESS → SUCCESS / ERROR / TIMEOUT / BLOCKED / AUDIT_FAILED / CHAIN_ABORTED
-        NOT_FOUND 表示任务尚未被 Worker 拾取，等 3-5 秒重试。
-        BLOCKED 表示路径保护拦截。
-        AUDIT_FAILED 表示质检或数据契约不通过，后台流程会中止并生成报告。
+        All operation tools return task_id after submission.
+        Use this to poll until terminal state is reached.
+        State flow: NOT_FOUND -> STARTED/PROGRESS -> SUCCESS / ERROR / TIMEOUT / BLOCKED / AUDIT_FAILED / CHAIN_ABORTED
+        NOT_FOUND = task not yet picked up by worker, retry in 3-5s.
+        Exception: maya_exec_code(sync=True) returns result directly, no polling needed.
+
+        轮询异步任务状态。所有操作类 Tool 提交后返回 task_id。
         """
         return _read_audit(params.task_id)
 
@@ -59,7 +62,7 @@ def register_readonly_tools(mcp):
     @mcp.tool(
         name="maya_resolve_asset",
         annotations={
-            "title": "查询资产路径和版本",
+            "title": "Resolve asset paths and versions",
             "readOnlyHint": True,
             "destructiveHint": False,
             "idempotentHint": True,
@@ -67,12 +70,14 @@ def register_readonly_tools(mcp):
         }
     )
     async def maya_resolve_asset(params: ResolveAssetInput) -> dict:
-        """查询资产的最新版本路径和版本列表。只读，不启动 DCC。
+        """Resolve an asset's latest version path and version list. Read-only.
 
-        这是操作前的必要步骤：先用此接口获取 source_path，再传给操作类 Tool。
-        不传 stage 时按 pipeline 环节优先级自动选择（model: tex>uv>mod, rig: lib>rig>lyrig）。
-        传入 task 可定位 sub task 目录（如 bs、paintTex），不传则使用 primary_task。
-        返回的 path 字段即可直接作为其他 Tool 的 source_path 参数。
+        MUST be called before any asset operation to get source_path.
+        Pass the returned path directly to operation tools.
+        Without stage, auto-selects by pipeline priority (model: tex>uv>mod, rig: lib>rig>lyrig).
+        Pass task to locate sub-task directories (e.g. bs, paintTex).
+
+        操作前必须先调用此工具获取 source_path，再传给操作类 Tool。
         """
         try:
             from core.config_loader import load_project_config
@@ -101,7 +106,7 @@ def register_readonly_tools(mcp):
     @mcp.tool(
         name="maya_resolve_shot",
         annotations={
-            "title": "查询镜头路径和版本",
+            "title": "Resolve shot paths and versions",
             "readOnlyHint": True,
             "destructiveHint": False,
             "idempotentHint": True,
@@ -109,10 +114,12 @@ def register_readonly_tools(mcp):
         }
     )
     async def maya_resolve_shot(params: ResolveShotInput) -> dict:
-        """查询镜头的最新版本路径和版本列表。只读，不启动 DCC。
+        """Resolve a shot's latest version path and version list. Read-only.
 
-        用于定位 shot 流程中的工程文件（ly/ani/cfx/efx/lgt/mat 等阶段）。
-        不传 stage 时返回该镜头所有可用阶段的信息。
+        For locating shot workflow files (ly/ani/cfx/efx/lgt/mat stages).
+        Without stage, returns all available stages for the shot.
+
+        查询镜头的最新版本路径和版本列表。只读，不启动 DCC。
         """
         try:
             from core.config_loader import load_project_config
@@ -173,7 +180,7 @@ def register_readonly_tools(mcp):
     @mcp.tool(
         name="list_workflows",
         annotations={
-            "title": "列出所有可用工作流",
+            "title": "List available workflows",
             "readOnlyHint": True,
             "destructiveHint": False,
             "idempotentHint": True,
@@ -181,10 +188,12 @@ def register_readonly_tools(mcp):
         }
     )
     async def list_workflows_tool() -> dict:
-        """列出所有已注册的工作流及其描述和步骤。
+        """List all registered workflows and their descriptions.
 
-        只读查询，不启动任何 DCC 进程。
-        返回每个工作流的 ID、名称、描述和包含的技能步骤列表。
+        Read-only query, no DCC process started.
+        Returns workflow ID, name, description, and skill steps.
+
+        列出所有已注册的工作流及其描述和步骤。
         """
         from core.workflow_engine import list_workflows
         workflows = list_workflows()
@@ -197,7 +206,7 @@ def register_readonly_tools(mcp):
     @mcp.tool(
         name="pipeline_service_status",
         annotations={
-            "title": "查询服务和 Worker 心跳",
+            "title": "Check service and worker heartbeat",
             "readOnlyHint": True,
             "destructiveHint": False,
             "idempotentHint": True,
@@ -205,7 +214,10 @@ def register_readonly_tools(mcp):
         }
     )
     async def pipeline_service_status() -> dict:
-        """查询 Redis、Maya/Blender/Workflow Worker 的 PID 与 Celery 队列心跳。"""
+        """Check Redis, Maya/Blender/Workflow Worker PID and Celery queue heartbeat.
+
+        查询 Redis、各 Worker 的 PID 与 Celery 队列心跳。
+        """
         from core.service_manager import get_service_status
         return {
             'status': 'SUCCESS',
@@ -216,7 +228,7 @@ def register_readonly_tools(mcp):
     @mcp.tool(
         name="pipeline_explain_architecture",
         annotations={
-            "title": "管线架构自证与白皮书查阅",
+            "title": "Pipeline architecture whitepaper",
             "readOnlyHint": True,
             "destructiveHint": False,
             "idempotentHint": True,
@@ -224,11 +236,12 @@ def register_readonly_tools(mcp):
         }
     )
     async def pipeline_explain_architecture() -> dict:
-        """获取 CGI Pipeline v2 的架构设计白皮书与底层逻辑。
-        
-        当 AI (你) 对管线的异步执行、沙盒路径、收据结构、异常转译等底层架构产生疑惑，
-        或需要深入理解为什么某操作被拦截时，主动调用此工具查阅。
-        返回值包含完整的 Markdown 说明。
+        """Retrieve CGI Pipeline v2 architecture design whitepaper.
+
+        Call this when you need to understand the pipeline's async execution,
+        sandbox paths, receipt structure, or exception handling.
+
+        获取 CGI Pipeline v2 的架构设计白皮书与底层逻辑。
         """
         import os
         from pathlib import Path
@@ -252,7 +265,7 @@ def register_readonly_tools(mcp):
     @mcp.tool(
         name="maya_list_foreground_sessions",
         annotations={
-            "title": "扫描活动的前台 Maya 会话",
+            "title": "Discover active Maya foreground sessions",
             "readOnlyHint": True,
             "destructiveHint": False,
             "idempotentHint": True,
@@ -260,14 +273,23 @@ def register_readonly_tools(mcp):
         }
     )
     async def maya_list_foreground_sessions() -> dict:
-        """扫描本地端口（7001-7010），列出当前所有可用的 Maya 前台会话。
-        
-        如果用户打开了多个 Maya 实例并分别开启了 commandPort，
-        必须先用此工具确认端口号，再在 foreground 调用中显式传 foreground_port。
+        """Discover active Maya foreground sessions and their ports.
+
+        MUST be called before ANY foreground Maya operation.
+        Returns a list of active commandPort numbers in the configured range.
+        Use the returned port in maya_exec_code(foreground_port=<port>).
+        Do NOT guess or hardcode port numbers.
+
+        在前台操作 Maya 前必须先调用此工具获取端口。
         """
+        import os
         import socket
+        start = int(os.getenv('MAYA_FOREGROUND_PORT_START', '7001'))
+        end = int(os.getenv('MAYA_FOREGROUND_PORT_END', '7020'))
+        if end < start:
+            start, end = end, start
         active_ports = []
-        for port in range(7001, 7011):
+        for port in range(start, end + 1):
             try:
                 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 s.settimeout(0.2)
@@ -280,7 +302,8 @@ def register_readonly_tools(mcp):
         return {
             'status': 'SUCCESS',
             'active_ports': active_ports,
-            'message': f'共发现 {len(active_ports)} 个存活的 Maya CommandPort 会话。',
-            'usage': '下一步调用 maya_exec_code/具名 maya_ Tool 时传 execution_mode="foreground" 并显式传 foreground_port。',
-            'open_port_hint': 'Maya 端推荐：cmds.commandPort(name=":7009", sourceType="python", echoOutput=True)',
+            'scan_range': [start, end],
+            'message': f'Found {len(active_ports)} active Maya CommandPort session(s) in range {start}-{end}.',
+            'next_step': 'Pass execution_mode="foreground" and foreground_port=<port> to maya_exec_code or named maya_ tools.',
+            'open_port_hint': 'Maya: cmds.commandPort(name=":7009", sourceType="python", echoOutput=True)',
         }

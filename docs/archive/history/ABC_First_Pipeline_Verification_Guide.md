@@ -1,5 +1,7 @@
 # ABC-First 自动化管线：架构逻辑与测试验证指南
 
+> 历史归档：本文记录早期 ABC-First 验证路线，不作为当前执行规范。当前主 workflow、报告和沙盒规则以 `docs/KNOWLEDGE_BASE.md` 及 `docs/architecture/compare_and_assembly_pipeline_plan.md` 为准。
+
 > **文档用途**：本文档旨在为您和其他 AI 助手提供全面、深度的 CGI Pipeline V2 (ABC-First 架构) 评估依据。涵盖了底层算法逻辑、数据流转框架，以及完整的端到端自动化测试复现指南。
 
 ---

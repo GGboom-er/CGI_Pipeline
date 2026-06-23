@@ -2,6 +2,9 @@
 skill_id: "maya_check_textures"
 name: "贴图检查"
 dcc: "maya"
+tier: "read"
+pairs_with:
+  - "validate_publish"
 skip_audit: true
 description: "扫描 Maya 场景中所有 file 节点，检查贴图是否存在于磁盘（支持 UDIM），按目录分组汇总报告。"
 parameters:

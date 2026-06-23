@@ -2,6 +2,11 @@
 skill_id: "resolve_asset_files"
 name: "pipeline_resolve_tex_rig_paths"
 dcc: "pipeline"
+tier: "read"
+pairs_with:
+  - "blender_export_abc"
+  - "blender_extract_materials"
+  - "maya_check_asset_hierarchy"
 description: "根据项目配置解析资产 source tex 文件与 target rig 文件。支持只传资产名自动查服务器最新版本，也支持传入明确文件路径直接透传。"
 parameters:
   category:
@@ -48,7 +53,7 @@ category: "input"
 - **只读节点**: 只解析路径与检查文件存在，不复制、不写入、不打开 DCC。
 - **双模式入口**: 调用方可只传 `asset_name`，也可通过 `source_path` / `extra_params.source_path` / `extra_params.rig_path` 提供明确路径。明确路径存在时优先使用，不再搜索服务器。
 - **失败即阻断**: source 或 rig 任一侧无法解析到存在文件时返回 `ERROR`，不猜测、不降级到旧缓存。
-- **下游契约**: 所有路径放在 `outputs.result` 中，下游 workflow 通过 `{{outputs.resolve_files.result.source_path}}` 和 `{{outputs.resolve_files.result.rig_path}}` 使用。
+- **下游契约**: 所有路径放在标准记录 `output.result` 中；workflow 模板通过 `{{outputs.resolve_files.result.source_path}}` 和 `{{outputs.resolve_files.result.rig_path}}` 使用。
 
 ### 🟢 核心功能 (CORE FUNCTION)
 - 读取 `project_config` → 按 `category/asset/stage/task` 查找最新版本 → 输出 source tex 文件与 target rig 文件。
@@ -58,7 +63,7 @@ category: "input"
 ### 🔵 核心代码与扩展 (IMPLEMENTATION)
 - 入口：`skills/resolve_asset_files/resolve_asset_files.py::execute(payload)`。
 - 路径规则复用 `core.asset_resolver.AssetResolver` 和 `config/{project}_config.json`。
-- 不写 `output_path`，因为本节点没有机器中间文件；结构化结果放入 `outputs.result`。
+- 不写 `output_path`，因为本节点没有机器中间文件；结构化结果放入 `output.result`。
 
 ### 🟡 参数规则 (PARAMETERS)
 - `category` (string): 选填 | `chr` | 资产类型。
@@ -69,10 +74,16 @@ category: "input"
 - `rig_task` (string): 选填 | 项目配置 primary_task | target rig task。
 - `rig_extensions` (string): 选填 | `.ma,.mb` | rig 侧允许扩展名。
 
-### 🟣 输出字段 (OUTPUTS)
-receipt.outputs:
+
+**框架注入参数**（由 workflow/chain 框架自动注入，用户不需要手动传入）：
+- `asset_name`、`source_path`、`rig_path`、`extra_params` 等由调度框架或 workflow 上游节点自动填充。
+### 🟣 标准执行记录 (RECORD)
+标准记录 `output`:
 - `result.source_path` (str): source tex 文件路径。
 - `result.rig_path` (str): target rig 文件路径。
 - `result.source_stem` / `result.rig_stem` (str): 去扩展名文件名，用于 `.info` 产物命名。
 - `result.source_version` / `result.rig_version` (int): 从文件名解析到的版本号，无法解析时为 0。
 - `result.explicit_source` / `result.explicit_rig` (bool): 是否由调用方显式传入。
+- `resolved_files` (list): 成功解析时给报告 Details 使用的 source/rig 路径短明细。
+- `searched_paths` (list): 搜索过的目录/版本事实；失败时也会输出。
+- `missing_inputs` (list): 解析失败时缺失的 source/rig 输入事实，包含 role、stage、task、path、exists 和 allowed_extensions。

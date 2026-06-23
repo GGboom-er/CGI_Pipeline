@@ -2,6 +2,9 @@
 skill_id: "maya_fix_shape_names"
 name: "maya_fix_cache_shape_names"
 dcc: "maya"
+tier: "destructive"
+pairs_with:
+  - "validate_publish"
 description: "规范化网格 Shape 的名称为 [模型名]Shape，将绑定或变形原始形重命名为 [模型名]ShapeOrig，并严格拔除没有任何连接的残渣死形节点。"
 parameters:
   target_group:

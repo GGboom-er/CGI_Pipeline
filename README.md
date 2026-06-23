@@ -2,6 +2,10 @@
 
 自动化 DCC 管线系统 —— 通过 AI (Claude/Gemini) 自然语言指令驱动 Maya/Blender 批处理任务。
 
+## AI 会话记忆
+
+所有 AI 会话、上下文恢复和任务接手前，必须先读取 [AGENTS.md](AGENTS.md)，再按顺序读取 [docs/ai_startup](docs/ai_startup/) 固定必读包。该目录集中维护启动读取顺序、问题闭环协议、项目基石、知识库和文档索引，避免规则散落在聊天记录或多个旧路径里。
+
 ## 架构
 
 ```text
@@ -34,7 +38,7 @@ AI (Claude/Gemini)
 
 如果通过原始 Python MCP Client 调用 FastMCP，`maya_exec_code` 这类工具的入参外层是 `{"params": {...}}`，不要把 `code/execution_mode/foreground_port` 直接平铺到 `call_tool` 顶层。
 
-禁止依赖旧的 `maya-live`、默认端口或省略 `foreground_port`。如果不知道端口，先调用 `maya_list_foreground_sessions` 查看 7001-7010 的活动端口，或询问用户当前打开的是哪个端口。
+禁止依赖旧的 `maya-live`、默认端口或省略 `foreground_port`。如果不知道端口，先调用 `maya_list_foreground_sessions` 查看活动端口，或询问用户当前打开的是哪个端口。默认扫描 `7001-7020`，可用环境变量 `MAYA_FOREGROUND_PORT_START` / `MAYA_FOREGROUND_PORT_END` 覆盖。
 
 Maya 端推荐开启方式：
 
@@ -150,7 +154,7 @@ CGI_Pipeline/
 ├── dashboard/          # Web 监控面板（FastAPI + SSE）
 ├── tests/              # 测试脚本
 ├── bin/                # 部署与打包脚本
-├── docs/               # 文档归档
+├── docs/               # 项目基石、当前知识库、运行规范和专项文档
 ├── redis_server/       # 内嵌 Redis 可执行文件
 ├── .env.example        # 环境变量模板
 └── environment.yml     # Conda 环境定义
@@ -158,54 +162,30 @@ CGI_Pipeline/
 
 运行时目录（不提交 Git）：`audit/` `ipc/` `runtime/` `logs/` `reports/` `runs/` `projects/`
 
-## 技能清单
+## 技能入口
 
-### Maya 技能
-| skill_id | 功能 |
-|----------|------|
-| `maya_master_cleanup` | 管线全自动清理（check/fix 模式） |
-| `maya_clean_skinweights` | 蒙皮噪声权重清理 |
-| `maya_fix_shape_names` | Shape/Orig 命名规范修复 |
-| `maya_freeze_transforms` | 冻结变换归零 |
-| `maya_conform_normals` | 统一法线 + 清零 pnts |
-| `maya_import_abc` | Maya 原生 ABC 导入 |
-| `maya_export_abc` | Maya ABC 导出 |
-| `maya_build_mesh_from_abc` | PyAlembic 纯数据构建 mesh（含 UV） |
-| `maya_apply_materials` | 消费 _materials.json 按面赋予材质 |
-| `maya_build_asset_info` | 从标准 ShapeOrig 采集 rig/mesh 几何 _info.json |
-| `maya_compare_asset_in_scene` | 当前 Maya rig 场景内采集并与 source ABC/_info 对比 |
-| `maya_sync_rig_incremental` | 消费前置 compare_result 增量同步拼装（ABC→rig） |
-| `maya_compare_mesh_topology` | mesh 拓扑对比 |
-| `maya_check_textures` | 贴图路径检查 |
-| `maya_split_udim_materials` | UDIM 材质按象限拆分 |
-| `maya_assign_udim_materials` | UDIM 材质赋予 |
-| `check_uvsets` | UV 集检查 |
-| `simplify_uvsets` | UV 集精简 |
-| `save_scene` | 保存/另存场景 |
-| `exec_code` | Maya 任意代码执行 |
+当前注册技能以运行时扫描结果为准，不在 README 维护完整手抄清单：
 
-### Blender 技能
-| skill_id | 功能 |
-|----------|------|
-| `blender_export_abc` | Blender 导出 ABC + FaceSet |
-| `blender_extract_materials` | 采集 per-face 材质信息 JSON |
-| `blender_build_asset_info` | 采集 mesh 拓扑/材质信息 |
-| `blender_exec_code` | Blender 任意代码执行 |
+```powershell
+python cli.py list-skills
+```
 
-### Pipeline 技能（纯计算，不需要 DCC）
+主 workflow 相关核心技能：
+
 | skill_id | 功能 |
-|----------|------|
+|---|---|
 | `resolve_asset_files` | 解析资产 tex/rig 最新文件，或校验并透传显式路径 |
-| `pipeline_compare_asset` | 纯 JSON/ABC 资产对比，输出 compare_result |
-| `pipeline_export_abc_auto` | 自动路由 ABC 导出 |
+| `blender_export_abc` | Blender cache 导出 ABC + FaceSet |
+| `blender_extract_materials` | 采集 per-face 材质信息 JSON |
+| `maya_check_asset_hierarchy` | 检查 rig/cache 标准层级和顶层异常 |
+| `maya_fix_asset_hierarchy` | 按检查结果迁移 legacy `|*|geo` 到 `|Group|Geometry|RIG_geo` |
+| `maya_compare_asset_in_scene` | 当前 Maya rig 场景内采集并与 source ABC/_info 对比 |
+| `maya_sync_rig_incremental` | 消费前置 compare_result 增量同步拼装 |
+| `maya_fix_shape_names` | Shape/Orig 命名规范修复 |
+| `maya_apply_materials` | 消费 `_materials.json` 按面赋予材质 |
+| `save_scene` | 沙盒内升版本保存 |
 
-### 工具技能
-| skill_id | 功能 |
-|----------|------|
-| `ping` | 连通性测试 |
-| `copy_files` | 文件拷贝 |
-| `rename_asset` | 资产重命名 |
-| `validate_publish` | 发布前 QC 门禁 |
+新增或改造 skill 的唯一规范是 `skills/build_pipeline_skill/SKILL.md`；具体 skill 的实时参数以 `skills/{skill_id}/SKILL.md` 为准。
 
 ## 工作流清单（8 个）
 

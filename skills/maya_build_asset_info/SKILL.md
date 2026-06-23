@@ -2,6 +2,10 @@
 skill_id: "maya_build_asset_info"
 name: "Maya 资产信息采集"
 dcc: "maya"
+tier: "read"
+pairs_with:
+  - "blender_build_asset_info"
+  - "pipeline_compare_asset"
 skip_audit: true
 description: "遍历指定 Maya 几何根组下所有 mesh，从 Maya 图关系求出的原始几何采集拓扑指纹（顶点数+世界空间坐标），输出标准 _info.json。只负责几何信息，不采集贴图或面级材质。"
 parameters:
@@ -53,8 +57,11 @@ category: "inspect"
 - `info_path` (string): 选填 | 任务沙盒 `.info/{source_stem}_info.json` | workflow 中必须显式传入。
 - `cache_group` (string): 必填 | 无 | 采集根组名、DAG 路径或分号分隔候选，例如 `|Group|Geometry|cache;|*|geo`，由项目配置传入。
 
-### 🟣 输出字段 (OUTPUTS)
-receipt.outputs:
+
+**框架注入参数**（由 workflow/chain 框架自动注入，用户不需要手动传入）：
+- `asset_name`、`project`、`run_dir`、`task_id`、`info_dir`、`extra_params`、`submitted_at` 等由调度框架根据当前任务上下文自动填充。
+### 🟣 标准执行记录 (RECORD)
+标准记录 `output`:
 - `output_path` (str): `_info.json` 绝对路径。
 
 `_info.json`:

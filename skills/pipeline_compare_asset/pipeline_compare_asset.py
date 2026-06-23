@@ -14,7 +14,7 @@ from core.receipt import make_receipt
 from core.asset_info_schema import compare
 from core.compare_result_io import (
     auto_label,
-    build_compare_report_sections,
+    build_compare_output_details,
     format_compare_summary,
     generate_report,
     load_info_from_path,
@@ -101,7 +101,7 @@ def execute(payload: dict) -> dict:
     md = generate_report(
         report, input_a, input_b, label_a, label_b, source_a, source_b
     )
-    report_sections = build_compare_report_sections(
+    output_details = build_compare_output_details(
         report, input_a, input_b, label_a, label_b, source_a, source_b
     )
 
@@ -136,12 +136,14 @@ def execute(payload: dict) -> dict:
         },
         output={
             'output_path': output_path,
+            'matched_total': counts['paired'],
             'matched_same': counts['matched_same'],
             'matched_different': counts['matched_different'],
             'only_source': counts['only_source'],
             'only_target': counts['only_target'],
             'blocking': counts['blocking'],
             'compare_result': compare_result_payload,
+            **output_details,
         },
         summary_input=f'{os.path.basename(input_a)} vs {os.path.basename(input_b)}',
         summary_action=status_msg,
@@ -151,7 +153,6 @@ def execute(payload: dict) -> dict:
             'output_path': output_path,
         },
         report_content=md,
-        report_sections=report_sections,
     )
     return receipt
 

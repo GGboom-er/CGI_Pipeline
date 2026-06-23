@@ -36,6 +36,7 @@
 
 ## 待办
 
+- [x] 2026-05-14 Deformation Inheritance 文档固化：整理初始方案边界、外部依据、本地 v007-v009 验证结果、实践修正、下一阶段准则与计划。
 - [x] 2026-05-13 Deformation Inheritance 可行性验证：在独立 runs 沙盒验证权重场、层级归属、扩散、置信度、依赖库真实可用性，并输出结论报告
 - [x] 2026-05-13 cdfBaiXingG 真实资产写回复验：旧 rig 权重场查询、21 个 cache mesh 写入 skinCluster、重开场景数值比对通过
 - [x] 2026-05-13 cdfBaiXingG 合成 LBS ROM：16 个有基线 mesh 全部 PASS，5 个新增 mesh 产生非零运动但需 ownership 确认
@@ -58,7 +59,8 @@
 - [x] 同步 MCP Tool 描述、SKILL.md 与 `AGENTS.md` 中的 `.info` 路径规范
 - [x] 2026-05-12 文档同步：README、AGENTS、运行时契约、对比/拼装专项文档已对齐场景内 compare + compare_result 驱动 sync
 - [ ] 实现 `publish_asset` 技能（标准化发布流程：版本递增 + 拷贝到 pub 目录 + 元数据写入）
-- [ ] 巡航测试覆盖更多资产（当前仅 mihouwang + ciweiguai）
+- [x] 巡航测试覆盖补齐：已从 mihouwang/ciweiguai 扩展到 maYouB、cdfBaiXingG/J/L，并记录 H/xycrowdbig 缺输入中断样本
+- [ ] 巡航测试继续扩展：补隐藏 mesh 多、缺 Orig、多语义 merge、复杂绑定结构资产
 - [x] 2026-05-13 Worker 健康检查机制：提交前检查 PID + Celery 队列心跳，默认 5 秒探测窗口，心跳丢失自动重启 Worker，并暴露 `pipeline_service_status` / `pipeline_restart_worker`
 - [x] 2026-05-11 skill 契约修复：40 个运行时 skill 全注册，frontmatter 类型、回执路径 key、workflow skill 引用、DCC undo 块基础问题已修复
 - [x] 2026-05-11 异常处理小修：只读查询、UDIM 材质、UV 精简、任务报告的小型吞异常点改为显式降级或 warning
@@ -77,7 +79,7 @@
 - [x] 2026-05-12 ciweiguai + MaYouB 巡航兼容：报告四字中文映射、rig 几何根候选解析、Orig 图关系识别已验证。
 - [x] 2026-05-12 巡航最终报告补齐：唯一 MD 报告包含每步 skill 逻辑、状态、耗时、summary、输出路径与关键明细。
 - [x] 2026-05-12 运行时报告落地：调度层实时写 `REPORT.md`，step start/finish 通过 block upsert 更新同一报告。
-- [x] 2026-05-12 复杂技能报告结构化：对比/拼装返回 `receipt.report_sections`，统一报告按折叠章节展示明细。
+- [x] 2026-05-12 复杂技能报告结构化（历史阶段）：当时对比/拼装返回 `receipt.report_sections`，后续已迁到 `output` 明细。
 - [x] 2026-05-12 真实巡航复测：ciweiguai 与 maYouB 全链路 PASS，另用 maYouB 只读对比验证 `REPORT.md` 结构化折叠章节落地。
 - [x] 2026-05-13 运行时报告修正：移除 HTML 折叠展示与重复旧报告块，文件流转表补齐节点、参数、输入、输出、状态、耗时。
 - [x] 2026-05-13 workflow 入口节点化：新增 `resolve_asset_files`，`tex_to_rig_verify*` 支持只传资产名自动解析 tex/rig 或显式路径透传。
@@ -110,5 +112,168 @@
 - [x] 2026-05-13 `maya_deformation_inherit_skin` 真实资产验证：cdfBaiXingG 21 mesh 诊断成功，5 个缺 Skin mesh 写回并重开复验，写回权重与预测权重 0 误差。
 - [x] 2026-05-13 Split/Merge 极端测试：单源 body 拆 6 个目标 mesh 全部 PASS；多语义合并单 mesh 触发 EXPECTED_LIMITATION，证明下一步需要 patch-level ownership。
 - [x] 2026-05-13 `maya_deformation_inherit_skin` component ownership：同一 target mesh 内 disconnected component 分别求 owner；Split/Merge 复测两项均 PASS。
+- [x] 2026-05-14 Welded/bridge 压力测试：split 与 disconnected merge 继续 PASS；welded 多语义场景触发 EXPECTED_PATCH_LIMITATION，waistband 区域失败，确认下一步做 patch-level ownership。
+- [x] 2026-05-14 `maya_deformation_inherit_skin` patch-level ownership：修复 welded 多语义连通块内 body/cloth/belt 混合归属；split、merge、welded 复测全部 PASS。
+- [x] 2026-05-14 BS residual 探针验证：cdfBaiXingG 旧 Rig 发现 1 个直接 BS target；同拓扑/点序打乱 residual 查询 PASS，最大误差约 4e-11。
+- [x] 2026-05-14 Live BS target 深度验证：合成带 skinCluster 的 live target，确认 `inputGeomTarget`、live mesh skin 与 delta 能被完整采集；合成场景 PASS，live skin 权重矩阵 64x2。
+- [x] 2026-05-14 Skin+BS 可视化验收场景：基于 `v002_deformSkin.ma` 清理 body 旧 BS 后写入单一 `M_Head_base`，保存 `v004_deformSkinBS_clean.ma`；重开复验 21/21 mesh 有 skin，body 仅 1 个 BS，world-space 开关 delta 与采样 delta 对齐。
+- [x] 2026-05-14 Live BS 链路验收场景：复制 `M_Head_base` live target，迁移 live target skin，连接到新 body `inputGeomTarget`；激活后 world-space 误差 l2_max=7.64e-06。
+- [x] 2026-05-14 Live BS 深层复核：`v006_deformSkinBS_liveFull.ma` 补齐 124 个内部 BS 属性；active 权重额外 joint 质量 max=3.33e-16；外层/内部抽样激活误差 l2_max≤7.64e-06，独立 deep audit PASS。
+- [ ] 2026-05-14 Live BS 产品化：把 v006 验证过的 active 权重清零、内部 BS 属性迁移与验收口径合入 `maya_sync_rig_incremental`。
+- [x] 2026-05-14 Live BS 真实控制器复验：`M_Jaw_A_ctrl.rotateX=25` 暴露嘴唇近层串权与 source-only 口腔 mesh 静态问题；生成 `v008_poseTeethFix.ma`，body jaw 误差 max=0.0157cm，下牙 max=0.0231cm，舌头 max=0.0185cm。
+- [x] 2026-05-14 Live BS 权重归属验证：证伪 base skin/UV/严格重心/连通域过滤，确认上下唇 owner 互串；生成 `v009_romLabelWeightFix.ma`，body jaw 权重修复误差 max=0.528cm。
+- [x] 2026-05-14 口腔 composite 绑定补齐：生成 `v010_teethLipBarrierFix.ma`，`cdfBaiXingG_teethlow1/teethup1` 从 teeth+gum composite source 继承 skin+4 BS，`tongue1` 补 skin，Jaw25 下牙/舌头恢复运动。
+- [x] 2026-05-14 ROM 嘴唇屏障补强：生成 `v011_teethLipRomBarrierFix.ma`，29 个高混权点由 source motion 判定为 lower/jaw 区域，raw lip mix >0.1 从 29 降到 0。
+- [x] 2026-05-14 Live target face skin 源修正：生成 `v013_liveSkinMHeadFix.ma`，23 个 `cdfBaiXingG_body1_live_0` 高误差点改从 `M_Head_base` 继承权重，dynamic final body max error 降到 0.166cm。
+- [x] 2026-05-14 Live target lip strict 语义修正：生成 `v016_strictUpperLipPatchSkin.ma`，修正 `JawUp` 标签误归 upper 的口径，严格 `UpLip/LoLip/Jaw` patch 写回 54 点，54/54 不再被 lower 主导。
+- [x] 2026-05-14 Live target lip 视觉复验：`v017_evalFinalBodyVisible.ma` 确认可见最终体仍有张嘴粘连；`v018_liveMouthErrorSkinPatch.ma` 只把 71 个坏点从 `M_Head_base` 补权重，误差有下降但未通过，不能作为成功版本。
+- [x] 2026-05-14 嘴唇拓扑支撑域离线核心：新增 `core/topology_support_matcher.py`，用权重语义岛 + target 拓扑传播限制候选；合成近层上下唇测试证明最近点失败而 matcher 通过。
+- [ ] 2026-05-14 嘴唇底层空间映射重建：冻结 v018 为失败/中间实验，重新定义 source/target neutral 与 jaw pose 数据、motion delta、skin label、上下唇 barrier 的联合候选打分，先离线验证映射正确率，再决定写 skin 或 BS residual。
+- [x] 2026-05-14 `M_Head_base -> cdfBaiXingG_body1_live_0` 离线诊断：MCP 导出 v019 neutral/jaw25 数据，v020/v021 输出 source island、target label、低置信点和 Jaw pose motion error；确认不能直接写场景。
+- [x] 2026-05-14 嘴唇参数回归：新增 `tools/topology_support_param_regression.py`，quick/full sweep 共 207 组成功；最佳参数集中在 support=0.25、k=8、motion_weight=8.0，但安全可写候选最多 13 点。
+- [x] 2026-05-14 嘴唇逐点候选审计：新增 `tools/topology_support_candidate_audit.py`，输出 JSON/CSV/NPZ；最终 strict write 为 11 个 upper_lip->lower_lip 点，soft accepted 2 点暂不写。
+- [x] 2026-05-14 嘴唇写回前 motion gate：只有语义切换且 Jaw pose source motion error 优于当前映射的点可进入写回候选；已在 Maya 前台可视化并试写 11 个 strict 点，payload diff 2.45e-09，final body max delta 0.3036cm。
+- [x] 2026-05-14 嘴唇 final 链路诊断：确认 final body 与 live target 逐点一致，BS/skin envelope 均为 1，整体 upper/lower lip separation 不弱于 source。
+- [x] 2026-05-14 嘴唇局部写回决策审计：`local_residual_decision_audit_v019.json` 确认除 strict11 外，29 个 risky 点 mean improvement 为负，扩大 skin patch 会更差。
+- [x] 2026-05-14 嘴唇 residual/corrective 审计：新增 `tools/live_target_residual_audit.py`，Jaw25 strict 下合法 corrective 候选为 0，结论为 `NO_CORRECTIVE_WRITE`。
+- [ ] 2026-05-14 嘴唇下一步诊断：停止扩大 skin/BS 写回，若视觉仍异常，按用户指定角度/视角导出局部 patch，提高 correspondence 可信度后再审计。
+- [x] 2026-05-14 Live BS 语义支持域修复：新增通用 `transfer_values`，mouth/lip/jaw 37 个内部 BS target 用 family-gated delta 重采样，保存 `v020_semanticLiveBS.ma`，Jaw25 lip/jaw motion error p95=0.0485。
+- [x] 2026-05-14 Skin-only 语义拓扑写回复核：前台 v020 重新导出当前数据，v021 宽写 113 点被实际 Jaw25 验证反证（37 好/76 差）；v022 只保留 26 个正收益点，neutral 0 偏移、写入点 26/26 改善，但整体视觉问题未闭环。
+- [x] 2026-05-14 嘴唇 LBS 矩阵级反求试验：导出 bindPreMatrix/joint world/inputGeometry，离线 LBS 重建 Maya Jaw25 误差 max≤7.84e-06；v023 写入 78 个反求点，实际回读 78/78 改善、0 退化，ROI p95 0.0414→0.0341。
+- [x] 2026-05-14 嘴唇视觉门控试验：新增 `core/visual_surface_gate.py` 与测试；v024 将 v023 的 78 点按近层相反法线/折叠/边长风险保留 44 点回滚 34 点，确认射线类检测只能做风险门控，不能单独解 owner。
+- [x] 2026-05-14 嘴唇 patch-level LBS 求解：新增 `core/patch_lbs_solver.py` 与测试；v025 smooth-only 离线候选可运行但视觉指标未超过 v024，不能写 Maya。
+- [x] 2026-05-14 嘴唇 v026 离散候选融合：新增 `tools/visual_candidate_blend_v026.py`，在 current/v023/v024/v025 中逐点选择；Maya 实际写回 78 点 roundtrip=0，Jaw25 mean 0.0514→0.0390，p95 0.1102→0.0937，visual fail 993→992。
+- [x] 2026-05-14 嘴唇 v027 权重数据源复核：确认旧 target matrix probe 对当前 v026 场景已失效，fresh target probe 可重建当前 skinCluster；source 侧需使用旧 v023 已验证 inputGeometry，不能用当前场景 envelope=0。
+- [x] 2026-05-14 嘴唇 v027 weight-only source prior：只写 `cdfBaiXingG_body1_live_0_skinCluster` 78 点，`W=0.85*v026+0.15*mapped_source`；roundtrip=0，actual vs fresh matrix max≈7.6e-06，skin-only p95 0.06635→0.05724，visual fail 1015→1014。
+- [x] 2026-05-14 嘴唇 v028/v029 手绘对照诊断：用户手绘不作为真值复制，但证明“低穿插”与“贴 source pose”目标冲突；新增拓扑有限标签 solver 单测，v029 离线候选仍未视觉闭环。
+- [x] 2026-05-14 嘴唇 v031 连续面/穿插分类：新增 `core/surface_contact_classifier.py` 与测试，确认拓扑距离先于法线角度；硬禁上下唇 influence 的 patch solver 不达标，不写 Maya。
+- [x] 2026-05-14 嘴唇 v032 source-prior alpha 候选：基于 fresh target matrix 在 write78 上扫 `current -> source_prior`，输出 `v032_source_prior_alpha_candidate.*`；alpha=1.0 离线 skin-only 误差≈0、visual fail 1014→1012，但 collision risk 未清零，需 Maya 实测。
+- [x] 2026-05-15 嘴唇 v032 Maya 实写验收：MCP foreground 7099 写回 78 点，roundtrip=0；Jaw25 actual visual fail 813→894、collision risk 0→2，实际依赖图反证 v032，不通过。
+- [x] 2026-05-15 嘴唇 v032 根因审计：已回滚 v032 写入；确认灾区为 11 个上下唇 dominant-family flip，其中 `upper_lip->lower_lip` 8 点导致最大 1.294cm 跳变；Maya 已选中 `CDFDIAG_v032_crossLipBlocked_vtxSet`。
+- [x] 2026-05-15 嘴唇 clean baseline 重启：MCP foreground 7099 打开 `v020_semanticLiveBS.ma`，重导 `v020_clean_actual_probe.npz`；修正 bindPreMatrix logical index 后 source LBS neutral max≈1.7e-06；旧 family 口径下 quick sweep 53 组 accepted=0。
+- [x] 2026-05-15 嘴唇单点归属审计：修正 `compute_family_scores` 只匹配 influence leaf，新增 `tools/lip_sheet_ownership_probe.py`；9194 纯最近/source unary 偏 lower，但 source-unary + target 拓扑 MRF 可翻回 upper，确认下一步应做 patch owner solver。
+- [x] 2026-05-15 嘴唇 Graph Cut owner solver：新增 `core/source_owner_solver.py` 与 `tools/source_owner_graphcut_probe.py`；clean v020 上 9194 经 pairwise≥0.8 翻回 upper，9150 保持 lower，1165 需按 motion_weight 逐点回归。
+- [x] 2026-05-15 嘴唇测地方案复核：新增 `tools/geodesic_owner_need_probe.py`，确认 Dijkstra 测地 prior 应作为 owner confidence 加入，heat method 只作诊断后端；9194/1165/9150 与 Graph Cut 结论一致。
+- [x] 2026-05-15 嘴唇权重分离复核：新增 `tools/source_owner_weight_separation_probe.py`；确认 9194 当前 target 为 lower 但 owner/source 权重候选为 upper，lip owner/source family match=0.9421，safe lip candidate=0.4313，不能整圈写。
+- [x] 2026-05-15 嘴唇 v035 owner-gated 权重候选：新增 `tools/source_owner_weight_candidate_v035.py`，用 Graph Cut owner + geodesic prior + source/current alpha gate 接受 92 点；9194 被改判并候选修正，1165/9150 不写。
+- [x] 2026-05-15 嘴唇 v035/v036 actual graph 验收：MCP foreground 7099 写回 92 点，发现 live skin envelope=0 导致初次假阴性；统一 envelope=1 后 write 点 p95 `0.5903->0.0648`，9194 `1.6578->0.0629`，无新增 collision，另存 `v036_ownerGatedSkin_envelopeOn_jaw25.ma` 供人工复验。
+- [x] 2026-05-15 嘴唇 v037 collision-unblocked 反证：允许写前已有 collision risk 点进入 alpha 搜索后，write 点 motion 继续改善，但实际图 ROI collision `38->41`、write collision `9->12`，新增 collision 8 点，不能作为推荐版本。
+- [x] 2026-05-15 嘴唇 v038 collision-filtered 验收：从 v037 回滚 8 个实际新增 collision 点，最终 accepted=119、write p95 `1.2279->0.0761`、ROI collision `38->31`、新增 accepted collision=0，另存 `v038_collisionFilteredSkin_envelopeOn_jaw25.ma` 供人工复验。
+- [x] 2026-05-15 嘴唇 v039/v040 patch-level 实际图验收：新增 `tools/patch_multigated_candidate_v039.py`，v039 单点修 9346 通过；v040 写 9337/9340/9346 三点，ROI max `1.6672->0.8666`，accepted collision `0->0`，visual area/edge/normal `152/151/65->110/107/43`，另存 `v040_patchTop4Skin_envelopeOn_jaw25.ma`。
+- [x] 2026-05-14 嘴唇 skin 多姿态回归：v040 在 Jaw25 单姿态通过但 9340 于 jaw 5/10/15 新增 collision；v041 回退 9340；v042 再回滚 9139/9177/9344/9380 后多姿态 `source drift=0`、`neutral delta=0`、`new accepted collision=0`，推荐复验场景为 `v042_lowAngleRollbackSkin_envelopeOn_jaw25.ma`。
+- [x] 2026-05-15 嘴唇 skin v043 多姿态 alpha 回归：新增 `core/multipose_contact_alpha.py`，对 9139/9177/9340/9344/9380 做 contact-gated alpha 搜索；MCP foreground 7099 写入 7 点并真实多姿态验证 SUCCESS，推荐复验场景更新为 `v043_alphaRegressionSkin_envelopeOn_jaw25.ma`。
+- [x] 2026-05-15 嘴唇 skin v044/v045 unresolved 回归：v044 对 25 个剩余高误差点写 24 点但多姿态发现 `748/9175/9176` 新增 collision；v045 剔除 3 点后真实多姿态 SUCCESS，推荐作为安全过滤版。
+- [x] 2026-05-15 嘴唇 skin v046/v047 最终收口：v046 对 748 做 alpha=0.25 rescue 并真实多姿态 SUCCESS，推荐复验场景更新为 `v046_remainingAlphaRescueSkin_envelopeOn_jaw25.ma`；v047 成对搜索 `9175/9176` 63 组均被 contact/visual gate 拒绝，剩余 `9175/9176/9386` 不再硬写 Skin。
+- [x] 2026-05-15 嘴唇 skin v048 用户点内蕴对应修复：用户指出 `8796/8949/9232/9233/9288/9289` 后，确认 Graph Cut/current 权重仍判 lower；新增 lip 局部 geodesic landmark descriptor，6 点全部映射 upper source，Maya 实写多姿态 SUCCESS，Jaw25 visual fail `246->226`、collision `38->30`，推荐复验场景更新为 `v048_userFlaggedIntrinsicSkin_envelopeOn_jaw25.ma`。
+- [x] 2026-05-15 嘴唇 skin v049 自动冲突探针：新增 `tools/maya_probe_lip_weight_geodesic_contradiction.py` 与 `tools/probe_lip_intrinsic_conflict_sweep.py`；MCP foreground 7099 验证 v048 当前场景相反唇欧氏近但测地远，整片 lip ROI 无人工点号 sweep 抓出 hard=30、borderline=21，用户 6 点全部进入 hard/borderline。
+- [x] 2026-05-15 嘴唇 skin v049 特征对照：新增 `tools/probe_lip_conflict_feature_contrast.py`；确认用户错点相对正确同唇点有更大 source normal/motion angle、更高 ring opposite fraction、更小 descriptor margin，法线可作辅助 penalty，不能单独判 owner。
+- [x] 2026-05-15 嘴唇 skin v050 传权前风险标记：新增 `tools/maya_mark_pretransfer_mapping_risk.py` 与 `tools/maya_query_pretransfer_mapping_risk_sets.py`；MCP foreground 7099 在 Maya 创建 hard/borderline/all/userConfirmed 风险 vertex set，确认 `cdfBaiXingG_body1_live_0` 有 hard=30、borderline=21、total=51，用户 6 点全部可在传权前被标出。
+- [x] 2026-05-15 嘴唇 skin v051 弱匹配风险补漏：用户指出 `1165/1166/1631/9377/9379`，确认 `1631` 已在 v050，其余点因 `descriptor_distance > 0.18` 被硬阈值漏掉；新增 weak-match conflict 规则与 Maya set，当前选中 expanded=61、weak=10，5 个用户点全部被选中。
+- [x] 2026-05-15 嘴唇 skin v052 自动风险口径：新增 `tools/probe_lip_pretransfer_risk_v052_auto.py` 与 Maya 标记/查询脚本，生产扫描不读取人工点号；自动输出 hard=30、borderline=21、weak=10、expanded=61，并在 Maya 选中 `CDFDIAG_PRETRANSFER_V052_AUTO_expanded_*`。
+- [x] 2026-05-15 嘴唇 skin v053 自动风险门控写回：从 v048 干净基线读取 v052 自动风险点，source/current alpha 搜索接受 53/61 点；MCP foreground 7099 实写另存 `v053_autoRiskGatedSkin_envelopeOn_jaw25.ma`，多姿态 actual graph SUCCESS，source drift=0、neutral delta=0、accepted collision added=0。
+- [ ] 2026-05-15 嘴唇 skin 下一步：人工打开 v053 视觉复验；如果仍有局部视觉问题，先查 v053 拒绝的 8 点和仍高残差点，再决定 residual/corrective / patch-level surface objective；`9175/9176/9386` 已证明不能靠当前 Skin source-prior 安全写入。
+- [x] 2026-05-15 嘴唇权重候选回归：Graph Cut owner label 已作为 family gate 生成候选权重行，并保存 source provenance；9194 实际图通过，1165/9150 仍不写。
+- [ ] 2026-05-15 嘴唇 unsafe 点下一步：v035 剩余高误差已细分 source_family_mismatch/low_owner_mass/opposite_lip/collision；下一步做 patch-level 多目标优化，不再直接扩大逐点写入。
+- [ ] 2026-05-14 Live BS 产品化补强：将真实控制器姿态残差校准、source-only 口腔 mesh 语义配对继承纳入 `maya_sync_rig_incremental`，避免仅靠手动 alias 验收。
 - [x] 2026-05-13 运行时报告重构：step 全局编号、英文清晰 skill 名、Input/Output/Details 块、compare/sync 明细按 action 折叠展示。
 - [x] 2026-05-13 报告折叠块细化：compare 不再输出 Details 明细表，sync 只保留 action/count 折叠块；details 改纯 HTML，真实 cdfBaiXingG workflow PASS。
+- [x] 2026-05-14 层级检查报告去重：check Output 只留核心结论，节点明细进入 Details；fix 嵌入 result 不再被报告器展平，cdfBaiXingG workflow PASS。
+- [x] 2026-05-14 报告首屏折叠：所有 Step 正文、文件流转、打开场景记录默认收缩；真实 cdfBaiXingG workflow PASS。
+- [x] 2026-05-14 workflow 输入缺失中断收紧：resolve 缺 tex/rig 返回 missing_inputs，链路 Step 1 中断，H/xycrowdbig 报告只保留缺失路径。
+- [x] 2026-05-14 知识库入口治理：新增 `docs/KNOWLEDGE_BASE.md`，README/AGENTS/docs 索引统一指向知识库，旧 `docs/archive/code_samples` 备份后移出当前文档区。
+- [x] 2026-05-14 轻量门禁锁定：更新 `tests/README.md`，把知识库、报告、workflow 输入、层级、compare/sync、Live BS 相关测试纳入当前必跑清单。
+- [x] 2026-05-14 cdfBaiXingJ/L 巡航补测：两者 `tex_to_rig_verify_and_sync` 均 `WORKFLOW_SUCCESS`，post compare 为 22/22 通过配对、0 阻断差异。
+- [x] 2026-05-14 旧 compare Markdown 状态修复：`report_content` 标题改按用户阻断数判断，避免 ORIG_INJECT 被误写为 FAIL。
+- [x] 2026-05-14 兼容字段迁移：compare/sync/hierarchy/resolve 旧 `report_sections` 明细已迁到 `output.*_items` 或语义化 output 列表，兼容渲染分支已移除。
+- [x] 2026-05-14 CGI Pipeline 文档基线收敛：知识库、运行时契约、skill 唯一规范、对比拼装和 mesh 配对文档已合并为当前权威入口。
+- [x] 2026-05-14 xycrowdbig `blender_to_maya_full_build` 脱离 AI 复测：资产名解析到 uv `.blend`，14 mesh 构建到 `|Group|cache`、无 `|ABC` 顶层，5 个材质球赋予且不创建 AO file 节点，`.ma` 保存到沙盒根目录，UV 检查 14/14 仅 `map1` 且 0 个需清理。
+- [x] 2026-05-14 项目基石文档：完成工作区八视角审查，新增 `docs/PROJECT_FOUNDATION.md` 并接入开工必读链路。
+- [x] 2026-05-14 AI 必读包整理：将启动协议、项目基石、知识库和文档索引收拢到 `docs/ai_startup/` 固定目录，删除无独立信息的旧入口文件。
+- [x] 2026-05-15 `M_Head_base -> cdfBaiXingG_body2` 权重复刻：从干净 `v002_deformSkin.ma` 生成全量候选，MCP foreground 7099 写入 `cdfBaiXingG_body2_M_Head_base_skinCluster`，另存 `v054_body2MHeadSkin.ma`；Jaw25 实际验证 envelope=1、全量 motion error mean=0.0042/p95=0.0253，并生成 low/veryLow/risk/inverseAccepted/jaw25MotionError 诊断集。
+- [ ] 2026-05-15 `M_Head_base -> cdfBaiXingG_body2` 下一步：人工复验 `v054_body2MHeadSkin.ma` 中 `CDFDIAG_BODY2_MHEAD_jaw25MotionError_SET` 的 429 个高误差点，若视觉仍异常，再做局部 patch 多目标求解或 body/source 范围裁剪，不直接扩大裸最近点写入。
+- [x] 2026-05-15 `expected B pose -> inverse LBS` 对比试验：新增 v055 离线候选，先发现 LBS basis einsum 轴错误并修正；裸 expected-pose 反求会过拟合 expected motion、外部 source motion 变差，门控采用 735 个正收益点后离线优于 v054。
+- [x] 2026-05-15 `M_Head_base -> cdfBaiXingG_body2` v055 Maya 实测：MCP foreground 7099 写入 `v055_expectedPoseInverse.ma`，实际 Jaw25 验证 `envelope=1`、motion error mean=0.00368/p95=0.02266/p99=0.08122，高误差点 429→305；当前已选中 `CDFDIAG_BODY2_MHEAD_v055Jaw25MotionError_SET`。
+- [x] 2026-05-15 `M_Head_base -> cdfBaiXingG_body2` v056 多姿态反求试验：合成 48 个 driver、144 train/144 validation，raw candidate 改 4741 点但真实 Jaw25 holdout 退化到 mean=5.46/p95=34.71，门控 accepted=0；结论为独立 influence 合成姿态不能替代真实 rig ROM，不写 Maya。
+- [x] 2026-05-15 `M_Head_base -> cdfBaiXingG_body2` v057 FK 数学姿态反求：MCP 导出 906-node transform tree，32 driver 生成 224 train/224 validation；离线 accepted=791，实际写入 `v057_fkMultiPoseInverse.ma`，Jaw sweep 5-30 度通过，Jaw25 mean=0.003669/p95=0.022587/high=305，较 v055 仅小幅改善。
+- [ ] 2026-05-15 `M_Head_base -> cdfBaiXingG_body2` 下一步更新：优先人工复验 `v057_fkMultiPoseInverse.ma`；剩余高误差点先看 `CDFDIAG_BODY2_MHEAD_v057JawSweep25Error_SET`，再决定真实 DG ROM / residual / patch-level surface objective，不再扩大裸 FK 权重写入。
+- [x] 2026-05-15 `M_Head_base -> cdfBaiXingG_body2` v058 权重对照场景：基于 `v057_fkMultiPoseInverse.ma` 复制两个独立绑定体，左侧写 `v055_expectedPoseInverse`，右侧写 `v057_fkMultiPoseInverse`，Jaw rotateX=25，另存 `v058_body2WeightCompare_v055_v057.ma` 供人工刷权重/看形变。
+- [ ] 2026-05-15 `M_Head_base -> cdfBaiXingG_body2` 下一步：人工比较 v058 左右两套权重效果；若 v057 只小幅优于 v055，则停止扩展裸 FK，转向真实 DG ROM / residual / patch-level surface objective。
+- [x] 2026-05-15 `M_Head_base -> cdfBaiXingG_body2` v059 嘴角 raw patch 试验：用户标记 14 个嘴角粘连点后，二环 patch=151，按 `expected Jaw25 improvement>0.01` 且 neutral drift≤0.01 接受 62 点；另存 `v059_body2WeightCompare_cornerRawPatch.ma`，当前仅作诊断对照，不作为生产推荐。
+- [x] 2026-05-15 `M_Head_base -> cdfBaiXingG_body2` v059 人工复验反证：`cdfBaiXingG_body2_COMPARE_v059_cornerRawPatch` 绿框嘴角视觉更差，说明 expected-motion-only raw patch 会破坏形面，v059 判定为 REJECT，不得合并为生产权重。
+- [ ] 2026-05-15 `M_Head_base -> cdfBaiXingG_body2` 下一步：嘴角不能再用单点 expected/validation 二选一；必须引入真实形面目标，包括源/目标嘴角曲线、边界环、接触距离和局部 patch surface objective，再做小范围约束求解。
+- [x] 2026-05-15 权重冲突探针验证：查阅 copySkinWeights / Geodesic Voxel Binding / Functional Maps / pyFM / BBW 资料后，用 `body2` v055 权重离线验证“空间近 + 拓扑远 + 权重差异大”；radius=0.35 命中用户点 3/14，radius=0.5 命中 14/14 但风险对过多，结论为可作 preflight 风险探针，不能单独决定修权。
+- [ ] 2026-05-15 嘴角/唇边界下一步修正：停止半径阈值式补丁，改做 source 权重语义场驱动的局部 chart（数学 UV）：upper/lower/inner/outer/corner/seam 坐标先求清楚，再用 pyFM/geodesic 在局部 patch 内做对应，最后进入约束权重反求。
+- [ ] 2026-05-15 `M_Head_base -> cdfBaiXingG_body2` 判据重建：只读生成嘴唇局部语义坐标诊断，输出 source/target 的 upper/lower、inner/outer、corner、seam、低置信点和候选 source provenance；诊断通过前禁止继续写权重。
+- [x] 2026-05-15 `M_Head_base -> cdfBaiXingG_body2` v060 权重语义 UV 诊断：新增只读 `tools/probe_body2_mhead_weight_semantic_chart_v060.py` 和 Maya 标记脚本；target lip ROI=5036，owner 分为 upper=1566/lower=749/jaw=2721，低置信=256，v055 上下唇冲突=64；用户嘴角点中 9084/8954/9340/9342/8949/9232/9288 已暴露为 chart owner 与 v055 候选权重冲突。
+- [x] 2026-05-15 v060 误报口径修正：用户指出 `8050/8072/3697/4753/4599/4491` 非嘴唇点被选中；确认它们只属于 broad low-confidence，不属于 strict cross-lip conflict，且 source top 多为 cheek/head。已将默认 Maya 选择改为 `strict_lip_mapping_risk` 64 点，`low_confidence_broad` 仅保留为宽域审计集合。
+- [x] 2026-05-16 v060 strict 二次收紧：用户指出 `685:687/716:717/722/797:798/800/903/1548:1550/1574/1579/1654:1655/1657/1760/4519:4522/6267/6271/7142:7144/7162/8905/8929` 不是穿帮点；根因是把 low-confidence owner 与 v055 top 相反当成 strict。已改为必须满足 chosen source top 与 owner 一致且 source owner mass≥0.85、v055 top≥0.50，strict 从 64 降到 24，这批点全部转入 `cross_lip_ambiguous` 而不再默认选中。
+- [ ] 2026-05-15 `M_Head_base -> cdfBaiXingG_body2` v061 下一步：基于 v060 chart owner/provenance 生成 chart-gated 候选，但先只做离线/actual graph 验收；不能再用 expected-motion-only 或点号补丁作为写入依据。
+- [ ] 2026-05-16 `M_Head_base -> cdfBaiXingG_body2` v061 对应关系重建：先求 target 顶点到 source surface 的 correspondence map，能量项包含空间、法线、局部面角/形状、source 权重语义坐标、target 拓扑连续性和 owner/barrier；输出 per-vertex provenance/confidence 后再进入权重反求与 Maya actual graph 验收，禁止继续人工点号补丁。
+- [x] 2026-05-16 `M_Head_base -> cdfBaiXingG_body2` v061-v065 actual graph 回归：v061 correspondence map 可自动区分用户确认的上下唇错点，但旧 v057 base 会导致表面风险变差；v062 改为从当前 Maya `cdfBaiXingG_body2` 回读 base 权重，并修复全矩阵 prune 误改未接受点；v065 使用 alpha=0.35 取得当前最佳折中，Jaw25 user p95 `0.3692->0.2723`，lip p95 `0.3551->0.3388`，lip close `42->46`，lip surface fail `47->57`，已保存 `v065_alpha035Weights.ma` 并选中剩余 surface fail 57 点。
+- [x] 2026-05-16 `M_Head_base -> cdfBaiXingG_body2` v066-v068 高斯平滑回归：同 owner 拓扑高斯可改善 user/accepted p95，但 v066/v067/v068 的 lip surface fail 分别为 79/76/75，均差于 v065 的 57；结论为高斯平滑只作可选局部后处理，不作为默认复刻权重。
+- [ ] 2026-05-16 `M_Head_base -> cdfBaiXingG_body2` 下一步：人工复验 `ysj_chr_cdfBaiXingG_rig_rigMaster_v065_alpha035Weights.ma`；若 57 个 surface fail 仍视觉不可接受，下一轮做 per-row alpha / patch-level surface objective，不再扩大 full-strength accepted 写入。
+- [x] 2026-05-16 `M_Head_base -> A` 简化场景权重对照：确认 `A` 与旧 body2 target 点位完全一致、source/joint 也一致；生成 5 套 compare mesh 到 `ysj_chr_cdfBaiXingG_rig_rigMaster_v069_A_mhead_weightVariants.ma`。R_CheekA_A_ctrl 位移回归显示 suspect 邻接位移噪声 p95：raw `0.4901`、v065 `0.2705`、owner light `0.2429`、adaptive `0.1918`、adaptive strong `0.1632`，说明 cheek 噪声主要是局部权重不连续，可由 same-owner topology smoothing 降低。
+- [x] 2026-05-16 `M_Head_base -> A` 落地目标修正：v070 发现横排 `A_SNAPSHOT_*` 是静态快照且原始 `A` 未绑定；v071 已将 `a_mhead_v003_ownerTopoSmooth_light` 权重写入原始 `A`，生成 `A_MHead_transfer_skinCluster`，roundtrip≈`1.39e-10`，另存 `v071_A_mhead_skinApplied.ma`。
+- [x] 2026-05-16 `M_Head_base -> A` v072 重写与闭环校验：写权前先归零控制器创建 `A_MHead_transfer_skinCluster`，再用 `M_Jaw_A_ctrl.rotateX=25` 验证；全量权重 row_l1 max≈`7.63e-10`，数学 LBS vs Maya pose max≈`7.63e-06`，skin-only 位移复刻 lip p95≈`0.3434`、用户 suspect p95≈`0.2782`，另存 `v072_A_mhead_skinValidated.ma`。
+- [x] 2026-05-16 `M_Head_base -> A` v073/v074 全 influence 校验：二次探测确认原始 `A` 必须重新挂 `A_MHead_transfer_skinCluster` 后再验；209 个 source influence 三轴 10 度合成运动下，写入权重 row_l1 max≈`7.63e-10`、Maya 数学闭合 p95≈`5.15e-06`，但全局位移复刻 p95≈`0.0880`、max≈`1.6837`。6 套候选中当前写入版全局 p95 最好，最差骨骼集中在 `M_HeadTop_A_jnt/M_Head_A_jnt/M_HeadNeck_A_jnt`，说明剩余问题是全 influence 位移场拟合，不是 skinPercent 写入失败。
+- [x] 2026-05-16 `M_Head_base -> A` v075 全通道校验：新增 Rotate/Translate/Scale 三类合成通道，209 个 influence 下 all-channel p95≈`0.1494`、max≈`1.6837`；分组 p95 为 rotate≈`0.0880`、translate≈`0.2705`、scale≈`0.0305`。Translate 暴露最大问题集中在 `R_UpLid16/R_UpLid11/L_LoLid1/L_UpLid11` 等眼睑骨骼；HeadTop/Head/HeadNeck 同时在 rotate/translate/scale 都偏高。报告输出 `a_mhead_full_channel_validate_v075.json/csv`。
+- [ ] 2026-05-16 `M_Head_base -> A` 下一步：基于 v073/v074 报告做全 influence 约束反求；以 mapped source displacement 为目标，加入非负、归一化、topology smooth、owner/family gate 和 neutral drift 门控，先离线输出候选，再写 Maya 做 actual graph 全 influence 回归。
+- [x] 2026-05-16 形变继承文档更新：补充 `M_Head_base -> A` v072-v075 全通道审计、映射型传权 vs 反求型拟合边界、SciPy/CVXPY/pyFM/Deformation Transfer/Dem Bones 等库的可复用分工；后续 Skin 复刻按 `docs/architecture/deformation_inheritance_plan_and_validation.md` 的 8.14 推进。
+- [x] 2026-05-16 `M_Head_base -> A` v076 第一版反求权重：MCP foreground 7099 导出 `a_mhead_inverse_input_v076.npz`；离线闭式 NNLS/最小二乘生成候选，最佳 `inverse_rt_raw_topk` 全通道 p95 `0.1494->0.03065`、translate p95 `0.2705->0.00926`，证明反求路线明显优于当前映射型 transfer。已写出 5 个 Maya 对照体并另存 `ysj_chr_cdfBaiXingG_rig_rigMaster_v076_A_inverseCompare.ma`，当前场景 Jaw rotateX=25 供人工复验。
+- [x] 2026-05-16 `M_Head_base -> A` v076 人工复验反证：raw inverse 在 Jaw25 下会把眼皮带动。真实诊断显示 moving_lid=0，根因是 correspondence 把 target 眼皮点映射到 source 嘴唇点，raw 为拟合错误 expected displacement 把 89 个 eye/lid 点改成 mouth/lip 权重。
+- [x] 2026-05-16 `M_Head_base -> A` v077 语义一致性门：新增 `solve_A_mhead_inverse_v077_semantic_guard.py`，9954 个 domain 点中 block 269 个 source/target 权重画像强冲突点，其中 mouth→lid 89 个；写出 `v077_A_inverseSemanticGuard.ma`，创建 `CDFDIAG_A_V077_rawEyeToMouthLeak_SET` 与 `CDFDIAG_A_V077_guardPreservedEye_SET`，guard RT all-channel p95≈0.04088。
+- [ ] 2026-05-16 `M_Head_base -> A` 下一步：人工复验 v077 的 `A_INV_v077_003_inverseRT_semanticGuard` / `A_INV_v077_004_inverseRTS_semanticGuard`；若眼皮不再被 Jaw 带动，再做多控制器 actual graph 验收。剩余高误差不能继续硬拟合，需修 correspondence / semantic chart。
+- [x] 2026-05-16 `M_Head_base -> A` 基准重置：用户指定 `projects/ysj/20260513_193837_cdfbaixingG/test.ma` 为基础文件，需求收窄为只把 `M_Head_base` 的 Skin 权重复刻到 `A`。文档已记录 v076/v077 的错误来源是复用 body2 旧 correspondence map，后续不得继续混用旧 map / 旧场景 / 旧 npz。
+- [x] 2026-05-16 cdfBaiXingG 形变继承文件整理：将 `tools/` 根目录 165 个 v0xx/权重复刻一次性实验脚本非破坏性移动到 `tools/archive/deformation_inheritance_cdfbaixingG_20260516/`，保留 `manifest.csv` 和 README；`tools/README.md` 已写明后续不得继续在根目录堆 v0xx 脚本。
+- [x] 2026-05-16 `M_Head_base -> A` v078 A-specific 重跑：MCP foreground 7123 从 `test.ma` 导出 `M_Head_base/A` 数据；确认 `A` 无 skinCluster，source=9238 点、target=28925 点、209 influences，head support=10022、unsupported=18903；写出 4 套对照体到 `test_v078_A_mhead_weight_transfer.ma`，Jaw25 actual graph 显示 `A_V078_002_nearest` 当前最佳，support p95=0.02092/max=0.05714，KNN max=2.92865，高斯不作默认。
+- [ ] 2026-05-16 `M_Head_base -> A` v078 下一步：人工优先复验 `A_V078_002_nearest`；同时补跑 R_Cheek/eyelid/all influence R/T/S/多控制器 ROM，若 cheek 噪声仍明显，再做局部可回滚 smoothing 或 patch-level surface objective，禁止直接把高斯设为默认。
+- [x] 2026-05-16 `M_Head_base -> A` v080 口唇拓扑 owner 验证：用户标记 `A_V078_002_nearest.f[9095:9150]` 和 `[9263:9318]` 后，确认 v078 同一连续 face 内 upper/lower 混合且 L1 max=2.0；新增 Graph Cut owner + boundary-only smoothing，selected L1>1 face 从 16 降到 0，写出 `test_v080_A_graphcut_face_owner.ma` 并选中剩余 4 个边界 face。
+- [ ] 2026-05-16 `M_Head_base -> A` v080 下一步：人工复验 `A_V080_002_graphcutBoundarySmooth` 的 4 个 residual boundary face；若视觉仍有体积异常，继续做 face/edge 级 surface objective，不再回退到纯 nearest。
+- [x] 2026-05-17 `M_Head_base -> A` v081 实际失败定位：用户确认当前生成效果均不合格后，从 Maya 实际 DG 回采 neutral/Jaw25/权重/拓扑，六套候选均失败；共同高置信失败面 138 个、hard vertices 1799 个，已在 Maya 创建 20 个 `CDFDIAG_V081_*` 选择集并默认选中 `CDFDIAG_V081_CONSENSUS_topFaces_ON_A_V080_002_graphcutBoundarySmooth_SET`。
+- [ ] 2026-05-17 `M_Head_base -> A` 下一步：停止继续调 nearest/GraphCut 参数；以 v081 共识失败面为 ROI，建立局部 source-target surface correspondence + patch surface objective，再做权重反求/门控写回。
+- [x] 2026-05-17 `M_Head_base -> A` v082 重启清理：按用户确认口径执行非破坏性归档；154 项旧脚本/场景/.info 产物移动到 `tools/archive/deformation_inheritance_reboot_20260517/` 与项目 `archive/deformation_inheritance_reboot_20260517/`，项目根保留 `test.ma`，`.info` 只保留 v081 诊断和 v082 reboot。
+- [ ] 2026-05-17 `M_Head_base -> A` v082 下一步：从 `test.ma` 重新导出数据，先做 correspondence validator；未证明 source provenance 的点只标低置信，不进入权重反求。
+- [x] 2026-05-17 `M_Head_base -> A` v082 对应关系诊断：基于 `v082_clean_scene_data.npz` 只读计算 `A` 顶点到 `M_Head_base` 的 source provenance、unsupported、normal mismatch、semantic ambiguity 与 topology discontinuity；输出 `v082_correspondence_validation.*`，MCP foreground 7002 已创建 `CDFDIAG_V082_A_*` 诊断集，未写权重。
+- [x] 2026-05-17 `M_Head_base -> A` v082 参数回归：新增 energy candidate 排序并跑 7 组 sweep；单纯 `candidate_k 64->128` 基本无收益，`v082p03_energy_n100` 最平衡，low confidence `3022->2769`、strict `1367->1104`、normal mismatch `253->1`，红框面低置信分别 `76->23`、`82->49`，MCP foreground 7002 已创建 `CDFDIAG_V082P03_A_*` 诊断集。
+- [x] 2026-05-17 `M_Head_base -> A` v082 权重候选实测：MCP foreground 7002 复制 `A_V082TEST_001_distanceK64` 与 `A_V082TEST_002_energyP03` 并写入候选权重，Jaw25 motion-delta 验证显示 energy 虽减少低置信但权重效果退化：supported p95 `0.01374->0.01518`，红框 `9095-9150` p95 `0.03061->0.06734`，红框 `9263-9318` p95 `0.04105->0.08422`。结论：低置信减少不能直接等于权重正确。
+- [x] 2026-05-17 `M_Head_base -> A` v082 cross-validation/hybrid：修正评测口径为同一 canonical provenance 下比较，生成 `A_V082TEST_003_hybridM0010` 与 `A_V082TEST_004_hybridM0050`；`hybrid_m0010_cc3` supported motion p95 `0.013739->0.013281`、strict p95 `0.029067->0.027131`，仅为小幅局部改善，不能作为最终方案。
+- [x] 2026-05-17 `M_Head_base -> A` v083 inpainting 反证：以 `hybrid_m0010_cc3` 为 base，对 high-error/strict ROI 607 点、一环 domain 1164 点做拓扑 weight inpainting；Maya actual DG 拒绝，`a025` supported p95 `0.013281->0.025328`、strict p95 `0.027131->0.197965`，`a050/a100` 更差。
+- [x] 2026-05-17 `M_Head_base -> A` v084 constrained inverse：MCP foreground 7002 导出 `v084_inverse_input.npz`，验证 LBS basis 对 Maya skinCluster 重建 p95≈`8.63e-06`；离线 SLSQP 非负归一反求生成 strongBase/balanced/motion 三组 accepted 候选，Maya actual DG Jaw25 验收中 `v084_inverse_motion_accepted` 最优，supported p95 `0.013281->0.004658`、strict p95 `0.027131->0.008273`。
+- [x] 2026-05-17 `M_Head_base -> A` v084/v085 多姿态实际图回归：新增 `maya_validate_v084_multipose.py`，实测 Jaw 5/10/15/20/25/30、Cheek、Lid 共 12 姿态；v084_motion 在 Jaw sweep 全部正收益，但 Cheek 姿态累计 494 个回归点。v085 通过多姿态门控回退 494 点后回归点清零，但 supported p95 max 从 `0.005378` 退到 `0.011309`。
+- [x] 2026-05-17 `M_Head_base -> A` v086 per-row/per-pose alpha gate：新增误差向量导出、离线 alpha 搜索与 Maya 实际 DG 验收脚本。三套 v086 候选均把多姿态回归点压到 0；最佳 `v086_alphaGate_safe005` 的 12 姿态 supported p95 max=`0.009740`、mean=`0.002961`，优于 v085 的 max=`0.011309`，但保守于 v084 的 max=`0.005378`。当前 Maya 场景已生成 `A_V086TEST_003_alphaSafe005` / strict / balanced 对照体，并另存 `projects/ysj/20260513_193837_cdfbaixingG/test_v086_A_alphaGate.ma`。
+- [ ] 2026-05-17 `M_Head_base -> A` v086 下一步：人工优先复验 `A_V086TEST_003_alphaSafe005`。若仍有局部膨胀、嘴角/面颊噪声或形面不连续，进入 patch-level surface objective，把面面积/边长/法线/接触风险纳入优化；不要再回退到最近点、GraphCut 或无约束平滑。
+- [x] 2026-05-17 `M_Head_base -> A` v087 全 influence 口径修正：用户指出问题不是 Jaw，而是所有参与蒙皮骨骼的权重矩阵。新增全 influence R/T/S 导出、闭式反求、语义/置信/全通道 gate 与 Maya 写回脚本；从干净 `test.ma` 导出 support=9714、high=6692、low=3022、unsupported=19211。离线 all-channel p95：baseHybrid≈0.006007、raw≈0.005806 但改 6800+ 点只作诊断，guard strict/balanced≈0.00588-0.00595 且只改 28/54 点。已保存 `test_v087_A_allInfluence_compare.ma`，创建 base/raw/guard 对照体与 `CDFDIAG_V087_*` 诊断 set。
+- [x] 2026-05-17 `M_Head_base -> A` v087 真实 DG 多姿态验收：新增 `maya_validate_v087_actual_dg_multipose.py`，在 source 关闭 `M_Head_base_blendShape.envelope` 后跑 27 个 Jaw/Mouth/Cheek/UpCheek/Lid/Lip/Nose/Chin 控制器姿态。结果：离线 raw/guard 虽略优，但真实 DG 中 raw 有 55 个唯一回归点，guard strict 有 18 个，guard balanced/RTS 有 31 个；`baseHybrid` 当前仍是最稳对照，v087 guard 只保留诊断价值。
+- [x] 2026-05-17 `M_Head_base -> A` v088 射线/可见性高级对应测试：新增只读 `probe_v088_visibility_correspondence.py`，把 source first-hit、target segment blocked、target normal layer hit 与 v087 actual DG 错误交叉验证。`visibility_risk` 703 点，对 actual high error >0.015 lift≈7.78、对候选回归 lift≈14.21；红框 `9095-9150` 命中 59/112，`9263-9318` 命中 43/112。MCP foreground 7002 已创建 `CDFDIAG_V088_*` 诊断 set 并另存 `test_v088_A_visibility_probe.ma`。
+- [x] 2026-05-17 `M_Head_base -> A` v089b 最终候选测试：v089 连续场直接反求 30 分钟超时后改为 fast continuous field 先验 + v087 raw inverse + v088 visibility + actual-DG-in-loop 门控。离线输出 `v089b_fast_continuous_field_*`，MCP foreground 7002 写入 `test_v089b_A_fastField_compare.ma`，写权 row_l1 max≈`4.8e-08`。真实 Maya DG 27 姿态：`field_prior` 1269 唯一回归点、`actual_safe_rt` 17、`alpha035` 1；`v089b_visibility_guard_rt` 0 个 `>0.005` 唯一回归点，supported p95 max `0.022191->0.022112`，当前推荐人工复验 `A_V089B_004_visibilityGuardRT`。
+- [x] 2026-05-17 `M_Head_base -> A` v090 patch-level surface objective：在 v089b 基础上生成 strict/balanced/broad 三档 patch 候选，修复全矩阵 top-k prune 误改和 display offset 污染 bind 两个测试坑；真实 Maya DG 27 姿态表面目标验收完成，当前唯一零新增退化面候选为 `A_V090_002_strictBlend035`，输出 `test_v090_A_patchSurface_candidates_eval.ma`。
+- [x] 2026-05-18 `M_Head_base -> A` v090 人工复验反馈：用户确认 v090 多个候选视觉上基本看不出区别；结论为 v090 只证明零回归门禁有效，不满足“可见改善”目标。
+- [x] 2026-05-18 `M_Head_base -> A` v091 真 patch-level constrained optimization：ROI 260 点、389 边、315 三角；目标函数已包含顶点位移、边长、面积、法线、权重先验和同 patch 连续性。真实 DG 验收显示 v091 虽改善 red_left/red_mid 局部，但 supported/low/strict 略回归，不能作为推荐权重。
+- [x] 2026-05-18 `M_Head_base -> A` v092 actual-surface gate：基于 v091 shape_guard 和真实 Maya DG tri-score，只接受多姿态表面收益明确且回归受控的 patch 顶点；写出 5 套候选并完成 27 姿态验收。当前推荐 `A_V092_004_patchLoose`，supported max `0.098668->0.098523`、low max `0.204815->0.204377`、strict max `0.203464->0.203234`、red_mid `0.644758->0.643326`、unique 回归面 5。
+- [ ] 2026-05-18 `M_Head_base -> A` 下一步：人工复验 `test_v092_A_surfaceGate_candidates_eval.ma` 中 `A_V092_004_patchLoose`；若视觉仍不明显，停止放宽门禁，改进局部 correspondence / local chart 后再进 patch objective。
+
+## Skill 路由与元数据优化（2026-06-03 从 Notes 治理层迁入）
+
+> 来源：Notes 侧 AI 大脑深度审查（workflow wf_80d82946-607）。原在 `Notes/ai/projects/cgi_pipeline.md` 维护，2026-06-03 按"项目待办真相源是 tasks/todo.md"原则迁回本文，Notes 侧只留指针。
+> 改 skill 必走 `skills/build_pipeline_skill/SKILL.md` 规范流程，不直接批量改 SKILL.md。
+
+### 技能路由分级（ID: CGI-U-1+）· P0
+
+- 现状：45 skill 中只 4 个具名 MCP tool，其余走 `execute_skill(skill_id=...)` 兜底，路由信号弱（痛点 B）；SKILL.md 缺权限分级；链式依赖（fix→check / sync→compare）仅 prose 描述。
+- **关键设计决策（动手前先定）**：`tier` 字段与 `tools_operations.py` 现有前缀启发式（`maya_get_/maya_check_/check_/blender_build_` 推 readOnly）的关系 → 让 `tier` 作唯一真相源，annotations 改为读 tier，删掉前缀猜测。不冗余、修掉前缀盲区。
+- [x] Step 1 改规范：`build_pipeline_skill/SKILL.md` frontmatter 必填项增加 `tier: read|write|destructive` + `pairs_with: [skill_id]` 定义与取值规则；同步 `docs/ai_startup/02_KNOWLEDGE_BASE.md`。
+- [x] Step 2 改路由：`mcp_server/tools_operations.py` annotations 从读前缀改为读 `skill.get('tier')`；重评 `EXCLUDED_DYNAMIC_SKILLS` 决定哪些升具名 tool。验证：`cli.py list-skills` + 重启 MCP + 跑 tests。
+- [x] Step 3 补字段：按 Step 1 规范逐个给 45 SKILL.md 补 tier/pairs_with（走 build_pipeline_skill 流程，分批重载验证）。
+- 完成标志：`execute_skill` 兜底使用率显著下降；所有 SKILL.md 含 tier/pairs_with；链式依赖机器可验证。
+- 2026-06-05 收口：45/45 SKILL.md 已含 `tier/pairs_with`；`tools/skill_metadata_audit.py` issue=0；`tools_operations.py` 动态 tool annotations 已改读 `tier`；`cli.py list-skills --json` 可输出机器摘要；系统 Python 缺 pydantic，MCP runtime 导入验证使用 conda `cgi_pipeline` 环境通过。
+- 业内依据：Anthropic MCP 最佳实践 + FastMCP 文档 + `Notes/ai/knowledge/cgi_pipeline_audit_2026-05-25.md` 痛点 B。
+
+### 技能摘要同步（ID: CGI-D-1）· P1 · 依赖技能路由分级
+
+- 背景：Notes 项目层工具摘要如果手工维护，会与本仓 SKILL.md 漂移；CGI 操作 skill 不应混进 Notes 大脑 skill 层。
+- 前置：技能路由分级完成（tier/pairs_with 字段就位后才能生成完整摘要）。
+- [x] 写脚本读 `cli.py list-skills --json` 生成 Markdown 表格 → 同步 Notes 项目层工具目录。
+- [x] 集成方式：推荐手动命令而非 git pre-commit hook（避免 commit 被 block）。
+- [x] 治理检查新增两侧 frontmatter 漂移检测。
+- 完成标志：同步脚本可运行；两侧 SKILL 摘要一致；治理检查能测漂移。
+- 2026-06-05 收口：新增 `tools/sync_notes_skill_index.py`，写入 Notes 项目层 `ai/projects/cgi_pipeline_skill_catalog.md`，并刷新 `ai/projects/cgi_pipeline.md` 的 skill 工具摘要；新增 `tests/README.md` Skill 元数据门禁。

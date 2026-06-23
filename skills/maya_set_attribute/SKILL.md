@@ -2,6 +2,8 @@
 skill_id: "maya_set_attribute"
 name: "设置属性"
 dcc: "maya"
+tier: "destructive"
+pairs_with: []
 category: "process"
 description: "快速更改特定节点的属性值。"
 parameters:

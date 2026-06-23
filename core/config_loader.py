@@ -113,6 +113,7 @@ _DEFAULT_RIG_SYNC_PROFILE = {
     'rig_prefix': 'RIG_',
     'min_dot': 0.0,
     'max_k_search': 50,
+    'transfer_weights': True,
 }
 
 

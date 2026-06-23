@@ -2,6 +2,10 @@
 skill_id: "maya_build_mesh_from_abc"
 name: "PyAlembic → Maya Mesh 构建"
 dcc: "maya"
+tier: "write"
+pairs_with:
+  - "blender_export_abc"
+  - "maya_sync_rig_incremental"
 description: "使用 PyAlembic 读取 ABC 拓扑数据，在 Maya 中用 OpenMaya MFnMesh.create 纯数据构建 mesh（含 UV），还原 DAG 层级。不走 Maya import 命令。支持全量构建和按 mesh_filter 过滤构建。"
 parameters:
   abc_path:
@@ -34,6 +38,7 @@ category: "convert"
 - 不修改场景中已有节点（同名节点跳过并报告冲突）
 - 依赖 `core.abc_reader.read_abc_as_info` 作为数据源
 - Signed Volume 绕序修正由 abc_reader 层完成，本技能信任输入数据
+- Alembic archive 顶层 `ABC` 是文件容器根，不是业务 DAG。`read_abc_as_info` 输出的 mesh key 必须已剥离该前缀，本技能构建结果不得出现 `|ABC` 顶层。
 
 ### 🟢 核心逻辑 (CORE LOGIC)
 

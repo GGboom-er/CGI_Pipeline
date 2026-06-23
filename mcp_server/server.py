@@ -1,5 +1,5 @@
 # mcp_server/server.py
-# ── CGI Pipeline MCP Server v3.1 ──
+# ── CGI Pipeline MCP Server v3.2 ──
 # 基于 Anthropic mcp-builder 官方规范
 #
 # 架构拆分：
@@ -33,14 +33,20 @@ from core.manifest import get_manifest
 
 
 # ══════════════════════════════════════════════════
-# Instructions 动态生成
+# Instructions 动态生成（英文路由决策树优先）
 # ══════════════════════════════════════════════════
 
 _SKILLS = get_all_skills()
 
 
 def _build_instructions() -> str:
-    """从 manifest + registry 动态生成 MCP instructions"""
+    """从 manifest + registry 动态生成 MCP instructions（英文路由决策树优先）
+
+    设计意图：
+    - 英文路由决策树置顶，让所有 AI 客户端第一时间知道"用什么工具"
+    - 明确禁止裸 socket，引导 AI 走 MCP 工具链
+    - 运行时规则保留但精简，降低上下文 token 消耗
+    """
     m = get_manifest()
     principles = m.get('principles', {})
     status_codes = m.get('status_codes', {})
@@ -50,52 +56,69 @@ def _build_instructions() -> str:
     readonly_drives = ', '.join(d.upper() + ':/' for d in principles.get('readonly_drives', []))
     unc_prefixes = ', '.join(principles.get('readonly_unc_prefixes', []))
     status_str = ' | '.join(f'{k}={v}' for k, v in status_codes.items())
-    safety_str = '\n'.join(f'- {r}' for r in safety_rules)
+    safety_str = '\n'.join(f'  - {r}' for r in safety_rules)
     skill_ids = ', '.join(s['skill_id'] for s in _SKILLS)
 
+    save_rule = 'mandatory' if chain_rules.get('save_scene_must_be_last') else 'recommended'
+    abort_rule = 'mandatory' if chain_rules.get('abort_on_step_failure') else 'optional'
+
     return (
-        "CGI/VFX 管线自动化服务器。通过 Tool 控制 Maya/Blender 执行资产处理。\n"
+        "CGI/VFX Pipeline Automation Server — controls Maya/Blender for asset processing.\n"
         "\n"
-        "## 操作流程（所有操作类 Tool 都是异步的）\n"
-        "1. 调用操作 Tool（如 maya_clean_skinweights）→ 返回 task_id\n"
-        "2. 用 maya_query_task(task_id) 轮询 → 等 status 变为 SUCCESS/ERROR\n"
-        "3. 从 detail 字段读取执行结果\n"
-        "轮询间隔建议 3-5 秒。首次查询可能返回 NOT_FOUND（任务尚未开始），等几秒重试即可。\n"
+        "## TOOL ROUTING — READ THIS FIRST\n"
         "\n"
-        "## 核心存储架构与沙盒规则 (Sandbox Architecture)\n"
-        f"- {readonly_drives} 是生产服务器映射盘，严格只读，禁止保存任何文件或用于自动化落盘测试。\n"
-        f"- UNC 路径（{unc_prefixes}）同样严格只读。\n"
-        "- 【自动沙盒隔离原则】：管线底层引擎已集成全自动防覆盖机制。当 AI 传入 `X:/Project/...` 等受保护的源路径时，系统会自动在 `projects/{project_name}/...` 内创建任务级的专属沙盒目录（例如 `projects/ysj/{datetime}_{asset}_{wf_id}`），并将源文件隔离其中。\n"
-        "- AI 不需要手动构造任何沙盒路径。请直接传入解析到的原生真实路径（如 `X:/Project/...`），所有输入、输出和报告均由系统底层在任务沙盒内闭环完成。\n"
-        "- 若主动指定 save_scene，其保存路径也必须在工作区目录内，违反路径保护的操作会被自动拦截并返回 BLOCKED 状态。\n"
-        "- 获取 source_path：先调 maya_resolve_asset 查到原生路径，直接传给操作 Tool 即可。\n"
+        "CRITICAL: NEVER use raw socket, subprocess, or commandPort to connect to Maya.\n"
+        "This server provides an RPyC-upgraded connection that is type-safe, thread-safe,\n"
+        "and session-persistent. Raw commandPort only sends strings one-way and cannot\n"
+        "return structured data reliably. All Maya interactions MUST go through this server's tools.\n"
         "\n"
-        "## Tool 选择策略\n"
-        "- 所有标准技能现已自动注册为具名 Tool（例如 maya_clean_skinweights, blender_export_abc 等），直接调用具名 Tool 即可，参数已强类型化。\n"
-        "- 若因特殊原因无法使用具名 Tool，可用 execute_skill（兜底接口）。\n"
-        "- 需要多步连续操作 → 用 maya_execute_chain（一次提交，共享 DCC 会话）\n"
-        "- 临时查询或一次性脚本 → 用 maya_exec_code\n"
-        "- 当前已打开 Maya 场景 → 用 maya_exec_code 或具名 maya_ Tool，必须传 execution_mode=\"foreground\" 和显式 foreground_port。端口未知先调 maya_list_foreground_sessions，禁止省略端口或依赖默认值。\n"
+        "### Interactive Maya (user has Maya open)\n"
+        "1. FIRST call maya_list_foreground_sessions -> get active port list\n"
+        "2. THEN call maya_exec_code with execution_mode='foreground' and foreground_port=<port>\n"
+        "   - sync=True (default): instant response, no polling needed\n"
+        "   - NEVER guess or hardcode port numbers\n"
+        "3. For named operations, also pass execution_mode='foreground' and foreground_port\n"
         "\n"
-        "## 链式执行规范（maya_execute_chain）\n"
-        "- 链引擎会自动打开 source_path，技能步骤中不需要再传 source_path。\n"
-        "- **同一后台极速流转**：链式执行会复用同一个后台 Maya 进程。如果用户要求“在同一任务执行多次对比与同步”，必须将同属 Maya 的技能（如 `maya_compare_mesh_topology` 和 `maya_sync_rig_incremental`）打包在一个 `maya_execute_chain` 任务内完成！\n"
-        f"- save_scene 必须放在链的最后一步（{'强制' if chain_rules.get('save_scene_must_be_last') else '建议'}）\n"
-        f"- 任何步骤失败，链会中断并返回 CHAIN_ABORTED（{'强制' if chain_rules.get('abort_on_step_failure') else '可选'}）\n"
-        "- 步骤返回 AUDIT_FAILED/BLOCKED/ERROR 时链会中止并生成报告；后台流程不等待人工继续。\n"
+        "### Batch Processing (no user Maya open)\n"
+        "- Single operation: use named tools (maya_clean_skinweights, maya_build_asset_info, etc.)\n"
+        "- Multi-step same DCC: maya_execute_chain (shared session, one submission)\n"
+        "- Cross-DCC pipeline: pipeline_execute_workflow\n"
         "\n"
-        "## exec_code 规范\n"
-        "代码中必须将结果赋值给 result 变量（dict 类型），示例：\n"
-        "  import maya.cmds as cmds\n"
-        "  result = {'status': 'SUCCESS', 'meshes': cmds.ls(type='mesh')}\n"
+        "### Asset Discovery\n"
+        "maya_resolve_asset -> returns source_path -> pass directly to operation tools\n"
+        "System auto-creates sandbox copies; always pass original paths as-is.\n"
         "\n"
-        "## exec_code 安全红线\n"
+        "### Task Monitoring\n"
+        "All operations are async: return task_id -> poll with maya_query_task(task_id)\n"
+        "Poll interval: 3-5s. NOT_FOUND = task not yet picked up, retry.\n"
+        "Exception: maya_exec_code(sync=True) returns result directly, no polling needed.\n"
+        "\n"
+        "## TOOL PRIORITY\n"
+        "named_tool > maya_exec_code > execute_skill (fallback for unlisted skills)\n"
+        "Low-frequency tools can be invoked via execute_skill(skill_id=...).\n"
+        "\n"
+        "## SANDBOX RULES\n"
+        f"- {readonly_drives} = production server, strictly read-only\n"
+        f"- UNC paths ({unc_prefixes}) = also read-only\n"
+        "- Pass original paths (e.g. X:/Project/...); system auto-creates task sandbox\n"
+        "- save_scene path must be within workspace; protected paths -> BLOCKED\n"
+        "\n"
+        "## CHAIN RULES (maya_execute_chain)\n"
+        "- Engine auto-opens source_path; do NOT re-open in step parameters\n"
+        "- Multi-step same-DCC tasks MUST use chain (shared Maya/Blender process)\n"
+        f"- save_scene MUST be last step ({save_rule})\n"
+        f"- Any step failure -> CHAIN_ABORTED ({abort_rule})\n"
+        "- AUDIT_FAILED/BLOCKED/ERROR -> chain stops, generates report\n"
+        "\n"
+        "## exec_code RULES\n"
+        "- Assign results to `result` variable (dict): result = {'status': 'SUCCESS', 'data': ...}\n"
+        "- Safety constraints:\n"
         f"{safety_str}\n"
         "\n"
-        "## 状态码\n"
+        "## STATUS CODES\n"
         f"{status_str}\n"
         "\n"
-        f"已注册技能：{skill_ids}。用 maya_list_skills 查看完整参数。"
+        f"Registered skills: {skill_ids}. Call maya_list_skills for full parameter schemas."
     )
 
 

@@ -2,6 +2,9 @@
 skill_id: "maya_conform_normals"
 name: "统一法线并清零顶点偏移"
 dcc: "maya"
+tier: "destructive"
+pairs_with:
+  - "validate_publish"
 description: "对 cache/geo 组内所有 mesh 执行 polyNormal conform（normalMode=2, userNormalMode=0, ch=0），统一法线方向并清除顶点局部空间的 pnts 偏移值。"
 parameters:
   geo_group:

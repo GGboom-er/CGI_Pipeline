@@ -2,6 +2,8 @@
 skill_id: "maya_select_objects"
 name: "选择对象"
 dcc: "maya"
+tier: "write"
+pairs_with: []
 description: "在 Maya 中选择、取消选择或聚焦查看对象。支持按名称列表、通配符模式、节点类型选择，支持替换/追加/移除/清空操作，可选 Frame Selected 聚焦视口。"
 parameters:
   names:

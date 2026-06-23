@@ -2,11 +2,14 @@
 skill_id: "maya_fix_asset_hierarchy"
 name: "maya_fix_rig_geometry_layout"
 dcc: "maya"
+tier: "destructive"
+pairs_with:
+  - "maya_check_asset_hierarchy"
 description: "消费 maya_check_asset_hierarchy 的检查结果，按检查结果把旧绑定几何根归一化为 |Group|Geometry|RIG_geo，并只删除安全空顶层节点。"
 parameters:
   check_result:
     type: "object"
-    description: "必填；maya_check_asset_hierarchy 的 outputs.result。fix 只消费其中 required_root、legacy_geo_roots、candidate_source_roots、safe_delete_top_nodes。"
+    description: "必填；maya_check_asset_hierarchy 的 output.result。fix 只消费其中 required_root、legacy_geo_roots、candidate_source_roots、safe_delete_top_nodes。workflow 模板中写 {{outputs.check_hierarchy_pre.result}}。"
   remove_empty_source:
     type: "boolean"
     default: true
@@ -29,7 +32,7 @@ category: "cleanup"
 
 ### 🔴 核心限制 (CRITICAL CONSTRAINTS)
 - **修改场景但不保存**: 只调整当前 Maya 场景 DAG 层级，不执行 `cmds.file(save=True)`。
-- **绑定检查结果**: 必须传入 `maya_check_asset_hierarchy.outputs.result`；本技能不重新扫描场景决定修复目标。
+- **绑定检查结果**: 必须传入 `maya_check_asset_hierarchy` 的标准记录 `output.result`；本技能不重新扫描场景决定修复目标。
 - **职责收窄**: 只处理层级，不检查或修复 Shape/Orig、材质、权重、拓扑、UV、命名。
 - **原子回滚**: 所有修改包裹在 Maya undo chunk 中；任一步失败后关闭 chunk 并执行一次 undo 回滚。
 - **绑定系统保护**: `manual_review_top_nodes` 和任何非空顶层绑定系统根绝不自动删除，避免把控制器、骨骼、约束等绑定系统一起移除。
@@ -49,7 +52,7 @@ category: "cleanup"
 - 推荐链路：`maya_check_asset_hierarchy(phase=pre_sync, block_on_fail=false, block_extra_top_nodes=false)` → `maya_fix_asset_hierarchy(check_result=...)` → `maya_check_asset_hierarchy(phase=pre_sync, block_on_fail=true, block_extra_top_nodes=false)` → `maya_compare_asset_in_scene` → `maya_sync_rig_incremental`。
 
 ### 🟡 参数规则 (PARAMETERS)
-- `check_result` (object): 必填 | 无默认 | 必须是前置 `maya_check_asset_hierarchy` 的 `outputs.result`。
+- `check_result` (object): 必填 | 无默认 | 必须是前置 `maya_check_asset_hierarchy` 的 `output.result`。
 - `remove_empty_source` (boolean): 选填 | `true` | 只删除迁移后没有子节点的源 cache 根。
 - `delete_extra_top_nodes` (boolean): 选填 | `false` | 只删除 `check_result.safe_delete_top_nodes` 列出的空节点。
 
@@ -65,3 +68,4 @@ category: "cleanup"
 - `output.result.moved_child_count`: 迁移到标准根的直接子节点数量。
 - `output.result.removed_empty_source_count`: 删除的空源 cache 根数量。
 - `output.result.deleted_top_node_count`: 删除的安全空顶层节点数量；非空业务根不会自动删除。
+- `output.renamed_tops` / `output.normalized_rig_roots` / `output.created_groups` / `output.moved_children` / `output.deleted_top_nodes` / `output.removed_empty_sources` / `output.preserved_top_nodes` / `output.manual_review_top_nodes`: 报告 Details 使用的精简明细；下游仍以 `output.result` 为机器契约。

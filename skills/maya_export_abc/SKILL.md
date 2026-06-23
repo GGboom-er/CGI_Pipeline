@@ -2,6 +2,10 @@
 skill_id: "maya_export_abc"
 name: "Maya 导出 ABC"
 dcc: "maya"
+tier: "write"
+pairs_with:
+  - "maya_import_abc"
+  - "pipeline_compare_asset"
 description: "将当前 Maya 场景导出为 Alembic (.abc)，含 UV、FaceSet、可见性，Ogawa 格式。不保留 skinCluster。"
 parameters:
   abc_path:
@@ -50,5 +54,8 @@ category: "convert"
 - `frame_start` (int): 选填 | `1` | 导出起止范围帧，缺省视同为静态单帧。
 - `frame_end` (int): 选填 | `1` | 导出起止范围帧。
 
+
+**框架注入参数**（由 workflow/chain 框架自动注入，用户不需要手动传入）：
+- `asset_name`、`project`、`run_dir`、`task_id`、`info_dir`、`extra_params`、`submitted_at` 等由调度框架根据当前任务上下文自动填充。
 ### 🟣 输出字段 (OUTPUTS)
 - `output_path` (str): 导出的 `.abc` 绝对路径。

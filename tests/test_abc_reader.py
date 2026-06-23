@@ -67,6 +67,9 @@ for dag, data in info['meshes'].items():
     print(f'  {dag}: {vtx} verts, {pos_count} floats, mats={mats}, uv={uvs}')
 
 assert len(info['meshes']) == 1, f"Expected 1 mesh, got {len(info['meshes'])}"
+dag_path = list(info['meshes'].keys())[0]
+assert not dag_path.startswith('|ABC|'), f"ABC archive root leaked into DAG: {dag_path}"
+assert dag_path.startswith('|group|cube'), f"Unexpected normalized DAG path: {dag_path}"
 mesh_data = list(info['meshes'].values())[0]
 assert mesh_data['vertices'] == 8, f"Expected 8 verts, got {mesh_data['vertices']}"
 assert len(mesh_data['vert_positions']) == 24, f"Expected 24 floats"

@@ -2,6 +2,10 @@
 skill_id: "pipeline_export_abc_auto"
 name: "自动导出 ABC"
 dcc: "pipeline"
+tier: "write"
+pairs_with:
+  - "blender_export_abc"
+  - "maya_export_abc"
 skip_audit: true
 description: "根据源文件类型自动选择 DCC（Maya/Blender）导出 ABC。.blend 走 Blender，.ma/.mb 走 Maya。"
 parameters:
@@ -37,5 +41,8 @@ category: "convert"
 ### 🟡 参数规则 (PARAMETERS)
 - `abc_path` (string): 选填 | 任务沙盒 `.info/{source_stem}.abc` | 透传给子级任务的 Alembic 文件输出路径。
 
+
+**框架注入参数**（由 workflow/chain 框架自动注入，用户不需要手动传入）：
+- `asset_name`、`project`、`run_dir`、`task_id`、`info_dir`、`extra_params`、`submitted_at` 等由调度框架根据当前任务上下文自动填充。
 ### 🟣 输出字段 (OUTPUTS)
 - `output_path` (str): 子级导出技能返回的 `.abc` 绝对路径。

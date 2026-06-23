@@ -2,6 +2,8 @@
 skill_id: "maya_get_hierarchy"
 name: "获取层级结构"
 dcc: "maya"
+tier: "read"
+pairs_with: []
 category: "process"
 description: "获取场景中特定节点或组下的层级结构列表。"
 parameters:
@@ -34,5 +36,5 @@ io:
 - `node` (string): 选填 | 节点名称，为空则返回顶层。
 - `full_path` (boolean): 选填 | 默认 true。
 
-### 🟣 输出字段 (OUTPUTS)
-- `outputs.result.hierarchy` (list): 查询得到的 DAG 层级列表。
+### 🟣 标准执行记录 (RECORD)
+- `output.result.hierarchy` (list): 查询得到的 DAG 层级列表。

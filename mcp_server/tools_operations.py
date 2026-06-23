@@ -6,6 +6,7 @@ import sys
 import os
 import socket
 from pathlib import Path
+from fastmcp.tools import Tool
 
 from mcp_server.models import (
     ExecCodeInput,
@@ -31,10 +32,22 @@ from mcp_server.internals import (
 from core.skill_registry import get_all_skills, get_skill_map
 
 
+SKILL_TIERS = {'read', 'write', 'destructive'}
+
+
+def _maya_port_range():
+    """返回 Maya commandPort 扫描范围，默认覆盖 7001-7020。"""
+    start = int(os.getenv('MAYA_FOREGROUND_PORT_START', '7001'))
+    end = int(os.getenv('MAYA_FOREGROUND_PORT_END', '7020'))
+    if end < start:
+        start, end = end, start
+    return range(start, end + 1)
+
+
 def _scan_foreground_ports():
     """扫描本机活跃 Maya commandPort，供显式端口提示使用。"""
     active_ports = []
-    for port in range(7001, 7011):
+    for port in _maya_port_range():
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.settimeout(0.2)
@@ -60,16 +73,62 @@ def _require_explicit_foreground_port(params, tool_name):
     }
 
 
+def _skill_tool_annotations(skill: dict) -> dict:
+    """Build MCP annotations from SKILL.md frontmatter tier."""
+    skill_id = skill.get('skill_id', 'unknown_skill')
+    tier = str(skill.get('tier') or 'destructive').strip().lower()
+    if tier not in SKILL_TIERS:
+        tier = 'destructive'
+
+    is_read = tier == 'read'
+    is_destructive = tier == 'destructive'
+    return {
+        "title": skill.get('name', skill_id),
+        "readOnlyHint": is_read,
+        "destructiveHint": is_destructive,
+        "idempotentHint": is_read,
+        "openWorldHint": True,
+    }
+
+
 def register_operation_tools(mcp):
     """将所有操作类 Tools 注册到 MCP Server 实例"""
 
     # ── 动态注册所有标准技能 Tools ──
     from core.skill_registry import get_all_skills
     
-    # 排除一些特殊技能，它们有专属 Tool 或不适合作为独立 Tool 暴露
+    # 排除的技能：有专属手动 Tool、低频可被 maya_exec_code 替代、或仅内部/workflow 使用
+    # 被排除的技能仍可通过 execute_skill(skill_id=...) 兜底接口调用，能力无损
     EXCLUDED_DYNAMIC_SKILLS = {
-        'ping', 'copy_files', 'pipeline_compare_asset', 'pipeline_export_abc_auto',
-        'maya_sync_rig_incremental',
+        # ── 有专属手动注册 Tool ──
+        'ping',                          # 内部心跳
+        'copy_files',                    # 手动 pipeline_copy_files
+        'pipeline_compare_asset',        # 手动注册
+        'pipeline_export_abc_auto',      # 被 workflow 调用
+        'maya_sync_rig_incremental',     # 手动注册
+        # ── 双重注册修复 ──
+        'exec_code',                     # 与手动 maya_exec_code 重复
+        # ── 低频，可被 maya_exec_code 一行代码替代 ──
+        'maya_create_primitive',
+        'maya_freeze_transforms',
+        'maya_conform_normals',
+        'maya_set_attribute',
+        'maya_select_objects',
+        'maya_get_object_info',
+        'maya_get_hierarchy',
+        'maya_open_scene',               # 框架自动打开
+        'maya_capture_viewport',
+        'blender_capture_viewport',
+        # ── 被更高级工具覆盖 ──
+        'maya_check_textures',           # 低频 QC
+        'maya_split_udim_materials',     # 被 maya_assign_udim_materials 覆盖
+        'maya_compare_mesh_topology',    # 被 maya_compare_asset_in_scene 包含
+        # ── 内部/workflow 专用 ──
+        'build_pipeline_skill',          # AI 内部脚手架
+        'write_task_report',             # 调度层自动调用
+        'maya_deformation_inherit_skin', # 被 sync_rig 内部调用
+        'maya_build_mesh_from_abc',      # 被 sync_rig 内部调用
+        'blender_build_asset_info',      # 通常由 workflow 自动调用
     }
     
     for skill in get_all_skills():
@@ -104,11 +163,16 @@ def register_operation_tools(mcp):
             dynamic_tool.__doc__ = s_desc
             return dynamic_tool
             
-        desc = skill.get('description', f"执行技能 {skill_id}。异步返回 task_id。")
+        desc = skill.get('description', f"Execute skill {skill_id}. Returns task_id (async).")
         tool_fn = make_tool_func(skill_id, desc)
         
-        # 动态注册
-        mcp.add_tool(tool_fn)
+        tool_obj = Tool.from_tool(
+            tool_fn,
+            name=skill_id,
+            description=desc,
+            annotations=_skill_tool_annotations(skill),
+        )
+        mcp.add_tool(tool_obj)
 
 
     # ── 通用技能执行 ──
@@ -247,18 +311,23 @@ def register_operation_tools(mcp):
         }
     )
     async def maya_exec_code(params: ExecCodeInput) -> dict:
-        """在 Maya 中执行任意 Python 代码。
+        """Execute Python code in Maya. Use this INSTEAD OF raw socket or commandPort.
 
-        默认：foreground 模式下走同步直返（sync=True），调用后立刻在响应里拿到 receipt，
-        无需再调 maya_query_task 轮询 —— 跟 Script Editor 体验接近，亚秒级返回。
-        若显式传 sync=False，则恢复原异步行为（仅 foreground 有意义）。
-        background/celery 模式忽略 sync。
+        This tool provides an RPyC-upgraded connection that is type-safe, thread-safe,
+        and runs code on Maya's main thread (safe for all cmds/OpenMaya calls).
 
-        代码规范：
-        - 必须将结果赋值给 result 变量（dict 类型）
-        - result 应包含 'status' 字段（'SUCCESS' 或 'ERROR'）
-        - 示例：result = {'status': 'SUCCESS', 'meshes': cmds.ls(type='mesh')}
-        - 未设置 result 时返回空 dict，不会报错
+        For user's currently open Maya (interactive):
+          1. Call maya_list_foreground_sessions first to get the port
+          2. Set execution_mode='foreground', foreground_port=<discovered_port>
+          3. sync=True (default): instant response like Script Editor, no polling needed
+
+        For batch processing (headless):
+          Set execution_mode='background' (default), results via maya_query_task
+
+        Code must assign results to `result` variable (dict).
+        Example: result = {'status': 'SUCCESS', 'meshes': cmds.ls(type='mesh')}
+
+        在 Maya 中执行 Python 代码。禁止裸 socket 连接，必须通过本工具。
         """
         guard = _require_explicit_foreground_port(params, 'maya_exec_code')
         if guard:

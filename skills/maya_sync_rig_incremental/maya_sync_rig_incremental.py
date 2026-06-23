@@ -18,16 +18,18 @@ import sys
 import logging
 import re
 
+import numpy as np
 import maya.cmds as cmds
 from maya.api import OpenMaya as om2
 from maya.api import OpenMayaAnim as oma2
 
 from core.bootstrap import PROJECT_ROOT as _PROJECT_ROOT
+from core.live_bs_transfer import compose_live_target_weights
 from core.receipt import make_receipt, make_item
 from skills.maya_sync_rig_incremental.sync_contract import (
     SKILL_ID,
     SyncContractError,
-    build_sync_report_sections,
+    build_sync_output_details,
     format_action_summary,
     load_compare_result_file,
     load_compare_result_value,
@@ -73,7 +75,7 @@ def _safe_maya_node_name(name, fallback="sync_layer"):
 
 def _sync_receipt(status, start_time, phase, error="", items=None,
                   summary_action="", recovery_hint="", report_content="",
-                  report_sections=None, summary_count=0, summary_label="资产同步"):
+                  output=None, summary_count=0, summary_label="资产同步"):
     if error and phase:
         error = f"[{phase}] {error}"
     return make_receipt(
@@ -82,11 +84,10 @@ def _sync_receipt(status, start_time, phase, error="", items=None,
         summary_count=summary_count,
         summary_label=summary_label,
         items=items or [],
-        outputs={},
+        output=output or {},
         error=error,
         recovery_hint=recovery_hint,
         report_content=report_content,
-        report_sections=report_sections or [],
     )
 
 
@@ -227,6 +228,566 @@ def _topological_smooth(V, adj, data, iterations=30, blend=0.5):
         
     return data_curr
 
+
+def _mesh_object_points(shape):
+    sel = om2.MSelectionList()
+    sel.add(shape)
+    fn_mesh = om2.MFnMesh(sel.getDagPath(0))
+    pts = fn_mesh.getPoints(om2.MSpace.kObject)
+    return np.asarray([[p.x, p.y, p.z] for p in pts], dtype=np.float64)
+
+
+def _alias_weight_index_map(bs_node):
+    alias_list = cmds.aliasAttr(bs_node, query=True) or []
+    out = {}
+    for i in range(0, len(alias_list), 2):
+        attr_ref = str(alias_list[i + 1])
+        match = re.search(r"weight\[(\d+)\]", attr_ref)
+        if match:
+            out[str(alias_list[i])] = int(match.group(1))
+    return out
+
+
+def _disconnect_incoming_plugs(attr_path):
+    sources = cmds.listConnections(attr_path, source=True, destination=False, plugs=True) or []
+    for src in sources:
+        try:
+            cmds.disconnectAttr(src, attr_path)
+        except RuntimeError:
+            logger.debug("断开连接失败 %s -> %s", src, attr_path)
+    return sources
+
+
+def _restore_incoming_plugs(sources, attr_path):
+    for src in sources or []:
+        if not cmds.objExists(src) or not cmds.objExists(attr_path):
+            continue
+        try:
+            cmds.connectAttr(src, attr_path, force=True)
+        except RuntimeError:
+            logger.debug("恢复连接失败 %s -> %s", src, attr_path)
+
+
+def _set_static_blendshape_delta(bs_node, target_name, target_index, item_index, delta):
+    sel_bs = om2.MSelectionList()
+    sel_bs.add(bs_node)
+    fn_bs = om2.MFnDependencyNode(sel_bs.getDependNode(0))
+    fn_bs.findPlug("weight", False).elementByLogicalIndex(target_index)
+    try:
+        cmds.aliasAttr(target_name, f"{bs_node}.weight[{target_index}]")
+    except RuntimeError:
+        pass
+
+    it_plug = fn_bs.findPlug("inputTarget", False)
+    geom_indices = it_plug.getExistingArrayAttributeIndices()
+    geom_idx = geom_indices[0] if geom_indices else 0
+    itg_plug = it_plug.elementByLogicalIndex(geom_idx).child(0)
+    tgt_plug = itg_plug.elementByLogicalIndex(target_index)
+    iti_plug = tgt_plug.child(0).elementByLogicalIndex(item_index)
+
+    ipt_plug = None
+    ict_plug = None
+    for ci in range(iti_plug.numChildren()):
+        child = iti_plug.child(ci)
+        attr_name = om2.MFnAttribute(child.attribute()).name
+        if attr_name == "inputPointsTarget":
+            ipt_plug = child
+        elif attr_name == "inputComponentsTarget":
+            ict_plug = child
+    if not ipt_plug or not ict_plug:
+        return 0
+
+    delta = np.asarray(delta, dtype=np.float64)
+    sparse_ids_arr = np.where(np.linalg.norm(delta, axis=1) > 1e-7)[0]
+    if len(sparse_ids_arr) == 0:
+        return 0
+
+    sparse_pts = om2.MPointArray()
+    for si in sparse_ids_arr:
+        d = delta[si]
+        sparse_pts.append(om2.MPoint(float(d[0]), float(d[1]), float(d[2])))
+
+    ipt_plug.setMObject(om2.MFnPointArrayData().create(sparse_pts))
+    fn_comp = om2.MFnSingleIndexedComponent()
+    comp_obj = fn_comp.create(om2.MFn.kMeshVertComponent)
+    fn_comp.addElements(sparse_ids_arr.tolist())
+    fn_comp_data = om2.MFnComponentListData()
+    comp_list_obj = fn_comp_data.create()
+    fn_comp_data.add(comp_obj)
+    ict_plug.setMObject(comp_list_obj)
+    return int(len(sparse_ids_arr))
+
+
+def _interpolate_field_from_kd(num_new_verts, old_field, i_idx, k_idx, local_v, w_gauss):
+    old_field = np.asarray(old_field, dtype=np.float64)
+    if old_field.ndim == 1:
+        old_field = old_field[:, None]
+    out = np.zeros((num_new_verts, old_field.shape[1]), dtype=np.float64)
+    if len(i_idx) == 0 or old_field.shape[0] == 0:
+        return out
+    valid = (local_v >= 0) & (local_v < old_field.shape[0])
+    if not np.any(valid):
+        return out
+    i_ok = i_idx[valid]
+    k_ok = k_idx[valid]
+    l_ok = local_v[valid]
+    w_val = w_gauss[i_ok, k_ok]
+    np.add.at(out, i_ok, old_field[l_ok] * w_val[:, None])
+    return out
+
+
+def _interpolate_field_directed(num_new_verts, old_field, query_points, use_tnb, matched_face_idx,
+                                bary_coords, src_faces, src_verts,
+                                nearest_indices=None, w_gauss=None):
+    """按定向投射结果映射任意 per-vertex field。"""
+    old_field = np.asarray(old_field, dtype=np.float64)
+    if old_field.ndim == 1:
+        old_field = old_field[:, None]
+    out = np.zeros((num_new_verts, old_field.shape[1]), dtype=np.float64)
+    if old_field.shape[0] == 0:
+        return out
+
+    if use_tnb and matched_face_idx is not None and old_field.shape[0] == len(src_verts):
+        from core.spatial_transfer import barycentric_delta_transfer
+        mapped, _ = barycentric_delta_transfer(
+            matched_face_idx, bary_coords, src_faces, old_field
+        )
+        return np.asarray(mapped, dtype=np.float64).reshape(num_new_verts, old_field.shape[1])
+
+    if nearest_indices is not None and w_gauss is not None:
+        k_eff = min(nearest_indices.shape[1], w_gauss.shape[1])
+        idx = nearest_indices[:, :k_eff]
+        wg = w_gauss[:, :k_eff]
+        valid = (idx >= 0) & (idx < old_field.shape[0])
+        for ki in range(k_eff):
+            ok = valid[:, ki]
+            if np.any(ok):
+                out[ok] += old_field[idx[ok, ki]] * wg[ok, ki:ki + 1]
+        return out
+
+    from scipy.spatial import cKDTree
+    src_subset = np.asarray(src_verts[:old_field.shape[0]], dtype=np.float64)
+    tree = cKDTree(src_subset)
+    _, idx = tree.query(np.asarray(query_points, dtype=np.float64), k=1)
+    idx = np.clip(idx, 0, old_field.shape[0] - 1)
+    return old_field[idx]
+
+
+def _triangulate_indexed_faces(face_indices, face_counts):
+    if not face_indices or not face_counts:
+        return np.zeros((0, 3), dtype=np.int64)
+    from core.spatial_transfer import triangulate_faces
+    faces, _ = triangulate_faces(face_indices, face_counts)
+    return np.asarray(faces, dtype=np.int64)
+
+
+def _semantic_delta_override(src_vertices, src_faces, src_delta,
+                             query_vertices, query_faces, base_delta,
+                             source_weights=None, source_joints=None,
+                             target_weights=None):
+    """用语义支持域覆盖嘴部 BS delta，避免 upper/lower lip 最近点互串。"""
+    if source_weights is None or source_joints is None or target_weights is None:
+        return None
+
+    source_weights = np.asarray(source_weights, dtype=np.float64)
+    target_weights = np.asarray(target_weights, dtype=np.float64)
+    if (
+        source_weights.ndim != 2
+        or target_weights.ndim != 2
+        or source_weights.shape[0] != src_vertices.shape[0]
+        or target_weights.shape[0] != query_vertices.shape[0]
+        or source_weights.shape[1] != target_weights.shape[1]
+    ):
+        return None
+
+    try:
+        from core.topology_support_matcher import (
+            DEFAULT_DEFORMATION_FAMILY_RULES,
+            TopologySupportMatcher,
+            compute_family_scores,
+        )
+    except Exception as exc:
+        logger.debug("语义 delta 覆盖不可用: %s", exc)
+        return None
+
+    source_joints = list(source_joints)
+    families, source_scores, _ = compute_family_scores(
+        source_weights, source_joints, DEFAULT_DEFORMATION_FAMILY_RULES
+    )
+    _, target_scores, _ = compute_family_scores(
+        target_weights, source_joints, DEFAULT_DEFORMATION_FAMILY_RULES
+    )
+    if source_scores.size == 0 or target_scores.size == 0:
+        return None
+
+    family_index = {family: idx for idx, family in enumerate(families)}
+    mouth_family_ids = [
+        family_index[name]
+        for name in ("upper_lip", "lower_lip", "jaw")
+        if name in family_index
+    ]
+    if not mouth_family_ids:
+        return None
+
+    has_source_mouth = any(float(source_scores[:, idx].max()) > 0.30 for idx in mouth_family_ids)
+    has_target_mouth = any(float(target_scores[:, idx].max()) > 0.30 for idx in mouth_family_ids)
+    if not (has_source_mouth and has_target_mouth):
+        return None
+
+    top = np.argmax(target_scores, axis=1)
+    sorted_scores = np.sort(target_scores, axis=1)
+    margin = sorted_scores[:, -1] - sorted_scores[:, -2] if target_scores.shape[1] > 1 else sorted_scores[:, -1]
+    top_score = target_scores[np.arange(target_scores.shape[0]), top]
+
+    seeds = {}
+    for vertex_index, family_id in enumerate(top):
+        if int(family_id) not in mouth_family_ids:
+            continue
+        if top_score[vertex_index] < 0.55 or margin[vertex_index] < 0.15:
+            continue
+        seeds[int(vertex_index)] = families[int(family_id)]
+
+    if len(seeds) < 8:
+        return None
+
+    try:
+        matcher = TopologySupportMatcher(
+            source_vertices=src_vertices,
+            source_faces=src_faces,
+            source_weights=source_weights,
+            joint_names=source_joints,
+            family_rules=DEFAULT_DEFORMATION_FAMILY_RULES,
+            support_threshold=0.30,
+            min_island_vertices=3,
+        )
+        result = matcher.transfer_values(
+            src_delta,
+            query_vertices,
+            query_faces,
+            target_seed_labels=seeds,
+            k=8,
+            auto_seed=False,
+            normal_weight=0.0,
+            motion_weight=0.0,
+        )
+    except Exception as exc:
+        logger.warning("语义支持域 BS delta 覆盖失败: %s", exc)
+        return None
+
+    mouth_mask = np.isin(top, np.asarray(mouth_family_ids, dtype=np.int64))
+    mouth_mask &= top_score >= 0.20
+    mouth_mask &= result.confidence >= 0.20
+    if not np.any(mouth_mask):
+        return None
+
+    mixed = np.asarray(base_delta, dtype=np.float64).copy()
+    mixed[mouth_mask] = np.asarray(result.values, dtype=np.float64)[mouth_mask]
+    logger.info(
+        "Semantic BS delta override: %d/%d mouth vertices, seeds=%d",
+        int(np.sum(mouth_mask)),
+        int(query_vertices.shape[0]),
+        len(seeds),
+    )
+    return mixed
+
+
+def _sample_delta_deformation_field(src_vertices, src_faces, src_delta,
+                                    query_vertices, query_faces, name,
+                                    source_weights=None, source_joints=None,
+                                    target_weights=None):
+    """用统一 DeformationField 采样 BS delta，避免动态 BS 走 TNB 近似。"""
+    src_vertices = np.ascontiguousarray(src_vertices, dtype=np.float64)
+    src_faces = np.ascontiguousarray(src_faces, dtype=np.int64)
+    src_delta = np.ascontiguousarray(src_delta, dtype=np.float64)
+    query_vertices = np.ascontiguousarray(query_vertices, dtype=np.float64)
+    query_faces = np.ascontiguousarray(query_faces, dtype=np.int64)
+    if (
+        src_vertices.shape[0] == 0
+        or src_faces.shape[0] == 0
+        or src_delta.shape[0] != src_vertices.shape[0]
+        or query_vertices.shape[0] == 0
+        or query_faces.shape[0] == 0
+    ):
+        return np.zeros((query_vertices.shape[0], 3), dtype=np.float64)
+
+    from core.deformation_field import DeformationField
+    from core.spatial_transfer import compute_vertex_normals
+
+    rig_data = {
+        "all_joints": ["__bs_probe_root__"],
+        "meshes": [{
+            "vertices": src_vertices,
+            "faces": src_faces,
+            "normals": np.ascontiguousarray(compute_vertex_normals(src_vertices, src_faces), dtype=np.float64),
+            "weights": np.zeros((src_vertices.shape[0], 1), dtype=np.float64),
+            "bs_deltas": {name: src_delta},
+        }],
+    }
+    field = DeformationField(rig_data)
+    sampled = field.sample_bs_deltas(
+        query_vertices,
+        query_faces,
+        new_normals=np.ascontiguousarray(compute_vertex_normals(query_vertices, query_faces), dtype=np.float64),
+        use_winding=False,
+        idw_k=4,
+        idw_blend=0.3,
+        use_deformation_gradient=True,
+    )
+    base_delta = np.ascontiguousarray(sampled.get(name, np.zeros((query_vertices.shape[0], 3))), dtype=np.float64)
+    semantic_delta = _semantic_delta_override(
+        src_vertices,
+        src_faces,
+        src_delta,
+        query_vertices,
+        query_faces,
+        base_delta,
+        source_weights=source_weights,
+        source_joints=source_joints,
+        target_weights=target_weights,
+    )
+    if semantic_delta is not None:
+        return np.ascontiguousarray(semantic_delta, dtype=np.float64)
+    return base_delta
+
+
+def _sample_weight_deformation_field(src_vertices, src_faces, src_weights,
+                                     joints, query_vertices, query_faces):
+    """用统一 DeformationField 采样 live target skin 权重。"""
+    src_vertices = np.ascontiguousarray(src_vertices, dtype=np.float64)
+    src_faces = np.ascontiguousarray(src_faces, dtype=np.int64)
+    src_weights = np.ascontiguousarray(src_weights, dtype=np.float64)
+    query_vertices = np.ascontiguousarray(query_vertices, dtype=np.float64)
+    query_faces = np.ascontiguousarray(query_faces, dtype=np.int64)
+    if (
+        src_vertices.shape[0] == 0
+        or src_faces.shape[0] == 0
+        or src_weights.shape[0] != src_vertices.shape[0]
+        or query_vertices.shape[0] == 0
+        or query_faces.shape[0] == 0
+    ):
+        return np.zeros((query_vertices.shape[0], len(joints)), dtype=np.float64)
+
+    from core.deformation_field import DeformationField
+    from core.spatial_transfer import compute_vertex_normals
+
+    rig_data = {
+        "all_joints": list(joints),
+        "meshes": [{
+            "vertices": src_vertices,
+            "faces": src_faces,
+            "normals": np.ascontiguousarray(compute_vertex_normals(src_vertices, src_faces), dtype=np.float64),
+            "weights": src_weights,
+        }],
+    }
+    field = DeformationField(rig_data)
+    weights, _ = field.sample_weights(
+        query_vertices,
+        query_faces,
+        new_normals=np.ascontiguousarray(compute_vertex_normals(query_vertices, query_faces), dtype=np.float64),
+        use_winding=False,
+        idw_k=4,
+        idw_blend=0.7,
+        smooth_iterations=0,
+    )
+    return np.ascontiguousarray(weights, dtype=np.float64)
+
+
+def _duplicate_clean_mesh(mesh, name):
+    dup = cmds.duplicate(
+        mesh,
+        name=name,
+        inputConnections=False,
+        upstreamNodes=False,
+    )[0]
+    history = cmds.listHistory(dup) or []
+    for node_type in ("skinCluster", "blendShape"):
+        nodes = cmds.ls(history, type=node_type) or []
+        if nodes:
+            try:
+                cmds.delete(nodes)
+            except RuntimeError:
+                logger.debug("清理复制 mesh 历史失败: %s", nodes)
+    return dup
+
+
+def _bind_mesh_weights(mesh, skin_name, joints, weights):
+    weights = np.asarray(weights, dtype=np.float64)
+    if weights.ndim != 2 or weights.shape[0] == 0 or weights.shape[1] != len(joints):
+        return None
+
+    active_cols = [
+        idx for idx, joint in enumerate(joints)
+        if cmds.objExists(joint) and float(weights[:, idx].max()) > 0.0
+    ]
+    if not active_cols:
+        return None
+
+    bind_joints = [joints[idx] for idx in active_cols]
+    compact_w = weights[:, active_cols]
+    row_sums = compact_w.sum(axis=1, keepdims=True)
+    row_sums[row_sums == 0] = 1.0
+    compact_w = compact_w / row_sums
+
+    skin = cmds.skinCluster(
+        mesh, bind_joints, toSelectedBones=True,
+        bindMethod=0, skinMethod=0, normalizeWeights=1,
+        name=skin_name,
+    )[0]
+
+    shapes = cmds.listRelatives(mesh, shapes=True, fullPath=True, noIntermediate=True)
+    if not shapes:
+        return skin
+
+    sel_skin = om2.MSelectionList()
+    sel_skin.add(skin)
+    fn_skin = oma2.MFnSkinCluster(sel_skin.getDependNode(0))
+
+    sel_shape = om2.MSelectionList()
+    sel_shape.add(shapes[0])
+    dag = sel_shape.getDagPath(0)
+    num_verts = om2.MFnMesh(dag).numVertices
+    comp = om2.MFnSingleIndexedComponent().create(om2.MFn.kMeshVertComponent)
+    om2.MFnSingleIndexedComponent(comp).setCompleteData(num_verts)
+
+    inf_idx = om2.MIntArray(list(range(len(bind_joints))))
+    fn_skin.setWeights(dag, comp, inf_idx, om2.MDoubleArray(compact_w.flatten().tolist()))
+    return skin
+
+
+def _extract_live_inner_blendshapes(live_transform, body_shape, outer_attr):
+    """采集 live target 内部 BS，delta 以最终 body 输出为准。"""
+    inner_nodes = sorted(set(cmds.ls(cmds.listHistory(live_transform, pruneDagObjects=True) or [], type="blendShape") or []))
+    if not inner_nodes:
+        return []
+
+    outer_original = None
+    outer_can_set = cmds.objExists(outer_attr)
+    if outer_can_set:
+        try:
+            outer_original = cmds.getAttr(outer_attr)
+            cmds.setAttr(outer_attr, 1.0)
+        except RuntimeError:
+            outer_can_set = False
+
+    original_values = {}
+    incoming_by_attr = {}
+    targets = []
+    try:
+        for node in inner_nodes:
+            for alias in _alias_weight_index_map(node):
+                attr = f"{node}.{alias}"
+                if not cmds.objExists(attr):
+                    continue
+                incoming_by_attr[attr] = _disconnect_incoming_plugs(attr)
+                try:
+                    original_values[attr] = cmds.getAttr(attr)
+                    cmds.setAttr(attr, 0.0)
+                except RuntimeError:
+                    original_values[attr] = 0.0
+
+        body_outer = _mesh_object_points(body_shape)
+        for node in inner_nodes:
+            for alias, target_index in sorted(_alias_weight_index_map(node).items(), key=lambda item: item[1]):
+                attr = f"{node}.{alias}"
+                if not cmds.objExists(attr):
+                    continue
+                try:
+                    cmds.setAttr(attr, 1.0)
+                except RuntimeError:
+                    continue
+                body_delta = _mesh_object_points(body_shape) - body_outer
+                try:
+                    cmds.setAttr(attr, 0.0)
+                except RuntimeError:
+                    pass
+                if np.any(np.abs(body_delta) > 1e-7):
+                    targets.append({
+                        "node": node,
+                        "name": alias,
+                        "target_index": int(target_index),
+                        "item_index": 6000,
+                        "body_delta": body_delta,
+                        "upstream_plugs": list(incoming_by_attr.get(attr, [])),
+                    })
+    finally:
+        for attr, value in original_values.items():
+            if cmds.objExists(attr):
+                try:
+                    cmds.setAttr(attr, value)
+                except RuntimeError:
+                    pass
+                _restore_incoming_plugs(incoming_by_attr.get(attr), attr)
+        if outer_can_set and outer_original is not None and cmds.objExists(outer_attr):
+            try:
+                cmds.setAttr(outer_attr, outer_original)
+            except RuntimeError:
+                pass
+
+    return targets
+
+
+def _apply_live_inner_blendshapes_mapped(live_dup, live_info, map_field, active_mask):
+    inner_targets = (live_info or {}).get("inner_blendshapes") or []
+    if not inner_targets:
+        return 0
+
+    inner_bs = None
+    written = 0
+    for target in inner_targets:
+        if inner_bs is None:
+            old_node = str(target.get("node") or "blendShape").replace(RIG_PREFIX, "")
+            inner_bs = cmds.blendShape(
+                live_dup,
+                name=f"{live_dup}_{old_node}",
+                frontOfChain=True,
+                origin="world",
+            )[0]
+
+        old_delta = target.get("body_delta")
+        if old_delta is None:
+            continue
+        new_delta = np.asarray(map_field(old_delta), dtype=np.float64)
+        if active_mask is not None and len(active_mask) == new_delta.shape[0]:
+            new_delta[~active_mask] = 0.0
+        sparse_count = _set_static_blendshape_delta(
+            inner_bs,
+            target.get("name") or f"target_{target.get('target_index', written)}",
+            int(target.get("target_index", written)),
+            int(target.get("item_index", 6000)),
+            new_delta,
+        )
+        if sparse_count <= 0:
+            continue
+
+        attr_path = f"{inner_bs}.{target.get('name')}"
+        connected = False
+        for src_plug in target.get("upstream_plugs") or []:
+            if cmds.objExists(src_plug) and cmds.objExists(attr_path):
+                try:
+                    cmds.connectAttr(src_plug, attr_path, force=True)
+                    connected = True
+                except RuntimeError:
+                    pass
+        if cmds.objExists(attr_path) and not connected:
+            try:
+                cmds.setAttr(attr_path, 0.0)
+            except RuntimeError:
+                pass
+        written += 1
+    return written
+
+
+def _apply_live_inner_blendshapes(live_dup, live_info, num_new_verts,
+                                  i_idx, k_idx, local_v, w_gauss, active_mask):
+    def _map_field(old_delta):
+        return _interpolate_field_from_kd(
+            num_new_verts, old_delta, i_idx, k_idx, local_v, w_gauss
+        )
+    return _apply_live_inner_blendshapes_mapped(
+        live_dup, live_info, _map_field, active_mask
+    )
+
+
 def _directed_weight_transfer(new_mesh, new_verts, num_new_verts, new_normals, tex_data,
                               paired_rig_dag, rig_meshes, rig_skin_data, rig_bs_data,
                               target_name, items, sync_nodes, new_nodes, profile=None):
@@ -264,6 +825,12 @@ def _directed_weight_transfer(new_mesh, new_verts, num_new_verts, new_normals, t
     # 尝试使用 TNB 投射引擎（需要三角面信息）
     use_tnb = (len(src_face_indices) > 0 and len(src_face_counts) > 0 and
                len(dst_face_indices) > 0 and len(dst_face_counts) > 0)
+    src_tri_faces_for_field = _triangulate_indexed_faces(src_face_indices, src_face_counts)
+    dst_tri_faces_for_field = _triangulate_indexed_faces(dst_face_indices, dst_face_counts)
+    matched_face_idx = None
+    bary_coords = None
+    nearest_indices = None
+    w_gauss = None
 
     if use_tnb:
         from core.spatial_transfer import (
@@ -415,6 +982,7 @@ def _directed_weight_transfer(new_mesh, new_verts, num_new_verts, new_normals, t
                         for item_data in tgt["items"]:
                             item_idx = item_data["item_index"]
                             old_delta = item_data["delta"]
+                            live_info = item_data.get("live_info")
 
                             num_old_delta = len(old_delta)
                             new_delta = np.zeros((num_new_verts, 3), dtype=np.float64)
@@ -438,9 +1006,145 @@ def _directed_weight_transfer(new_mesh, new_verts, num_new_verts, new_normals, t
                                 valid_v = (nearest_indices >= 0) & (nearest_indices < num_old_delta)
                                 if np.any(valid_v):
                                     for ni in range(num_new_verts):
-                                        for ki in range(3):
+                                        for ki in range(nearest_indices.shape[1]):
                                             if valid_v[ni, ki]:
                                                 new_delta[ni] += old_delta[nearest_indices[ni, ki]] * w_gauss[ni, ki]
+
+                            live_delta_raw = new_delta.copy()
+                            if live_info and src_tri_faces_for_field.shape[0] and dst_tri_faces_for_field.shape[0]:
+                                live_delta_raw = _sample_delta_deformation_field(
+                                    src_verts,
+                                    src_tri_faces_for_field,
+                                    np.asarray(old_delta, dtype=np.float64).reshape(-1, 3),
+                                    new_verts,
+                                    dst_tri_faces_for_field,
+                                    tgt["name"],
+                                    source_weights=src_weights,
+                                    source_joints=src_joints,
+                                    target_weights=new_weights,
+                                )
+
+                            # Live Target 深度复刻：复制动态目标 mesh，迁移 live skin 与内部 BS。
+                            if live_info and live_info.get("transform"):
+                                try:
+                                    live_query_verts = new_verts + live_delta_raw
+                                    active_mask = np.linalg.norm(live_delta_raw, axis=1) > 1e-7
+                                    live_dup = _duplicate_clean_mesh(new_mesh, f"{target_name}_live_{t_idx}")
+                                    ld_shapes = cmds.listRelatives(live_dup, shapes=True, fullPath=True, noIntermediate=True)
+                                    if not ld_shapes:
+                                        raise RuntimeError("live duplicate 缺少可见 shape")
+                                    sel_ld = om2.MSelectionList()
+                                    sel_ld.add(ld_shapes[0])
+                                    fn_ld = om2.MFnMesh(sel_ld.getDagPath(0))
+                                    base_live_pts = fn_ld.getPoints(om2.MSpace.kObject)
+                                    for vi in range(min(num_new_verts, len(base_live_pts))):
+                                        base_live_pts[vi].x += live_delta_raw[vi][0]
+                                        base_live_pts[vi].y += live_delta_raw[vi][1]
+                                        base_live_pts[vi].z += live_delta_raw[vi][2]
+                                    fn_ld.setPoints(base_live_pts, om2.MSpace.kObject)
+
+                                    live_skin = live_info.get("skin")
+                                    if live_skin and live_skin.get("joints"):
+                                        old_live_joints = list(live_skin["joints"])
+                                        l_joints = [j for j in old_live_joints if cmds.objExists(j)]
+                                        l_weights = np.asarray(live_skin["weights"], dtype=np.float64)
+                                        if l_joints and l_weights.shape[0] > 0:
+                                            l_old_indices = [old_live_joints.index(j) for j in l_joints]
+                                            live_geo = live_info.get("geometry") or {}
+                                            live_src_faces = _triangulate_indexed_faces(
+                                                live_geo.get("face_indices") or [],
+                                                live_geo.get("face_counts") or [],
+                                            )
+                                            live_vertices_value = live_geo.get("vertices")
+                                            live_src_vertices = np.asarray(
+                                                live_vertices_value if live_vertices_value is not None else [],
+                                                dtype=np.float64,
+                                            )
+                                            if live_src_faces.shape[0] and live_src_vertices.shape[0]:
+                                                live_new_w = _sample_weight_deformation_field(
+                                                    live_src_vertices,
+                                                    live_src_faces,
+                                                    l_weights[:, l_old_indices],
+                                                    l_joints,
+                                                    live_query_verts,
+                                                    dst_tri_faces_for_field,
+                                                )
+                                            else:
+                                                live_new_w = _interpolate_field_directed(
+                                                    num_new_verts,
+                                                    l_weights[:, l_old_indices],
+                                                    new_verts,
+                                                    use_tnb,
+                                                    matched_face_idx,
+                                                    bary_coords,
+                                                    src_faces if use_tnb else None,
+                                                    src_verts,
+                                                    nearest_indices,
+                                                    w_gauss,
+                                                )
+                                            active_mask = active_mask & (live_new_w.sum(axis=1) > 1e-8)
+                                            live_union_joints, live_union_w = compose_live_target_weights(
+                                                src_joints,
+                                                new_weights,
+                                                l_joints,
+                                                live_new_w,
+                                                active_mask,
+                                            )
+                                            _bind_mesh_weights(
+                                                live_dup,
+                                                live_dup + "_skinCluster",
+                                                live_union_joints,
+                                                live_union_w,
+                                            )
+
+                                    def _map_live_field(old_field):
+                                        if src_tri_faces_for_field.shape[0] and dst_tri_faces_for_field.shape[0]:
+                                            outer_source_delta = np.asarray(old_delta, dtype=np.float64).reshape(-1, 3)
+                                            inner_source_vertices = src_verts
+                                            if outer_source_delta.shape[0] == src_verts.shape[0]:
+                                                inner_source_vertices = src_verts + outer_source_delta
+                                            return _sample_delta_deformation_field(
+                                                inner_source_vertices,
+                                                src_tri_faces_for_field,
+                                                np.asarray(old_field, dtype=np.float64).reshape(-1, 3),
+                                                live_query_verts,
+                                                dst_tri_faces_for_field,
+                                                str(tgt["name"]),
+                                                source_weights=src_weights,
+                                                source_joints=src_joints,
+                                                target_weights=new_weights,
+                                            )
+                                        return _interpolate_field_directed(
+                                            num_new_verts,
+                                            old_field,
+                                            new_verts,
+                                            use_tnb,
+                                            matched_face_idx,
+                                            bary_coords,
+                                            src_faces if use_tnb else None,
+                                            src_verts,
+                                            nearest_indices,
+                                            w_gauss,
+                                        )
+
+                                    inner_count = _apply_live_inner_blendshapes_mapped(
+                                        live_dup, live_info, _map_live_field, active_mask
+                                    )
+
+                                    iti_plug_live = iti_array_plug.elementByLogicalIndex(item_idx)
+                                    for ci in range(iti_plug_live.numChildren()):
+                                        child = iti_plug_live.child(ci)
+                                        if om2.MFnAttribute(child.attribute()).name == "inputGeomTarget":
+                                            cmds.connectAttr(
+                                                f"{ld_shapes[0]}.worldMesh[0]",
+                                                child.name(),
+                                                force=True,
+                                            )
+                                            break
+                                    bs_count += 1 + inner_count
+                                    continue
+                                except Exception as exc:
+                                    logger.warning("Live BS directed 复刻失败 %s.%s: %s", new_mesh, tgt["name"], exc)
 
                             # 写入 delta 到 BS plug
                             norms_d = np.linalg.norm(new_delta, axis=1)
@@ -1018,8 +1722,8 @@ def _extract_blendshape_data(rig_dag):
             try:
                 wi = int(attr_ref.split("[")[1].rstrip("]"))
                 idx_to_name[wi] = alias_list[i]
-            except:
-                pass
+            except Exception as exc:
+                logger.debug("BlendShape alias 解析跳过 %s.%s: %s", bs_node, attr_ref, exc)
         
         targets = []
         for t_idx in target_indices:
@@ -1031,8 +1735,8 @@ def _extract_blendshape_data(rig_dag):
             weight_val = 0.0
             try:
                 weight_val = cmds.getAttr(attr_path)
-            except:
-                pass
+            except Exception as exc:
+                logger.debug("BlendShape 权重读取失败 %s: %s", attr_path, exc)
             in_conns = cmds.listConnections(attr_path, source=True, destination=False, plugs=True) or []
             
             tgt_plug = itg_plug.elementByLogicalIndex(t_idx)
@@ -1069,10 +1773,10 @@ def _extract_blendshape_data(rig_dag):
                             if not comp_data.isNull():
                                 fn_comp_list = om2.MFnComponentListData(comp_data)
                                 for ci in range(fn_comp_list.length()):
-                                    fn_si = om2.MFnSingleIndexedComponent(fn_comp_list[ci])
+                                    fn_si = om2.MFnSingleIndexedComponent(fn_comp_list.get(ci))
                                     ids.extend(fn_si.getElements())
-                        except:
-                            pass
+                        except Exception as exc:
+                            logger.warning("BlendShape component target 解析失败 %s.%s[%s]: %s", bs_node, t_name, item_idx, exc)
                         
                         if ids and len(ids) == len(pts):
                             for i, vid in enumerate(ids):
@@ -1087,68 +1791,86 @@ def _extract_blendshape_data(rig_dag):
                             for i in range(min(len(pts), num_base)):
                                 sparse_delta[i] = [pts[i].x, pts[i].y, pts[i].z]
                             has_data = np.any(np.abs(sparse_delta) > 1e-7)
-                except:
-                    pass
+                except Exception as exc:
+                    logger.warning("BlendShape static target 提取失败 %s.%s[%s]: %s", bs_node, t_name, item_idx, exc)
                 
-                # Live Target 检测与深度信息采集
-                if not has_data:
-                    try:
-                        igt_plug = None
-                        for ci in range(iti_plug.numChildren()):
-                            child = iti_plug.child(ci)
-                            attr_name = om2.MFnAttribute(child.attribute()).name
-                            if attr_name == "inputGeomTarget":
-                                igt_plug = child
-                                break
-                        
-                        if igt_plug and igt_plug.isConnected:
-                            conns = cmds.listConnections(igt_plug.name(), source=True, destination=False, shapes=True) or []
-                            if conns:
-                                live_shape = conns[0]
-                                sel_live = om2.MSelectionList()
-                                sel_live.add(live_shape)
-                                fn_live = om2.MFnMesh(sel_live.getDagPath(0))
-                                live_pts = fn_live.getPoints(om2.MSpace.kObject)
-                                
-                                for vi in range(min(num_base, len(live_pts))):
-                                    sparse_delta[vi] = [
-                                        live_pts[vi].x - base_pts[vi].x,
-                                        live_pts[vi].y - base_pts[vi].y,
-                                        live_pts[vi].z - base_pts[vi].z
-                                    ]
-                                has_data = True
-                                
-                                # 采集 Live Mesh 的蒙皮数据（深度复刻用）
-                                live_tr = cmds.listRelatives(live_shape, parent=True, fullPath=True)
-                                live_skin_info = None
-                                if live_tr:
-                                    lsk, lsh = _find_skin_cluster(live_tr[0])
-                                    if lsk:
-                                        try:
-                                            lj = cmds.skinCluster(lsk, query=True, influence=True)
-                                            sel_lsk = om2.MSelectionList()
-                                            sel_lsk.add(lsk)
-                                            fn_lsk = oma2.MFnSkinCluster(sel_lsk.getDependNode(0))
-                                            sel_lsh = om2.MSelectionList()
-                                            sel_lsh.add(lsh)
-                                            ld = sel_lsh.getDagPath(0)
-                                            lnv = om2.MFnMesh(ld).numVertices
-                                            lcomp = om2.MFnSingleIndexedComponent().create(om2.MFn.kMeshVertComponent)
-                                            om2.MFnSingleIndexedComponent(lcomp).setCompleteData(lnv)
-                                            lw, _ = fn_lsk.getWeights(ld, lcomp)
-                                            live_skin_info = {
-                                                "joints": lj,
-                                                "weights": np.array(lw).reshape(lnv, len(lj))
-                                            }
-                                        except:
-                                            pass
-                                live_info = {
-                                    "transform": live_tr[0] if live_tr else None,
-                                    "shape": live_shape,
-                                    "skin": live_skin_info,
-                                }
-                    except:
-                        pass
+                # Live Target 检测与深度信息采集。
+                # 即使 Maya 同时写入了 inputPointsTarget，也必须保留 inputGeomTarget 连接，
+                # 否则 live target 自身的 skinCluster/驱动链会被误降级成静态 delta。
+                try:
+                    igt_plug = None
+                    for ci in range(iti_plug.numChildren()):
+                        child = iti_plug.child(ci)
+                        attr_name = om2.MFnAttribute(child.attribute()).name
+                        if attr_name == "inputGeomTarget":
+                            igt_plug = child
+                            break
+
+                    if igt_plug and igt_plug.isConnected:
+                        conns = cmds.listConnections(igt_plug.name(), source=True, destination=False, shapes=True) or []
+                        if conns:
+                            live_shape = conns[0]
+                            sel_live = om2.MSelectionList()
+                            sel_live.add(live_shape)
+                            fn_live = om2.MFnMesh(sel_live.getDagPath(0))
+                            live_pts = fn_live.getPoints(om2.MSpace.kObject)
+                            live_counts, live_indices = fn_live.getVertices()
+                            live_vertices = np.asarray(
+                                [[p.x, p.y, p.z] for p in live_pts],
+                                dtype=np.float64,
+                            )
+
+                            live_delta = np.zeros((num_base, 3), dtype=np.float64)
+                            for vi in range(min(num_base, len(live_pts))):
+                                live_delta[vi] = [
+                                    live_pts[vi].x - base_pts[vi].x,
+                                    live_pts[vi].y - base_pts[vi].y,
+                                    live_pts[vi].z - base_pts[vi].z
+                                ]
+                            sparse_delta = live_delta
+                            has_data = np.any(np.abs(sparse_delta) > 1e-7)
+
+                            # 采集 Live Mesh 的蒙皮数据（深度复刻用）
+                            live_tr = cmds.listRelatives(live_shape, parent=True, fullPath=True)
+                            live_skin_info = None
+                            inner_blendshapes = []
+                            if live_tr:
+                                lsk, lsh = _find_skin_cluster(live_tr[0])
+                                if lsk:
+                                    try:
+                                        lj = cmds.skinCluster(lsk, query=True, influence=True)
+                                        sel_lsk = om2.MSelectionList()
+                                        sel_lsk.add(lsk)
+                                        fn_lsk = oma2.MFnSkinCluster(sel_lsk.getDependNode(0))
+                                        sel_lsh = om2.MSelectionList()
+                                        sel_lsh.add(lsh)
+                                        ld = sel_lsh.getDagPath(0)
+                                        lnv = om2.MFnMesh(ld).numVertices
+                                        lcomp = om2.MFnSingleIndexedComponent().create(om2.MFn.kMeshVertComponent)
+                                        om2.MFnSingleIndexedComponent(lcomp).setCompleteData(lnv)
+                                        lw, _ = fn_lsk.getWeights(ld, lcomp)
+                                        live_skin_info = {
+                                            "joints": lj,
+                                            "weights": np.array(lw).reshape(lnv, len(lj))
+                                        }
+                                    except Exception as exc:
+                                        logger.warning("Live BS skin 提取失败 %s: %s", live_tr[0], exc)
+                                inner_blendshapes = _extract_live_inner_blendshapes(
+                                    live_tr[0], rig_dag, attr_path
+                                )
+                            live_info = {
+                                "transform": live_tr[0] if live_tr else None,
+                                "shape": live_shape,
+                                "skin": live_skin_info,
+                                "inner_blendshapes": inner_blendshapes,
+                                "geometry": {
+                                    "vertices": live_vertices,
+                                    "face_counts": list(live_counts),
+                                    "face_indices": list(live_indices),
+                                },
+                            }
+                except Exception as exc:
+                    logger.warning("Live BS target 提取失败 %s.%s[%s]: %s", bs_node, t_name, item_idx, exc)
                 
                 if not has_data:
                     continue
@@ -1348,7 +2070,7 @@ def execute(payload: dict) -> dict:
     items = []
     external_report = None
     sync_md_content = ""
-    sync_report_sections = []
+    sync_output_details = {}
     all_new_nodes = []
     action_counts = {}
 
@@ -1430,18 +2152,32 @@ def execute(payload: dict) -> dict:
             dag for dag, entry in rig_meshes.items()
             if int(entry.get("vertices") or 0) <= 0 or not entry.get("vert_positions")
         ]
+        # 采不到 ShapeOrig 的件（未绑定 / origin 坏；二者等价：都无权重可传）。
+        # 几何-only 模式（transfer_weights=False）不再整步回滚，改判为"从 tex 重建、不绑定"
+        # （Phase 3 分发处消费 unbound_rig_dags 完成改判）。
+        # 绑定模式仍依赖有效 origin 做权重/BS 传递，维持原审计闸，不在本次放行范围。
+        geom_only = not bool(profile.get("transfer_weights", True))
+        unbound_rig_dags = set()
         if empty_rig_dags:
-            cmds.undoInfo(closeChunk=True)
-            cmds.undo()
-            return _sync_receipt(
-                "AUDIT_FAILED", t0, "target_collect",
-                error=(
-                    "target rig 中存在无法采集 ShapeOrig 几何的 mesh，已撤销本步。"
-                    f"问题节点: {empty_rig_dags[:20]}"
-                ),
-                items=items,
-                recovery_hint="先运行 Shape/Orig 清理 workflow 或 maya_fix_shape_names，再重新生成 compare_result 后执行 sync。",
-            )
+            if geom_only:
+                unbound_rig_dags = set(empty_rig_dags)
+                items.append(make_item(
+                    "target_collect",
+                    f"{len(empty_rig_dags)} 个 rig 件采不到 ShapeOrig（未绑定/origin 坏）→ 改判从 tex 重建；"
+                    f"样例: {[d.split('|')[-1] for d in empty_rig_dags[:8]]}"
+                ))
+            else:
+                cmds.undoInfo(closeChunk=True)
+                cmds.undo()
+                return _sync_receipt(
+                    "AUDIT_FAILED", t0, "target_collect",
+                    error=(
+                        "target rig 中存在无法采集 ShapeOrig 几何的 mesh，已撤销本步。"
+                        f"问题节点: {empty_rig_dags[:20]}"
+                    ),
+                    items=items,
+                    recovery_hint="先运行 Shape/Orig 清理 workflow 或 maya_fix_shape_names，再重新生成 compare_result 后执行 sync。",
+                )
 
         # ── 获取同步指令：只消费前置 compare_result ──
         if external_report is not None:
@@ -1451,7 +2187,7 @@ def execute(payload: dict) -> dict:
         pairing_groups = report["pairing_groups"]
         target_only_dags = report["target_only_dags"]
         action_counts = summarize_sync_actions(report)
-        sync_report_sections = build_sync_report_sections(
+        sync_output_details = build_sync_output_details(
             report,
             action_counts,
             compare_result_path=compare_result_path,
@@ -1733,12 +2469,23 @@ def execute(payload: dict) -> dict:
             raise RuntimeError(f"compare_result action 未被 sync 分发: group={gid}, action={action}")
 
         # ── target_only：rig 独有，原位保留（不删！）──
+        # 例外（几何-only）：采不到 ShapeOrig 的未绑定件(unbound_rig_dags)无权重可留，
+        # 其几何已由 tex 侧 UNPAIRED 在 cache 重建；此处删除旧件，避免 RIG_geo 残留
+        # 与 cache 重建件几何重复（去重闸只查 cache 干净路径，看不见 RIG_ 前缀那份）。
         for tod in target_only_dags:
             rig_full = _translate_rig(tod)
             if not rig_full:
                 continue
             reused_rig_dags.add(rig_full)  # 防止被当 super mesh 源
             transform = cmds.listRelatives(rig_full, parent=True, fullPath=True)
+            if rig_full in unbound_rig_dags:
+                if transform and cmds.objExists(transform[0]):
+                    try:
+                        cmds.delete(transform[0])
+                    except Exception:
+                        pass
+                items.append(make_item(tod.split("|")[-1], "target_only(未绑定): 删除，几何交由 tex 重建"))
+                continue
             if transform and cmds.objExists(transform[0]):
                 target_only_rig_nodes.append(transform[0])
             items.append(make_item(tod.split("|")[-1], "target_only: 原位保留"))
@@ -1779,7 +2526,8 @@ def execute(payload: dict) -> dict:
             items.append(make_item("Chamfer 自动配对", f"为 {len(auto_pairings)} 个 mesh 找到定向投射源"))
 
         # ── Phase 4: 空间包裹与新节点创建 ──
-        _plog(f"Phase4: create {len(voting_pool_tex)} new meshes + weight transfer")
+        transfer_weights = bool(profile.get("transfer_weights", True))
+        _plog(f"Phase4: create {len(voting_pool_tex)} new meshes (transfer_weights={transfer_weights})")
         sync_nodes = []
         new_nodes = []
 
@@ -1805,6 +2553,12 @@ def execute(payload: dict) -> dict:
                 group_records[_gid]["abc_nodes"].append(new_mesh)
             elif tex_data.get("_unpaired"):
                 unpaired_nodes.append(new_mesh)
+
+            # 按配置跳过权重/BS 复刻：只搭几何，网格未绑定，交给绑定师手绑
+            if not transfer_weights:
+                new_nodes.append(new_mesh)
+                items.append(make_item(target_name, "GEOM ONLY: 跳过权重/BS 复刻（transfer_weights=False），网格未绑定"))
+                continue
 
             paired_rig_dag = tex_data.get("_paired_rig_dag")
 
@@ -2021,6 +2775,7 @@ def execute(payload: dict) -> dict:
                                                 
                                                 d_val = old_delta[l_ok] * w_val[:, None]
                                                 np.add.at(new_delta, i_ok, d_val)
+                                        live_delta_raw = new_delta.copy()
                                         
                                         # -------------------------------------------------------------
                                         # [终极防御] 拓扑保边平滑 (BS Delta 同频平滑)
@@ -2031,25 +2786,29 @@ def execute(payload: dict) -> dict:
                                         # ── Live Target 深度复刻 ──
                                         if live_info and live_info.get("transform"):
                                             try:
-                                                live_dup = cmds.duplicate(new_mesh, name=f"{target_name}_live_{t_idx}")[0]
-                                                sel_ld = om2.MSelectionList()
+                                                active_mask = np.linalg.norm(live_delta_raw, axis=1) > 1e-7
+                                                live_dup = _duplicate_clean_mesh(new_mesh, f"{target_name}_live_{t_idx}")
                                                 ld_shapes = cmds.listRelatives(live_dup, shapes=True, fullPath=True, noIntermediate=True)
+                                                if not ld_shapes:
+                                                    raise RuntimeError("live duplicate 缺少可见 shape")
+                                                sel_ld = om2.MSelectionList()
                                                 sel_ld.add(ld_shapes[0])
                                                 fn_ld = om2.MFnMesh(sel_ld.getDagPath(0))
                                                 base_live_pts = fn_ld.getPoints(om2.MSpace.kObject)
                                                 for vi in range(min(num_new_verts, len(base_live_pts))):
-                                                    base_live_pts[vi].x += new_delta[vi][0]
-                                                    base_live_pts[vi].y += new_delta[vi][1]
-                                                    base_live_pts[vi].z += new_delta[vi][2]
+                                                    base_live_pts[vi].x += live_delta_raw[vi][0]
+                                                    base_live_pts[vi].y += live_delta_raw[vi][1]
+                                                    base_live_pts[vi].z += live_delta_raw[vi][2]
                                                 fn_ld.setPoints(base_live_pts, om2.MSpace.kObject)
                                                 
-                                                # 如果旧活体有蒙皮，投射权重到新活体
+                                                # 如果旧活体有蒙皮，active 区域清空 body 权重后写入 live 权重。
                                                 live_skin = live_info.get("skin")
                                                 if live_skin and live_skin.get("joints"):
-                                                    l_joints = [j for j in live_skin["joints"] if cmds.objExists(j)]
-                                                    l_weights = live_skin["weights"]
+                                                    old_live_joints = list(live_skin["joints"])
+                                                    l_joints = [j for j in old_live_joints if cmds.objExists(j)]
+                                                    l_weights = np.asarray(live_skin["weights"], dtype=np.float64)
                                                     if l_joints and l_weights.shape[0] > 0:
-                                                        l_joint_idx = {j: i for i, j in enumerate(live_skin["joints"])}
+                                                        l_joint_idx = {j: i for i, j in enumerate(old_live_joints)}
                                                         live_new_w = np.zeros((num_new_verts, len(l_joints)), dtype=np.float64)
                                                         for li, lj in enumerate(l_joints):
                                                             oi = l_joint_idx.get(lj, -1)
@@ -2063,37 +2822,33 @@ def execute(payload: dict) -> dict:
                                                                     w_v = w_gauss[i_ok, k_ok]
                                                                     sw_v = l_weights[l_ok, oi] * w_v
                                                                     np.add.at(live_new_w[:, li], i_ok, sw_v)
-                                                                    
-                                                        # -------------------------------------------------------------
-                                                        # [终极防御] 拓扑保边平滑 (Live Target 权重同频)
-                                                        # -------------------------------------------------------------
-                                                        if len(adj_list) > 0:
-                                                            live_new_w = _topological_smooth(num_new_verts, adj_list, live_new_w, iterations=30, blend=0.5)
-                                                            
-                                                        live_new_w[live_new_w < 0.01] = 0.0
-                                                        
-                                                        lrs = live_new_w.sum(axis=1, keepdims=True)
-                                                        lrs[lrs == 0] = 1.0
-                                                        live_new_w /= lrs
-                                                        
-                                                        l_active = np.where(live_new_w.max(axis=0) > 0.0)[0]
-                                                        if len(l_active) > 0:
-                                                            l_bind = [l_joints[c] for c in l_active]
-                                                            l_cw = live_new_w[:, l_active]
-                                                            l_sk = cmds.skinCluster(live_dup, l_bind, toSelectedBones=True,
-                                                                                    bindMethod=0, skinMethod=0, normalizeWeights=1,
-                                                                                    name=live_dup + "_skinCluster")[0]
-                                                            sel_lsk = om2.MSelectionList()
-                                                            sel_lsk.add(l_sk)
-                                                            fn_lsk = oma2.MFnSkinCluster(sel_lsk.getDependNode(0))
-                                                            sel_lsh2 = om2.MSelectionList()
-                                                            sel_lsh2.add(ld_shapes[0])
-                                                            l_dag = sel_lsh2.getDagPath(0)
-                                                            l_nv = om2.MFnMesh(l_dag).numVertices
-                                                            l_comp = om2.MFnSingleIndexedComponent().create(om2.MFn.kMeshVertComponent)
-                                                            om2.MFnSingleIndexedComponent(l_comp).setCompleteData(l_nv)
-                                                            l_inf = om2.MIntArray(list(range(len(l_bind))))
-                                                            fn_lsk.setWeights(l_dag, l_comp, l_inf, om2.MDoubleArray(l_cw.flatten().tolist()))
+
+                                                        active_mask = active_mask & (live_new_w.sum(axis=1) > 1e-8)
+                                                        live_union_joints, live_union_w = compose_live_target_weights(
+                                                            union_joints,
+                                                            new_weights,
+                                                            l_joints,
+                                                            live_new_w,
+                                                            active_mask,
+                                                        )
+                                                        _bind_mesh_weights(
+                                                            live_dup,
+                                                            live_dup + "_skinCluster",
+                                                            live_union_joints,
+                                                            live_union_w,
+                                                        )
+
+                                                local_v_for_live = local_v if len(i_idx) > 0 else np.asarray([], dtype=np.int64)
+                                                inner_count = _apply_live_inner_blendshapes(
+                                                    live_dup,
+                                                    live_info,
+                                                    num_new_verts,
+                                                    i_idx,
+                                                    k_idx,
+                                                    local_v_for_live,
+                                                    w_gauss,
+                                                    active_mask,
+                                                )
                                                 
                                                 iti_plug_live = iti_array_plug.elementByLogicalIndex(item_idx)
                                                 for ci in range(iti_plug_live.numChildren()):
@@ -2103,9 +2858,10 @@ def execute(payload: dict) -> dict:
                                                         if live_out_shapes:
                                                             cmds.connectAttr(f"{live_out_shapes[0]}.worldMesh[0]", child.name(), force=True)
                                                         break
+                                                bs_transferred += 1 + inner_count
                                                 continue
-                                            except Exception:
-                                                pass
+                                            except Exception as exc:
+                                                logger.warning("Live BS global 复刻失败 %s.%s: %s", new_mesh, tgt["name"], exc)
                                         
                                         # 写入静态 delta
                                         norms = np.linalg.norm(new_delta, axis=1)
@@ -2250,7 +3006,7 @@ def execute(payload: dict) -> dict:
             items=items,
             recovery_hint="查看统一任务报告中的 sync items 和 worker 日志，优先定位最后一个 Phase 日志。",
             report_content=sync_md_content,
-            report_sections=sync_report_sections,
+            output=sync_output_details,
         )
 
     cmds.undoInfo(closeChunk=True)
@@ -2269,6 +3025,7 @@ def execute(payload: dict) -> dict:
             "scene": "current_maya_scene",
             "actions": action_counts,
             "new_node_count": len(all_new_nodes),
+            **sync_output_details,
         },
         summary_action=format_action_summary(action_counts),
         summary_count=len(all_new_nodes),
@@ -2276,5 +3033,4 @@ def execute(payload: dict) -> dict:
         items=items,
         outputs={},
         report_content=sync_md_content,
-        report_sections=sync_report_sections,
     )

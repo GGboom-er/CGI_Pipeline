@@ -19,10 +19,10 @@ def test_workflow_presync_order():
     wf = json.loads(WORKFLOW.read_text(encoding="utf-8"))
     steps = wf["steps"]
     order = {step["step_id"]: index for index, step in enumerate(steps)}
-    _ok(order["check_hierarchy_pre"] < order["fix_hierarchy_pre"] < order["check_hierarchy_ready"],
-        "check/fix/check 在 compare 前形成闭环")
-    _ok(order["check_hierarchy_ready"] < order["compare_pre"] < order["sync"],
-        "层级归一化发生在 compare/sync 之前")
+    _ok("check_hierarchy_ready" not in order,
+        "不再保留拼装前第二次层级检查")
+    _ok(order["check_hierarchy_pre"] < order["fix_hierarchy_pre"] < order["compare_pre"] < order["sync"] < order["check_hierarchy_post"],
+        "层级流程为 check/fix/compare/sync/check")
 
     check_pre = steps[order["check_hierarchy_pre"]]
     _ok(check_pre.get("source_path") == "{{outputs.resolve_files.result.rig_path}}",
@@ -31,6 +31,16 @@ def test_workflow_presync_order():
         "预检查使用 pre_sync 阶段")
     _ok(check_pre["parameters"].get("block_extra_top_nodes") is False,
         "预检查不把额外顶层节点作为阻断项")
+
+    fix_pre = steps[order["fix_hierarchy_pre"]]
+    _ok(fix_pre["parameters"].get("delete_extra_top_nodes") is True,
+        "fix 会删除 check 判定为 safe 的顶层残渣")
+
+    check_post = steps[order["check_hierarchy_post"]]
+    _ok(check_post["parameters"].get("phase") == "post_sync",
+        "拼装后检查使用 post_sync 阶段")
+    _ok(check_post["parameters"].get("block_extra_top_nodes") is False,
+        "拼装后检查仍只报告额外顶层节点")
 
     compare_pre = steps[order["compare_pre"]]
     sync = steps[order["sync"]]
@@ -51,6 +61,7 @@ def test_check_outputs_presync_facts():
         "safe_delete_top_nodes",
         "manual_review_top_nodes",
         "block_extra_top_nodes",
+        "displayPoints",
         'phase == "pre_sync"',
     ):
         _ok(token in source, f"check 输出/使用 {token}")

@@ -107,7 +107,7 @@ def execute(payload: dict) -> dict:
     current_scene = cmds.file(query=True, sceneName=True) or ''
     scene_name = os.path.basename(current_scene or save_path or 'untitled')
 
-    if not current_scene:
+    if not current_scene and not save_path:
         return make_receipt(
             'save_scene', 'ERROR', t0,
             summary_input='untitled',
@@ -122,9 +122,9 @@ def execute(payload: dict) -> dict:
         save_path = os.path.join(base_dir, save_path)
 
     save_path = save_path.replace('\\', '/')
-    current_scene_norm = current_scene.replace('\\', '/')
+    current_scene_norm = current_scene.replace('\\', '/') if current_scene else ''
 
-    if is_protected_path(save_path) or is_protected_path(current_scene):
+    if is_protected_path(save_path) or (current_scene and is_protected_path(current_scene)):
         blocked_target = save_path if is_protected_path(save_path) else current_scene
         return make_receipt(
             'save_scene', 'BLOCKED', t0,
@@ -134,7 +134,7 @@ def execute(payload: dict) -> dict:
             outputs={'result': {'blocked_target': blocked_target}},
         )
 
-    if not _is_under_project_sandbox(current_scene_norm):
+    if current_scene and not _is_under_project_sandbox(current_scene_norm):
         return make_receipt(
             'save_scene', 'BLOCKED', t0,
             summary_input=scene_name,

@@ -103,13 +103,10 @@ def format_compare_summary(report: dict) -> str:
     )
 
 
-def build_compare_report_sections(report, info_source_path, info_target_path,
-                                  label_source, label_target,
-                                  source_file, target_file) -> list:
-    """把 compare 结果转成统一报告可渲染的结构化折叠段。
-
-    这里不写文件，也不改变 compare_result 机器契约；只服务 receipt.report_sections。
-    """
+def build_compare_output_details(report, info_source_path, info_target_path,
+                                 label_source, label_target,
+                                 source_file, target_file) -> dict:
+    """把 compare 结果转成 receipt.output 可渲染的短明细。"""
     paired = report.get("paired", []) or []
     only_source = report.get("only_a", []) or []
     only_target = report.get("only_b", []) or []
@@ -145,77 +142,35 @@ def build_compare_report_sections(report, info_source_path, info_target_path,
     source_label = label_source or "source"
     target_label = label_target or "target"
 
-    overview = [
-        "| 项目 | 数量 |",
-        "|---|---|",
-        f"| {_report_label('metrics', 'paired')} | {n_paired} |",
-        f"| {_report_label('metrics', 'identical')} | {n_identical} |",
-        f"| {_report_label('metrics', 'matched_different')} | {n_matched} |",
-        f"| {_report_label('metrics', 'only_source')} | {n_only_source} |",
-        f"| {_report_label('metrics', 'only_target')} | {n_only_target} |",
-    ]
-    for key in ("MODIFIED", "MERGE", "SPLIT"):
-        if action_counts.get(key):
-            overview.append(f"| {_report_label('metrics', key)} | {action_counts[key]} |")
-
-    source_lines = [
-        f"- **{source_label} 源文件**: `{source_file or '-'}`",
-        f"- **{source_label} 数据**: `{info_source_path or '-'}`",
-        f"- **{target_label} 源文件**: `{target_file or '-'}`",
-        f"- **{target_label} 数据**: `{info_target_path or '-'}`",
-    ]
-
-    sections = [
-        {
-            "title": "对比来源",
-            "summary": f"{source_label} vs {target_label}",
-            "content": "\n".join(source_lines),
-        },
-        {
-            "title": "对比概览",
-            "summary": (
-                f"{_report_label('metrics', 'paired')}={n_paired} "
-                f"{_report_label('metrics', 'identical')}={n_identical} "
-                f"{_report_label('metrics', 'matched_different')}={n_matched} "
-                f"{_report_label('metrics', 'only_source')}={n_only_source} "
-                f"{_report_label('metrics', 'only_target')}={n_only_target}"
-            ),
-            "content": "\n".join(overview),
-        },
-        {
-            "title": _report_label("metrics", "identical"),
-            "summary": f"{n_identical} 项",
-            "items": identical_items,
-        },
-        {
-            "title": _report_label("metrics", "matched_different"),
-            "summary": f"{n_matched} 项",
-            "items": matched_different_items,
-        },
-        {
-            "title": _report_label("metrics", "only_source"),
-            "summary": f"{n_only_source} 项",
-            "items": only_source_items,
-        },
-        {
-            "title": _report_label("metrics", "only_target"),
-            "summary": f"{n_only_target} 项",
-            "items": only_target_items,
-        },
-    ]
+    details = {
+        "matched_total": n_paired,
+        "action_counts": action_counts,
+        "compare_sources": [
+            {
+                "role": source_label,
+                "source_file": source_file or "",
+                "data_path": info_source_path or "",
+            },
+            {
+                "role": target_label,
+                "source_file": target_file or "",
+                "data_path": info_target_path or "",
+            },
+        ],
+        "matched_same_items": identical_items,
+        "matched_different_items": matched_different_items,
+        "only_source_items": only_source_items,
+        "only_target_items": only_target_items,
+    }
 
     hierarchy = report.get("hierarchy") or {}
     if hierarchy:
-        sections.append({
-            "title": "层级匹配",
-            "summary": f"名称一致 {hierarchy.get('matched', 0)} 项",
-            "content": "\n".join([
-                f"- **名称一致**: {hierarchy.get('matched', 0)}",
-                f"- **仅 {source_label}**: {len(hierarchy.get('only_a', []) or [])}",
-                f"- **仅 {target_label}**: {len(hierarchy.get('only_b', []) or [])}",
-            ]),
-        })
-    return sections
+        details["hierarchy_match"] = {
+            "matched": hierarchy.get("matched", 0),
+            "only_source": len(hierarchy.get("only_a", []) or []),
+            "only_target": len(hierarchy.get("only_b", []) or []),
+        }
+    return details
 
 
 def resolve_compare_result_path(payload, params, input_source, input_target):
@@ -302,10 +257,10 @@ def generate_report(report, info_source_path, info_target_path, label_source, la
     paired = report["paired"]
     only_source = report["only_a"]
     only_target = report["only_b"]
-    total = report["total_issues"]
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
 
-    status = "PASS" if total == 0 else "FAIL"
+    # 用户可见状态按当前四类事实判断；ORIG_INJECT 是可接受配对，不算失败。
+    status = "PASS" if summarize_compare_outcomes(report)["blocking"] == 0 else "FAIL"
 
     n_identical = sum(1 for p in paired if p.get("actionability") == "IDENTICAL")
     n_orig_inject = sum(1 for p in paired if p.get("actionability") == "ORIG_INJECT")

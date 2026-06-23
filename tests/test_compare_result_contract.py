@@ -66,6 +66,8 @@ def test_compare_result_output_contract():
         _ok(receipt.get("summary", {}).get("output_count") == 0, "用户视角无阻断问题")
         _ok(receipt.get("summary", {}).get("output_label") == "问题", "摘要数量单位为问题")
         _ok("完成配对" in receipt.get("summary", {}).get("action", ""), "摘要使用用户视角中文")
+        _ok("资产对比 PASS" in receipt.get("report_content", ""), "旧 Markdown 标题也按用户视角 PASS")
+        _ok("资产对比 FAIL" not in receipt.get("report_content", ""), "旧 Markdown 不把 ORIG_INJECT 误报为 FAIL")
         report = data.get("compare", {})
         _ok("pairing_groups" in report, "包含 pairing_groups")
         _ok("target_only_dags" in report, "包含 target_only_dags")
@@ -73,15 +75,13 @@ def test_compare_result_output_contract():
         _ok(outputs.get("output_path") == output_path, "receipt.outputs 保留 output_path")
         _ok(outputs.get("compare_result", {}).get("schema_version") == "compare_result.v1",
             "receipt.outputs 直接暴露 compare_result dict")
-        for key in ("matched_same", "matched_different", "only_source", "only_target"):
+        for key in ("matched_total", "matched_same", "matched_different", "only_source", "only_target"):
             _ok(key in outputs, f"receipt.outputs 包含报告字段: {key}")
-        sections = receipt.get("report_sections") or []
-        section_titles = [section.get("title") for section in sections]
-        overview = next((section for section in sections if section.get("title") == "对比概览"), {})
-        _ok(bool(sections), "receipt 包含 report_sections")
-        _ok("完成配对" in str(overview.get("summary", "")), "对比概览使用中文配置标签")
-        for title in ("通过配对", "几何差异", "源侧独有", "目标独有"):
-            _ok(title in section_titles, f"包含结构化章节: {title}")
+        _ok("report_sections" not in receipt, "receipt 不再返回 report_sections")
+        _ok(outputs.get("compare_sources"), "对比来源写入 output.compare_sources")
+        _ok(outputs.get("matched_same_items"), "通过配对明细写入 output.matched_same_items")
+        for key in ("matched_different_items", "only_source_items", "only_target_items"):
+            _ok(key in outputs, f"receipt.outputs 包含短明细字段: {key}")
 
 
 def test_compare_result_defaults_to_info_dir():

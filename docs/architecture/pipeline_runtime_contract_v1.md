@@ -1,12 +1,12 @@
 # CGI Pipeline 运行时总规范 v1
 
-更新时间: 2026-05-13
+更新时间: 2026-05-14
 
-本文档定义 CGI Pipeline 中 AI 调用、CLI 调用、Dashboard 调用和自动任务调用共同遵守的运行时契约。后续所有 skill、workflow、MCP Tool 和报告系统都以本文档为准。
+本文档只定义 CGI Pipeline 的运行时边界：AI、CLI、Dashboard、workflow、sandbox、worker 和报告如何协同。上下文恢复入口看 `docs/ai_startup/02_KNOWLEDGE_BASE.md`；skill 生成、更新和输出规则只看 `skills/build_pipeline_skill/SKILL.md`；`REPORT.md` 渲染细节看 `runtime_task_report.md`。
 
 ## 1. 核心目标
 
-CGI Pipeline 的目标不是只让 AI 知道怎么执行任务，而是让同一套任务能稳定地脱离 AI 运行。
+CGI Pipeline 的目标是让同一套任务能稳定脱离 AI 运行。
 
 系统必须同时支持：
 
@@ -17,22 +17,20 @@ CGI Pipeline 的目标不是只让 AI 知道怎么执行任务，而是让同一
 
 同一个任务在不同入口下应使用同一套 skill、workflow、receipt、audit、report 和 sandbox 规则。
 
-## 2. 用户使用逻辑
+## 2. 标准任务流
 
-用户只描述目标，不应手动拼中间路径。
-
-标准流程：
+用户只描述目标，不手动拼中间路径。
 
 ```text
 用户需求
-  -> 定位源资产或接收显式源路径
+  -> resolve_asset_files 定位或校验输入资产
   -> 创建任务沙盒
   -> 源文件进入沙盒
   -> 执行 workflow / chain / single skill
-  -> 写入机器中间产物
-  -> 写入最终输出
-  -> 生成统一 Markdown 报告
-  -> 返回任务结果
+  -> 机器中间产物写入 .info
+  -> 最终输出写入沙盒根目录
+  -> 写统一 REPORT.md
+  -> 返回任务状态、报告路径和最终产物路径
 ```
 
 三种执行模式：
@@ -47,39 +45,21 @@ CGI Pipeline 的目标不是只让 AI 知道怎么执行任务，而是让同一
 
 ## 3. 文件安全与沙盒
 
-### 3.1 源文件只读
+所有输入源文件都视为只读。禁止直接修改输入源文件；DCC 打开、修改、保存都只能针对沙盒副本。
 
-所有输入源文件都视为只读。不区分盘符、服务器、工作盘或本地路径。
-
-禁止直接修改输入源文件。任何 DCC 打开、修改、保存动作都只能针对沙盒副本。
-
-### 3.2 沙盒目录命名
-
-沙盒目录使用日期时间和资产名命名：
+沙盒目录：
 
 ```text
 projects/{project}/{YYYYMMDD_HHMMSS}_{asset_name}/
-```
-
-同一秒内同资产重复创建时追加序号：
-
-```text
 projects/{project}/{YYYYMMDD_HHMMSS}_{asset_name}_01/
-projects/{project}/{YYYYMMDD_HHMMSS}_{asset_name}_02/
 ```
 
-`task_id` 只作为内部调度 ID，可写入 `manifest.json` 和审计数据，不作为用户主要识别目录名。
-
-### 3.3 沙盒根目录内容
-
-沙盒根目录只放用户需要直接看到的任务结果：
+沙盒根目录只放用户需要直接看到的结果：
 
 - 输入源文件的沙盒副本
 - 最终输出文件
-- 统一 Markdown 报告
+- `REPORT.md`
 - `manifest.json`
-
-### 3.4 `.info` 目录内容
 
 所有机器中间产物必须写入：
 
@@ -87,71 +67,33 @@ projects/{project}/{YYYYMMDD_HHMMSS}_{asset_name}_02/
 {sandbox}/.info/
 ```
 
-包括：
+包括 `_info.json`、`.abc`、`_materials.json`、`compare_result.json`、workflow 解析索引和其他仅供下游节点消费的结构化数据。
 
-- `_info.json`
-- `.abc`
-- `_materials.json`
-- `compare_result.json`
-- workflow 解析后的机器索引
-- 其他仅供下游节点消费的结构化数据
+最终 Maya 场景使用现有版本递增规则，不追加 `_synced` 等语义后缀。正式发布到服务器由独立 `publish_asset` 类节点负责，不混入处理 workflow。
 
-`.info` 是机器数据目录，不是零散 debug 目录。
+## 4. 标准执行记录
 
-## 4. 最终输出命名
+每个 step 必须返回 `core.receipt.make_receipt(...)` 标准执行记录。完整字段规则只维护在 `skills/build_pipeline_skill/SKILL.md`，运行时只依赖以下边界：
 
-最终 Maya 场景使用现有版本递增规则，不额外追加 `_synced` 等语义后缀。
-
-示例：
-
-```text
-ysj_chr_mihouwang_rig_rigMaster_v007.ma
--> ysj_chr_mihouwang_rig_rigMaster_v008.ma
-```
-
-保存只发生在沙盒内。正式发布到服务器由独立 `publish_asset` 类节点负责，不混入处理 workflow。
-
-## 5. 标准执行记录与报告规则
-
-任务成功和失败都属于任务结果，必须进入同一份 Markdown 报告。
-
-禁止把 traceback、debug txt、临时报告散落在沙盒外或沙盒内多个文件中。
-
-从本规范开始，报告不再重新理解业务、不再重组自然语言结论。完整 skill 输入输出契约只维护在 `skills/build_pipeline_skill/SKILL.md`，本节只规定运行时边界：
-
-- 每个 step 必须返回 `make_receipt(...)` 标准执行记录。
 - workflow 只读取上游记录的 `output` 字段。
-- `REPORT.md` 只按记录顺序渲染 step 标题、`Details` 和必要错误信息。
-- 旧展示字段只用于历史兼容，不得作为新增 skill 的设计入口。
+- `input` 只用于审计和排障，不作为下游连接数据。
+- 新增或重构 skill 不得设计 `summary`、`items`、`report_content`、`report_sections` 等旧展示字段。
+- 大型机器对象写 `.info` 文件，`output` 只给路径、计数和关键明细。
 
-## 6. 机器数据与人工报告分离
+## 5. 报告边界
 
-机器消费的数据：
+任务成功和失败都必须进入同一份 `REPORT.md`。
 
-- JSON
-- ABC
-- 材质 JSON
-- compare_result
-- manifest
+规则：
 
-人工消费的数据：
-
-- Markdown 报告
-- 标准执行记录
-
-原则：
-
+- `REPORT.md` 按执行顺序渲染 step 标题、`Details` 和必要错误信息。
+- 报告不重新理解业务，不重组机器 JSON。
 - 下游 skill 不读 Markdown 报告。
-- 报告不承担机器数据传递职责。
-- `compare_result.json` 是机器契约，不是报告正文。
-- Workflow 下游只消费上游标准记录的 `output` 字段。
-- 例如 `{{outputs.compare_pre.output_path}}` 指向的是 `compare_pre` 记录里的 `output.output_path`。
+- 最终报告不得出现内部 `report:block` marker、`Raw Detail`、独立 `Input` / `Output` 大块或完整机器 JSON。
 
-## 7. Skill 运行时契约
+报告渲染规则见 `runtime_task_report.md`。
 
-完整 skill 构建规则只维护在 `skills/build_pipeline_skill/SKILL.md`。本运行时总规范不再复制 skill 文件结构、`SKILL.md`、`execute(payload)`、标准执行记录、DCC 约束等细节。
-
-## 8. Workflow 编排契约
+## 6. Workflow 编排契约
 
 Workflow 用 JSON 声明步骤：
 
@@ -164,11 +106,11 @@ Workflow 用 JSON 声明步骤：
 {
   "step_id": "compare_pre",
   "skill_id": "maya_compare_asset_in_scene",
-  "source_path": "{{outputs.resolve_files.rig_path}}",
+  "source_path": "{{outputs.resolve_files.result.rig_path}}",
   "parameters": {
     "input_source": "{{outputs.export_abc.output_path}}",
-    "output_path": "{{input.info_dir}}/{{outputs.resolve_files.rig_stem}}_pre_compare_result.json",
-    "cache_group": "{{config.stages.rig.geom_roots.0}}",
+    "output_path": "{{input.info_dir}}/{{outputs.resolve_files.result.rig_stem}}_pre_compare_result.json",
+    "cache_group": "{{outputs.fix_hierarchy_pre.result.active_rig_root}};{{config.stages.rig.geom_roots.0}}",
     "label_source": "tex",
     "label_target": "rig"
   }
@@ -177,21 +119,22 @@ Workflow 用 JSON 声明步骤：
 
 规则：
 
-- `skill_id` 必须等于 SKILL.md 中声明的 `skill_id`。
+- `skill_id` 必须等于对应 `SKILL.md` 中声明的 `skill_id`。
 - `step_id` 是 workflow 内部引用名。
-- `parameters` 只能传 skill 声明过的参数。
+- `parameters` 只传 skill 声明过的参数。
 - DCC 根节点、项目路径、组名等项目差异使用 `{{config...}}`。
 - 中间产物路径使用 `{{input.info_dir}}`。
-- 上游产物通过 `{{outputs.step_id.output_path}}` 传递。
-- 多字段结构化输出直接通过上游记录的 `output` 传递，例如 `{{outputs.resolve_files.source_path}}`。
-- 主对比/拼装 workflow 必须先执行 `resolve_asset_files`，只传资产名时由该节点查服务器最新 tex/rig；显式传 `source_path` / `extra_params.rig_path` 时由该节点校验后透传。
-- 未显式传中间产物输出路径时，skill 只能从任务沙盒 `.info` 推导；不能回退输入文件同目录。
+- 上游产物通过 `{{outputs.step_id.field}}` 传递；该表达式等于上游 receipt 的 `output.field`。
+- 多字段结构化输出也走 `output`，例如 `{{outputs.resolve_files.result.source_path}}`。
+- 主 workflow 必须先执行 `resolve_asset_files`；缺 tex/rig 时该节点返回 `ERROR` 和 `missing_inputs`，workflow 立即中断。
+- 不含 `resolve_asset_files`、但需要从资产名定位源文件的 workflow，必须在 workflow JSON 顶层声明 `source_resolution`，例如 `{"pipeline": "model", "ext_filter": [".blend"], "required": true}`。
+- workflow 的全局 `source_path` 只默认打开给首个分段；后续分段必须在 step 上显式声明 `source_path`。未声明时 DCC worker 从空场景开始，供 ABC 构建等新场景型节点使用。
+- Warm Pool worker 收到空 `source_path` 时必须调用对应 DCC 的新建空场景逻辑，避免复用上一任务的内存场景。
+- 未显式传中间产物输出路径时，skill 只能从任务沙盒 `.info` 推导，不能回退输入文件同目录。
 
-## 9. 参数命名规范
+## 7. 参数命名规范
 
-从本轮梳理开始，参数一次性统一，不再为旧命名增加新复杂度。
-
-推荐命名：
+新 workflow 和新 skill 使用节点化参数名：
 
 | 场景 | 参数 |
 |---|---|
@@ -207,109 +150,30 @@ Workflow 用 JSON 声明步骤：
 | asset info 输出路径 | `info_path` |
 | 材质 JSON | `materials_path` |
 
-旧命名如 `input_a/input_b`、`tex_json`、`label_a/label_b` 不再作为新 workflow 和文档的推荐形式。`abc_path` 仅作为 ABC 导出/导入类节点的业务参数；同步类节点使用 `source_abc`。
+旧命名如 `input_a/input_b`、`tex_json`、`label_a/label_b` 只做兼容，不作为新文档和新 workflow 的推荐形式。
 
-## 10. 对比与拼装标准数据流
+## 8. 当前主 workflow
 
-```text
-source DCC scene
-  -> source.abc
-  -> source_materials.json
-
-target rig scene
-  -> maya_compare_asset_in_scene 采集当前场景 ShapeOrig
-source.abc + target rig in-memory info
-  -> compare_result.json
-
-compare_result.json + source.abc
-  -> target rig 沙盒副本更新
-
-updated target rig
-  -> maya_compare_asset_in_scene 采集当前场景 ShapeOrig
-  -> post_compare_result.json
-  -> version-up scene
-```
-
-`maya_compare_asset_in_scene` 必须继续输出 `compare_result.json`。原因是该文件是 `maya_sync_rig_incremental` 的机器输入，记录完整 DAG、配对关系和动作类型；它不是给人工报告直接阅读的正文。
-
-`compare_result.json` 内部可以继续保留算法字段，例如 `paired`、`only_a`、`only_b`、`actionability`。这些字段服务于同步和审计，不作为主报告字段名。报告只展示标准执行记录 `output` 中整理后的四类字段。
-
-对比 skill 的标准执行记录中，`output` 只展示可读且可串联的核心字段：
-
-```json
-{
-  "skill": "maya_compare_asset_in_scene",
-  "input": {
-    "source_path": "Y:/.../ysj_chr_maYouA_rig_rigMaster_v001.ma",
-    "input_source": "Y:/.../.info/ysj_chr_maYouA_tex_texMaster_v001.abc",
-    "output_path": "Y:/.../.info/ysj_chr_maYouA_rig_rigMaster_v001_pre_compare_result.json",
-    "cache_group": "|Group|Geometry|cache;|*|geo",
-    "label_source": "tex",
-    "label_target": "rig"
-  },
-  "output": {
-    "output_path": "Y:/.../.info/ysj_chr_maYouA_rig_rigMaster_v001_pre_compare_result.json",
-    "matched_total": 25,
-    "matched_same": 24,
-    "matched_different": 1,
-    "only_source": 0,
-    "only_target": 0,
-    "matched_same_items": [
-      {
-        "source": "maYouA_M_eyebrow1Shape",
-        "target": "eyebrow_mshShape",
-        "action": "ORIG_INJECT"
-      }
-    ],
-    "matched_different_items": []
-  },
-  "status": "SUCCESS",
-  "elapsed_sec": 1.2
-}
-```
-
-四类对比输出定义：
-
-| 字段 | 含义 |
-|---|---|
-| `matched_same` | 数量：source 在 target 中找到可接受配对；包含 `IDENTICAL` 和 `ORIG_INJECT`，不算阻断问题 |
-| `matched_different` | 数量：source 在 target 中找到配对，但几何不同，需要后续处理或审查 |
-| `only_source` | 数量：只存在于 source，target 中没有对应对象 |
-| `only_target` | 数量：只存在于 target，source 中没有对应对象 |
-| `matched_same_items` | 可选明细：只放 source / target / action / layer 等核心字段 |
-| `matched_different_items` | 可选明细：只放需要审查的核心字段 |
-| `only_source_items` | 可选明细 |
-| `only_target_items` | 可选明细 |
-
-`matched_total` 只是 `matched_same + matched_different` 的数量。不要在报告里使用含义模糊的 `paired` / `identical` 作为主字段。
-
-旧字段解释：
-
-| 旧字段 | 实际含义 | 新报告字段 |
-|---|---|---|
-| `paired` | source 与 target 成功建立配对的总数；例如 `paired: 25` 表示 25 个 source mesh 找到了 target mesh | `matched_total` |
-| `identical` | 已配对且几何可直接接受的对象列表；包含算法层 `IDENTICAL` 和 `ORIG_INJECT` | `matched_same_items`，数量进入 `matched_same` |
-| `only_a` | 只在 source 侧存在 | `only_source_items`，数量进入 `only_source` |
-| `only_b` | 只在 target 侧存在 | `only_target_items`，数量进入 `only_target` |
-
-文件位置：
+当前主线是 `tex_to_rig_verify_and_sync`：
 
 ```text
-sandbox/
-  source scene copy
-  target scene copy
-  final version-up scene
-  REPORT.md
-  manifest.json
-  .info/
-    source_info.json
-    source.abc
-    source_materials.json
-    pre_compare_result.json
-    post_compare_result.json
+resolve_asset_files
+-> blender_export_abc
+-> blender_extract_materials
+-> maya_check_asset_hierarchy
+-> maya_fix_asset_hierarchy
+-> maya_compare_asset_in_scene
+-> maya_sync_rig_incremental
+-> maya_check_asset_hierarchy
+-> maya_fix_shape_names
+-> maya_apply_materials
+-> maya_compare_asset_in_scene
+-> save_scene
 ```
 
-## 11. Worker 健康检查
+对比、拼装、层级和 displayLayer 规则见 `compare_and_assembly_pipeline_plan.md`。
+
+## 9. Worker 健康检查
 
 后台提交任务前必须确认 Redis 与目标 Worker 可用。
 
@@ -326,16 +190,9 @@ sandbox/
 | blender | `blender_queue` | `cgi_blender@%h` |
 | workflow | `workflow_queue` | `cgi_workflow@%h` |
 
-若 PID 存活但队列心跳丢失，服务管理器应杀掉旧进程树并重新拉起对应 Worker。
+若 PID 存活但队列心跳丢失，服务管理器应杀掉旧进程树并重新拉起对应 Worker。心跳检查只用于服务可用性判断，不给 DCC 任务本身设置硬超时。
 
-可观测入口：
-
-- `pipeline_service_status`: 查看 Redis、PID 和队列心跳。
-- `pipeline_restart_worker`: 手动重启指定 Worker。
-
-心跳检查只用于服务可用性判断，不给 DCC 任务本身设置硬超时。
-
-## 12. 完成标准
+## 10. 完成标准
 
 一个 pipeline 任务只有满足以下条件才算完成：
 
@@ -343,6 +200,8 @@ sandbox/
 - 所有 DCC 操作发生在沙盒副本上
 - 机器中间产物全部进入 `.info`
 - 最终输出按版本递增保存到沙盒根目录
-- 成功或失败均写入统一 Markdown 报告
+- 新场景型 workflow 可从空 Maya 场景构建内容；只要显式 `save_path` 位于任务沙盒内，`save_scene` 必须允许保存未命名场景。
+- 空 `source_path` 不等于“保持当前场景”，必须显式清空 DCC 会话后再执行后续 step。
+- 成功或失败均写入统一 `REPORT.md`
 - `manifest.json` 能索引本次任务的输入、输出、状态
 - 下游 skill 只消费上游标准执行记录 `output`、JSON、ABC，不消费 Markdown

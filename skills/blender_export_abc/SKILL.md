@@ -2,6 +2,10 @@
 skill_id: "blender_export_abc"
 name: "blender_export_cache_to_abc"
 dcc: "blender"
+tier: "write"
+pairs_with:
+  - "maya_import_abc"
+  - "maya_sync_rig_incremental"
 description: "选中指定几何根组，禁用修改器，导出 Alembic (.abc)。只管 ABC 几何导出，不生成 _info.json 或 _materials.json。"
 parameters:
   abc_path:
@@ -42,5 +46,8 @@ category: "convert"
 - `abc_path` (string): 选填 | 任务沙盒 `.info/{source_stem}.abc` | workflow 中必须显式传入。
 - `cache_group` (string): 选填 | `cache` | 需要导出的几何体根对象名。workflow 中应从项目配置传入。
 
+
+**框架注入参数**（由 workflow/chain 框架自动注入，用户不需要手动传入）：
+- `asset_name`、`project`、`run_dir`、`task_id`、`info_dir`、`extra_params`、`submitted_at` 等由调度框架根据当前任务上下文自动填充。
 ### 🟣 输出字段 (OUTPUTS)
 - `output_path` (str): 导出的 `.abc` 绝对路径。

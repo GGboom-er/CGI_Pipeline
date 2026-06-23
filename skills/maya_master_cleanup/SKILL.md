@@ -2,6 +2,11 @@
 skill_id: "maya_master_cleanup"
 name: "管线全自动清理与优化"
 dcc: "maya"
+tier: "destructive"
+pairs_with:
+  - "validate_publish"
+  - "maya_check_textures"
+  - "check_uvsets"
 description: "基于管线项目上下文，扫描或清理未知节点、插件残留、野生相机、多余UV集、死动画帧与空骨骼权重。支持 Check（只读诊断）和 Fix（执行清理）两种模式。"
 parameters:
   mode:

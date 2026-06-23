@@ -206,21 +206,22 @@ def _group_item(group: dict) -> dict:
     }
 
 
-def build_sync_report_sections(report: dict, counts: dict[str, int],
-                               compare_result_path: str = "",
-                               source_abc: str = "",
-                               source_info: str = "",
-                               cache_group: str = "") -> list[dict]:
-    """把 sync 执行指令转成统一报告可渲染的结构化折叠段。"""
+def build_sync_output_details(report: dict, counts: dict[str, int],
+                              compare_result_path: str = "",
+                              source_abc: str = "",
+                              source_info: str = "",
+                              cache_group: str = "") -> dict:
+    """把 sync 执行指令转成 receipt.output 可渲染的短明细。"""
     overview = []
     for action in VALID_GROUP_ACTIONS:
         overview.append({"action": _action_label(action), "count": counts.get(action, 0)})
     overview.append({"action": _action_label("target_only"), "count": counts.get("target_only", 0)})
 
-    return [
-        {
-            "title": "ACTION_SUMMARY",
-            "summary": format_action_summary(counts),
-            "items": overview,
-        },
-    ]
+    return {
+        "action_summary": format_action_summary(counts),
+        "action_items": overview,
+        "compare_result_path": compare_result_path,
+        "source_abc": source_abc,
+        "source_info": source_info,
+        "cache_group": cache_group,
+    }

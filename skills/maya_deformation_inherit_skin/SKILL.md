@@ -2,6 +2,9 @@
 skill_id: "maya_deformation_inherit_skin"
 name: "形变继承 Skin"
 dcc: "maya"
+tier: "destructive"
+pairs_with:
+  - "maya_sync_rig_incremental"
 description: "从旧 Rig 采样蒙皮权重，按 ownership 限域生成新 mesh 的 Skin 权重，并可写回沙盒 Maya 场景。"
 parameters:
   reference_rig_path:
@@ -71,7 +74,9 @@ category: "rig"
 目标场景采集 target mesh
 → 旧 Rig 场景采集 reference mesh + skin
 → 根据 mesh 名称、几何相似、bbox、vertex count 求 owner/source candidate
-→ 每个 target 使用 owner 指向的 source subset 构建 local field
+→ 若 target mesh 含多个 disconnected component，则每个 component 单独求 owner
+→ 若单个 component 内仍出现多语义混合，则按旧资产 source group 最近距离拆 patch owner
+→ 每个 target/component 使用 owner 指向的 source subset 构建 local field
 → 查询权重、生成 confidence/diagnostic
 → 可选写回 skinCluster 并保存 output_path
 ```
@@ -81,6 +86,8 @@ category: "rig"
 - Maya 数据采集复用 `core.maya_data_bridge.extract_mesh_geometry/extract_skin_weights`。
 - 权重查询复用 `core.deformation_field.DeformationField`。
 - 写回复用 `core.maya_data_bridge.inject_skin_weights`。
+- 同一 mesh 内多个断开 shell 先走 connected-component ownership，再合并成一个 skinCluster 权重矩阵。
+- welded/merged 等单连通混合区域会在 component 内执行 patch-level ownership，只把该 patch 的顶点写入对应 source field 查询结果。
 - 输出只使用标准执行记录 `skill/input/output/status/elapsed_sec`。
 - 后续扩展点：
   - support domain / layer cache

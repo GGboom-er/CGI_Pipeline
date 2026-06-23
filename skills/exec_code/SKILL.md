@@ -2,6 +2,8 @@
 skill_id: "exec_code"
 name: "动态代码执行"
 dcc: "maya"
+tier: "destructive"
+pairs_with: []
 skip_audit: true
 description: "在当前 Maya 会话中执行任意 Python 代码并返回结果。代码中将结果赋值给 result 变量即可。"
 parameters:

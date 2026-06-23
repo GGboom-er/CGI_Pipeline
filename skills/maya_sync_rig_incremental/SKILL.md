@@ -2,6 +2,12 @@
 skill_id: "maya_sync_rig_incremental"
 name: "maya_sync_abc_to_rig_cache"
 dcc: "maya"
+tier: "destructive"
+pairs_with:
+  - "maya_compare_asset_in_scene"
+  - "pipeline_compare_asset"
+  - "maya_apply_materials"
+  - "save_scene"
 description: "在 target rig 场景中，依据前置 compare_result 和 source ABC 增量重建/更新 mesh。对 IDENTICAL/ORIG_INJECT 走快速搬运或坐标注入，对 PAIRED/UNPAIRED 走 SuperMesh 包裹重建并迁移权重/BS。"
 parameters:
   compare_result:
@@ -65,6 +71,7 @@ category: "sync"
 - **Phase 3.5**: voting pool 里**无** `_paired_rig_dag` 的 mesh 用 Chamfer 距离自动找最近源，定向投射权重。
 - **Phase 4**: SuperMesh KDTree 包裹剩余 mesh，从 ABC 纯数据重建几何、传递 UV 和权重。
 - **Phase 5**: 建 Display Layer 便于审核。
+- **几何-only 模式**: 项目 `rig_sync_profile.transfer_weights=false` 时，Phase 4 对 `PAIRED/UNPAIRED` 只用 ABC 重建几何，**不刷权重、不复刻 BS（含 Live BS）**，新 mesh 保持未绑定，交给绑定师手绑；`IDENTICAL/ORIG_INJECT` 仍走搬运保留原绑定，不受影响。默认 `true` 保持完整权重/BS 投射。
 
 ### 🔵 核心代码与扩展 (IMPLEMENTATION & EXTENSION)
 - **底层驱动**: `om.MFnMesh.setPoints()` / `om.MFnMesh.create()`、`scipy.spatial.cKDTree`、`scipy.optimize.linear_sum_assignment`
@@ -93,6 +100,9 @@ category: "sync"
 标准执行记录 `output`:
 - `scene` (str): 当前 Maya 场景标识。
 - `actions` (dict): `IDENTICAL / ORIG_INJECT / PAIRED / UNPAIRED / target_only` 执行动作计数。
+- `action_summary` (str): 同步动作摘要。
+- `action_items` (list): 报告 Details 使用的动作计数短明细。
+- `compare_result_path` / `source_abc` / `source_info` / `cache_group` (str): 本次消费的核心输入路径/根组，便于报告定位。
 - `new_node_count` (int): 本次新增 Maya 节点数量。
 
 失败语义:

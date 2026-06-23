@@ -2,6 +2,10 @@
 skill_id: "maya_compare_asset_in_scene"
 name: "maya_compare_abc_to_scene_geometry"
 dcc: "maya"
+tier: "read"
+pairs_with:
+  - "maya_sync_rig_incremental"
+  - "maya_check_asset_hierarchy"
 description: "在当前已打开的 target rig Maya 场景内采集指定 cache_group 的 ShapeOrig 几何信息，读取 source 侧 ABC 或 _info.json，调用统一 compare 算法并写出 compare_result.json。用于只看差异或为后续 maya_sync_rig_incremental 提供拼装决策。"
 parameters:
   input_source:
@@ -86,11 +90,15 @@ category: "inspect"
 
 标准执行记录 `output`:
 - `output_path` (str): `compare_result.json` 绝对路径，供 `maya_sync_rig_incremental` 消费。
+- `matched_total` (int): `matched_same + matched_different`。
 - `matched_same` (int): source 在 target 中找到可接受配对的数量；包含算法层 `IDENTICAL` 和 `ORIG_INJECT`。
 - `matched_different` (int): source 在 target 中找到配对但几何不同的数量。
 - `only_source` (int): 只存在于 source 的对象数量。
 - `only_target` (int): 只存在于 target 的对象数量。
-- `blocking` (bool): 是否存在会阻断后续同步的差异。
+- `blocking` (int): 用户视角阻断差异数量。
+- `action_counts` (dict): 算法层 actionability 计数。
+- `compare_sources` (list): source/target 源文件与数据路径短明细。
+- `matched_same_items` / `matched_different_items` / `only_source_items` / `only_target_items` (list): 报告 Details 使用的精简明细。
 - `compare_result` (dict): 标准 `compare_result.v1` 机器字典，供 workflow 直接传给 `maya_sync_rig_incremental`。
 
 `compare_result.json` 内部可以继续保留算法字段 `paired`、`only_a`、`only_b`、`actionability`。这些字段给同步执行器和审计使用，不直接作为主报告字段。

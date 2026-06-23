@@ -2,6 +2,9 @@
 skill_id: "validate_publish"
 name: "发布前质量门禁"
 dcc: "maya"
+tier: "read"
+pairs_with:
+  - "save_scene"
 description: "发布前自动化 QC 检查：验证场景完整性、cache 组存在性、mesh 数量、未知节点、空组、命名规范。只读操作，输出 PASS/FAIL 报告。"
 parameters:
   project:

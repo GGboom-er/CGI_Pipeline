@@ -106,6 +106,7 @@ def open_source_file(worker, task_id: str, source_path: str, dcc_type: str):
     import json as _json
     safe_path = _json.dumps(source_path)
     ext = os.path.splitext(source_path)[1].lower()
+    empty_scene = not source_path
     non_native = ext in ('.abc', '.fbx', '.obj', '.usd', '.usda', '.usdc')
 
     if dcc_type == 'pipeline':
@@ -113,7 +114,7 @@ def open_source_file(worker, task_id: str, source_path: str, dcc_type: str):
 
     if dcc_type == 'blender':
         open_skill = 'blender_exec_code'
-        if non_native:
+        if empty_scene or non_native:
             open_code = (
                 'import bpy\n'
                 'bpy.ops.wm.read_factory_settings(use_empty=True)\n'
@@ -139,7 +140,7 @@ def open_source_file(worker, task_id: str, source_path: str, dcc_type: str):
             )
     else:
         open_skill = 'exec_code'
-        if non_native:
+        if empty_scene or non_native:
             open_code = (
                 'import maya.cmds as cmds\n'
                 'cmds.file(new=True, force=True)\n'

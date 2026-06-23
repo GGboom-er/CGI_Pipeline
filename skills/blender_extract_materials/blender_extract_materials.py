@@ -12,6 +12,7 @@ import math
 from core.receipt import make_receipt
 from core.path_guard import is_protected_path
 from core.run_archive import create_run_dir
+from core.material_semantics import should_use_as_color_texture
 
 
 _SKIP_INPUT_NAMES = {'Factor', 'Fac'}
@@ -269,10 +270,18 @@ def _extract_material_color(mat):
                 if color_input.links:
                     image = _trace_image_from_input(color_input)
                     if image:
+                        image_path = _get_image_path(image)
+                        if not should_use_as_color_texture(image_path):
+                            approx = _eval_color_from_input(color_input)
+                            if approx:
+                                return {"type": "solid", "value": approx}
+                            dv = color_input.default_value
+                            return {"type": "solid", "value": [round(dv[0], 4), round(dv[1], 4),
+                                                               round(dv[2], 4), round(dv[3], 4) if len(dv) > 3 else 1.0]}
                         is_udim = getattr(image, 'source', '') == 'TILED'
                         return {
                             "type": "texture",
-                            "path": _get_image_path(image),
+                            "path": image_path,
                             "is_udim": is_udim,
                         }
                     approx = _eval_color_from_input(color_input)
@@ -452,11 +461,13 @@ def execute(payload: dict) -> dict:
         summary_count=mat_count,
         summary_label='材质条目',
         outputs={
-            'materials_path': output_path,
             'output_path': output_path,
-            'material_count': mat_count,
-            'material_names': material_names,
-            'mesh_count': mesh_count,
-            'cache_group': cache_group_name,
+            'result': {
+                'materials_path': output_path,
+                'material_count': mat_count,
+                'material_names': material_names,
+                'mesh_count': mesh_count,
+                'cache_group': cache_group_name,
+            },
         },
     )

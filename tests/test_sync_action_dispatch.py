@@ -185,6 +185,26 @@ def test_sync_failure_boundaries():
     _ok('format_action_summary(action_counts)' in source, 'sync 成功摘要来自统一统计函数')
 
 
+def test_live_bs_productized_hooks():
+    """Live BS 深层迁移必须接入主 sync 技能，而不是只停留在验证脚本。"""
+    print("\n=== Test 10: Live BS 产品化接线 ===")
+    source = _read_sync_source()
+    _ok('from core.live_bs_transfer import compose_live_target_weights' in source,
+        'sync 使用 live target 权重合成核心函数')
+    _ok('def _extract_live_inner_blendshapes(' in source,
+        'sync 有内部 BS 采集 helper')
+    _ok('"inner_blendshapes": inner_blendshapes' in source,
+        'sync 把内部 BS 信息写入 live_info')
+    _ok('active_mask = np.linalg.norm(live_delta_raw' in source,
+        'sync 用 live delta 判定 active 区域')
+    _ok('compose_live_target_weights(' in source,
+        'sync 在 live target 写权重前清空 active body 权重')
+    _ok('def _duplicate_clean_mesh(' in source,
+        'sync 复制 live target 时显式断开上游历史')
+    _ok('_apply_live_inner_blendshapes' in source,
+        'sync 会把内部动态 BS 回写到新 live target')
+
+
 if __name__ == "__main__":
     test_sync_consumes_pairing_groups()
     test_sync_handles_all_group_actions()
@@ -195,4 +215,5 @@ if __name__ == "__main__":
     test_sync_layer_helper_exists()
     test_sync_layer_organization()
     test_sync_failure_boundaries()
+    test_live_bs_productized_hooks()
     print("\nALL SYNC DISPATCH TESTS PASSED!")

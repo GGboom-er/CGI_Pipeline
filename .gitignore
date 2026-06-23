@@ -20,6 +20,8 @@ assets/
 
 # ── 本地草稿 / 外部参考（禁止提交新增内容）──
 .agents/task.md
+.agents/implementation_plan.md
+memory/
 md_list*.txt
 app/
 research/

@@ -13,7 +13,7 @@ import maya.cmds as cmds
 from core.asset_info_schema import compare
 from core.compare_result_io import (
     auto_label,
-    build_compare_report_sections,
+    build_compare_output_details,
     format_compare_summary,
     generate_report,
     load_info_from_path,
@@ -121,7 +121,7 @@ def execute(payload: dict) -> dict:
         source_info.get('source_file', input_source),
         target_info.get('source_file', target_scene),
     )
-    report_sections = build_compare_report_sections(
+    output_details = build_compare_output_details(
         report, input_source, target_scene,
         label_source, label_target,
         source_info.get('source_file', input_source),
@@ -145,12 +145,14 @@ def execute(payload: dict) -> dict:
         },
         output={
             'output_path': output_path,
+            'matched_total': counts['paired'],
             'matched_same': counts['matched_same'],
             'matched_different': counts['matched_different'],
             'only_source': counts['only_source'],
             'only_target': counts['only_target'],
             'blocking': counts['blocking'],
             'compare_result': compare_result_payload,
+            **output_details,
         },
         summary_input=f'{os.path.basename(input_source)} vs 当前 Maya 场景',
         summary_action=status_msg,
@@ -158,5 +160,4 @@ def execute(payload: dict) -> dict:
         summary_label='问题',
         outputs={'output_path': output_path},
         report_content=md,
-        report_sections=report_sections,
     )

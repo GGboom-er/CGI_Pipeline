@@ -159,19 +159,29 @@ def _candidate_source_roots(required_root, fallback_patterns):
     return _drop_ancestor_roots(roots)
 
 
-def _empty_transform(node):
+def _safe_delete_transform(node):
     if not node or not cmds.objExists(node):
         return False
     if cmds.nodeType(node) != "transform":
         return False
-    return not bool(cmds.listRelatives(node, children=True, fullPath=True) or [])
+    children = cmds.listRelatives(node, children=True, fullPath=True) or []
+    if not children:
+        return True
+
+    descendants = cmds.listRelatives(node, allDescendents=True, fullPath=True) or []
+    for child in children + descendants:
+        if not child or not cmds.objExists(child):
+            continue
+        if cmds.nodeType(child) != "displayPoints":
+            return False
+    return True
 
 
 def _classify_top_nodes(extra_top_nodes):
     safe_delete = []
     manual_review = []
     for node in extra_top_nodes or []:
-        if _empty_transform(node):
+        if _safe_delete_transform(node):
             safe_delete.append(node)
         else:
             manual_review.append(node)
@@ -223,26 +233,6 @@ def _format_failure(result):
         reasons.append(f"顶层存在需人工复核的非空节点 {len(manual_top_nodes)} 个")
 
     return "；".join(reasons) if reasons else "资产层级不符合项目规范"
-
-
-def _report_sections(result):
-    sections = []
-    for key in (
-        "extra_top_nodes",
-        "manual_review_top_nodes",
-        "legacy_geo_roots",
-        "candidate_source_roots",
-        "issues",
-    ):
-        items = result.get(key) or []
-        if not items:
-            continue
-        sections.append({
-            "title": key,
-            "summary": str(len(items)),
-            "items": items,
-        })
-    return sections
 
 
 def execute(payload):
@@ -350,6 +340,15 @@ def execute(payload):
             "passed": passed,
             "code": "" if passed else INVALID_CODE,
             "issue_count": len(issues),
+            "required_root": required_root,
+            "active_rig_root": active_rig_root,
+            "cache_mesh_count": cache_mesh_count,
+            "active_rig_mesh_count": active_rig_mesh_count,
+            "extra_top_nodes": extra_top_nodes,
+            "manual_review_top_nodes": manual_review_top_nodes,
+            "legacy_geo_roots": legacy_geo_roots,
+            "candidate_source_roots": candidate_source_roots,
+            "issues": issues,
             "result": result,
         }
 
@@ -370,7 +369,6 @@ def execute(payload):
             summary_action=action,
             summary_count=cache_mesh_count,
             summary_label="mesh",
-            report_sections=_report_sections(result),
             error=error,
         )
     except Exception as exc:

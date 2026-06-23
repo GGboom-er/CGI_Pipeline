@@ -80,5 +80,37 @@ def test_deformation_gradient_bs():
     assert smile_delta.shape == target_verts.shape, "Shape mismatch"
     print("✅ test_deformation_gradient_bs passed!")
 
+def test_idw_k1_bs():
+    base_verts = np.array([
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [1.0, 1.0, 0.0],
+        [0.0, 1.0, 0.0]
+    ])
+    base_faces = np.array([
+        [0, 1, 2],
+        [0, 2, 3]
+    ])
+    bs_deltas = {
+        "probe": np.array([
+            [0.0, 0.0, 0.0],
+            [0.2, 0.0, 0.0],
+            [0.2, 0.1, 0.0],
+            [0.0, 0.1, 0.0]
+        ])
+    }
+    field = DeformationField({
+        'all_joints': ['root'],
+        'meshes': [{
+            'vertices': base_verts,
+            'faces': base_faces,
+            'bs_deltas': bs_deltas
+        }]
+    })
+    probe = field._idw_sample(base_verts, k=1, field_values=bs_deltas["probe"])
+    assert np.max(np.abs(probe - bs_deltas["probe"])) < 1e-8, "idw_k=1 should preserve exact vertex deltas"
+    print("✅ test_idw_k1_bs passed!")
+
 if __name__ == "__main__":
     test_deformation_gradient_bs()
+    test_idw_k1_bs()

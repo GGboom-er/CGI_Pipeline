@@ -27,13 +27,60 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 
+_WORKFLOW_WAIT_TERMINAL_STATUSES = {
+    'SUCCESS',
+    'ERROR',
+    'SKILL_ERROR',
+    'TIMEOUT',
+    'BLOCKED',
+    'AUDIT_FAILED',
+    'NEEDS_ATTENTION',
+    'WORKFLOW_SUCCESS',
+    'WORKFLOW_ABORTED',
+    'WORKFLOW_ERROR',
+    'WORKFLOW_AUDIT_FAILED',
+    'CHAIN_ABORTED',
+    'CHAIN_BLOCKED',
+    'CHAIN_ERROR',
+    'CHAIN_AUDIT_FAILED',
+}
+
+
+def _is_workflow_wait_terminal(status: str) -> bool:
+    return str(status or '').upper() in _WORKFLOW_WAIT_TERMINAL_STATUSES
+
+
 def cmd_list_skills(args):
     from core.skill_registry import get_all_skills
     skills = get_all_skills()
+    if args.json:
+        payload = {
+            'total': len(skills),
+            'skills': [
+                {
+                    'skill_id': s.get('skill_id'),
+                    'name': s.get('name', ''),
+                    'dcc': s.get('dcc', ''),
+                    'category': s.get('category', ''),
+                    'tier': s.get('tier', ''),
+                    'pairs_with': s.get('pairs_with', []) or [],
+                    'description': s.get('description', ''),
+                    'parameters': s.get('parameters', {}),
+                    'skip_audit': bool(s.get('skip_audit')),
+                }
+                for s in skills
+            ],
+        }
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return
+
     print(f'已注册 {len(skills)} 个技能:\n')
     for s in skills:
         audit = '  [skip_audit]' if s.get('skip_audit') else ''
-        print(f"  {s['skill_id']:30s} [{s.get('dcc','?'):8s}] {s['name']}{audit}")
+        print(f"  {s['skill_id']:30s} [{s.get('dcc','?'):8s}] [{s.get('tier','?'):11s}] {s['name']}{audit}")
+        pairs_with = s.get('pairs_with') or []
+        if args.verbose and pairs_with:
+            print(f"    pairs_with: {', '.join(pairs_with)}")
         if args.verbose:
             for k, v in s.get('parameters', {}).items():
                 print(f"    --param {k}={v.get('default','')}  ({v.get('description','')})")
@@ -222,7 +269,7 @@ def cmd_run_workflow(args):
         time.sleep(args.interval)
         state = _read_audit(task_id)
         print(json.dumps(state, ensure_ascii=False))
-        if state.get('status') not in ('PROGRESS', 'PENDING', 'STARTED', 'NOT_FOUND'):
+        if _is_workflow_wait_terminal(state.get('status')):
             break
 
 
@@ -236,6 +283,7 @@ def main():
     # list-skills
     p_ls = sub.add_parser('list-skills', help='列出所有已注册技能')
     p_ls.add_argument('-v', '--verbose', action='store_true', help='显示参数详情')
+    p_ls.add_argument('--json', action='store_true', help='输出机器可读 JSON')
 
     # list-workflows
     sub.add_parser('list-workflows', help='列出所有已注册工作流')

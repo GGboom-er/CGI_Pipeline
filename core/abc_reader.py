@@ -54,6 +54,16 @@ def _traverse(obj, parent_path="", parent_matrix=None):
     return meshes
 
 
+def _normalize_abc_display_path(dag_path: str) -> str:
+    """把 Alembic archive 顶层 `ABC` 从业务 DAG 路径中剥离。"""
+    display_path = (dag_path or "").strip("|")
+    if display_path.startswith("ABC|"):
+        display_path = display_path[4:]
+    if not display_path.startswith("|"):
+        display_path = "|" + display_path
+    return display_path
+
+
 def _extract_faceset_materials(obj):
     """
     从 IPolyMesh 的子对象中提取 FaceSet 名称作为材质名。
@@ -173,11 +183,7 @@ def read_abc_as_info(abc_path: str, lightweight: bool = False) -> dict:
     meshes = {}
     for dag_path, obj, world_matrix in mesh_nodes:
         # 清理路径前缀，使其与 JSON 对齐 (Alembic 导出可能以 ABC 开头)
-        display_path = dag_path
-        if display_path.startswith("ABC|"):
-            display_path = display_path[4:]
-        if not display_path.startswith("|"):
-            display_path = "|" + display_path
+        display_path = _normalize_abc_display_path(dag_path)
 
         # 补齐 Shape 后缀以匹配 Maya 原生 JSON 导出
         if not display_path.endswith("Shape"):
@@ -202,7 +208,7 @@ def read_abc_as_info(abc_path: str, lightweight: bool = False) -> dict:
 
         # ── 轻量模式：仅需顶点数据，跳过 UV/拓扑/FaceSet/winding ──
         if lightweight:
-            meshes[dag_path] = {
+            meshes[display_path] = {
                 'vertices': len(positions),
                 'vert_positions': vert_positions,
             }
@@ -241,7 +247,7 @@ def read_abc_as_info(abc_path: str, lightweight: bool = False) -> dict:
         # 材质名称（从 FaceSet 提取）
         materials = _extract_faceset_materials(obj)
 
-        meshes[dag_path] = {
+        meshes[display_path] = {
             'vertices': len(positions),
             'vert_positions': vert_positions,
             'face_counts': face_counts,

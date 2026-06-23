@@ -2,6 +2,10 @@
 skill_id: "save_scene"
 name: "maya_save_scene_as_next_version"
 dcc: "maya"
+tier: "write"
+pairs_with:
+  - "validate_publish"
+  - "rename_asset"
 description: "保存当前任务沙盒中的 Maya 场景。后台 pipeline 默认保存当前已打开的沙盒副本，禁止写入沙盒外路径。"
 parameters:
   save_path:
@@ -26,7 +30,7 @@ category: "output"
 - **无人工决策**: 后台模式不会返回等待用户选择的状态；目标非法时直接返回 `BLOCKED` 并写入报告。
 
 ### 🟢 核心逻辑 (CORE LOGIC)
-- 默认读取当前打开场景路径 -> 校验当前场景和目标路径均在任务沙盒 -> 必要时版本递增防覆盖 -> 调用 Maya 保存 -> 返回 `outputs.output_path`。
+- 默认读取当前打开场景路径 -> 校验当前场景和目标路径均在任务沙盒 -> 必要时版本递增防覆盖 -> 调用 Maya 保存 -> 返回 `output.output_path`。
 
 ### 🔵 核心代码与扩展 (IMPLEMENTATION & EXTENSION)
 - **底层驱动**: `cmds.file(rename=True)`, `cmds.file(save=True)`

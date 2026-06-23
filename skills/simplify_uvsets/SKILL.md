@@ -2,6 +2,9 @@
 skill_id: "simplify_uvsets"
 name: "UV Set 精简"
 dcc: "maya"
+tier: "destructive"
+pairs_with:
+  - "check_uvsets"
 description: "清理绑定体多余 UV set。对 cache 组下每个 mesh 执行沙盒提取 → UV 清理 → 数据回灌，确保最终只保留一个名为 map1 的 UV set。支持绑定体（通过 ShapeOrig 操作）。破坏性操作，已包裹 undo 块。建议先用 check_uvsets 查看再执行。"
 parameters:
   cache_group:
@@ -33,8 +36,8 @@ category: "process"
 ### 🟡 参数规则 (PARAMETERS)
 - `cache_group` (string): 选填 | `cache` | 需要执行化繁为简操作的目标对象组群名。
 
-### 🟣 输出字段 (OUTPUTS)
-- `outputs.result.cleaned` (int): 完成重度清理的 mesh 数。
-- `outputs.result.fast_passed` (int): 已符合规范并快速通过的 mesh 数。
-- `outputs.result.skipped` (int): 因无 shape、引用或锁定跳过的 mesh 数。
-- `outputs.result.errors` (list): 单 mesh 清理失败清单。
+### 🟣 标准执行记录 (RECORD)
+- `output.result.cleaned` (int): 完成重度清理的 mesh 数。
+- `output.result.fast_passed` (int): 已符合规范并快速通过的 mesh 数。
+- `output.result.skipped` (int): 因无 shape、引用或锁定跳过的 mesh 数。
+- `output.result.errors` (list): 单 mesh 清理失败清单。

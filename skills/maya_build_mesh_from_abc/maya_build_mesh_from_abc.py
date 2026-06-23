@@ -97,22 +97,27 @@ def _ensure_hierarchy(parts, root_group=""):
     if not parts:
         return root_group or ""
 
+    def _as_long_path(node):
+        matches = cmds.ls(node, long=True) or []
+        return matches[0] if matches else node
+
     if root_group:
         current = root_group
         if not cmds.objExists(current):
             current = cmds.group(empty=True, name=current)
+        current = _as_long_path(current)
     else:
         current = parts[0]
         if not cmds.objExists(current):
             current = cmds.group(empty=True, name=parts[0])
+        current = _as_long_path(current)
         parts = parts[1:]
 
     for part in parts:
         child_path = f"{current}|{part}"
         if not cmds.objExists(child_path):
-            grp = cmds.group(empty=True, name=part)
-            cmds.parent(grp, current)
-        current = child_path
+            child_path = cmds.group(empty=True, name=part, parent=current)
+        current = _as_long_path(child_path)
 
     return current
 

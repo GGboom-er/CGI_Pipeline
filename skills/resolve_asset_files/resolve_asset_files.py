@@ -137,6 +137,7 @@ def execute(payload: dict) -> dict:
     items = []
     report_items = []
     searched_paths = []
+    missing_inputs = []
 
     source_path, err = _as_existing_path(explicit_source_value, source_exts, "source")
     if err:
@@ -165,10 +166,20 @@ def execute(payload: dict) -> dict:
         )
         searched_paths.extend({"role": "source", **x} for x in searched)
         if not source_path:
+            search = searched[-1] if searched else {}
+            source_task_final = search.get("task") or source_task or resolver._get_primary_task(source_stage)
             errors.append(
                 f"未找到 source 文件: project={project}, category={category}, asset={asset_name}, "
                 f"stage={source_stage}, task={source_task or '<primary>'}, ext={','.join(source_exts)}"
             )
+            missing_inputs.append({
+                "role": "source",
+                "stage": source_stage,
+                "task": source_task_final,
+                "path": str(search.get("path", "")),
+                "exists": bool(search.get("exists", False)),
+                "allowed_extensions": ",".join(source_exts),
+            })
 
     if resolver and not rig_path:
         rig_path, searched = _find_latest_by_stage(
@@ -176,16 +187,50 @@ def execute(payload: dict) -> dict:
         )
         searched_paths.extend({"role": "rig", **x} for x in searched)
         if not rig_path:
+            search = searched[-1] if searched else {}
+            rig_task_final = search.get("task") or rig_task or resolver._get_primary_task(rig_stage)
             errors.append(
                 f"未找到 rig 文件: project={project}, category={category}, asset={asset_name}, "
                 f"stage={rig_stage}, task={rig_task or '<primary>'}, ext={','.join(rig_exts)}"
             )
+            missing_inputs.append({
+                "role": "rig",
+                "stage": rig_stage,
+                "task": rig_task_final,
+                "path": str(search.get("path", "")),
+                "exists": bool(search.get("exists", False)),
+                "allowed_extensions": ",".join(rig_exts),
+            })
 
     if errors:
+        result = {
+            "project": project,
+            "asset_name": asset_name,
+            "category": category,
+            "source_label": source_stage,
+            "rig_label": rig_stage,
+            "target_label": rig_stage,
+            "missing_inputs": missing_inputs,
+            "searched_paths": searched_paths,
+            "errors": errors,
+        }
         return make_receipt(
             SKILL_ID,
             "ERROR",
             t0,
+            input={
+                "project": project,
+                "asset_name": asset_name,
+                "category": category,
+                "source_stage": source_stage,
+                "rig_stage": rig_stage,
+            },
+            output={
+                "result": result,
+                "missing_inputs": missing_inputs,
+                "searched_paths": searched_paths,
+                "error_count": len(errors),
+            },
             summary_input=f"{project}/{category}/{asset_name}",
             summary_action="解析失败",
             summary_count=len(errors),
@@ -193,13 +238,6 @@ def execute(payload: dict) -> dict:
             items=[make_item("路径解析", e) for e in errors],
             error="\n".join(errors),
             recovery_hint="检查资产名、项目配置、服务器挂载，或显式传入 source_path/rig_path。",
-            report_sections=[
-                {
-                    "title": "搜索路径",
-                    "summary": f"{len(searched_paths)} 项",
-                    "items": searched_paths,
-                }
-            ],
         )
 
     assert source_path is not None
@@ -250,17 +288,9 @@ def execute(payload: dict) -> dict:
         summary_count=2,
         summary_label="路径",
         items=items,
-        outputs={"result": result},
-        report_sections=[
-            {
-                "title": "解析结果",
-                "summary": "source + rig",
-                "items": report_items,
-            },
-            {
-                "title": "搜索路径",
-                "summary": f"{len(searched_paths)} 项",
-                "items": searched_paths,
-            },
-        ],
+        output={
+            "result": result,
+            "resolved_files": report_items,
+            "searched_paths": searched_paths,
+        },
     )

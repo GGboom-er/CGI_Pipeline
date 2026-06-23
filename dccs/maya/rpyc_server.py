@@ -98,7 +98,10 @@ class _SilentThreadedServer(ThreadedServer):
 
 def _start_rpyc_server(port=18812):
     """在 Maya 的后台线程中启动一个纯粹的 RPyC 服务"""
-    if hasattr(sys, '_cgi_rpyc_server'):
+    existing_servers = getattr(sys, '_cgi_rpyc_servers', {})
+    if not isinstance(existing_servers, dict):
+        existing_servers = {}
+    if port in existing_servers:
         return
 
     server = _SilentThreadedServer(
@@ -114,6 +117,9 @@ def _start_rpyc_server(port=18812):
             'sync_request_timeout': 3600  # 给重度 Pipeline 任务留出 1 小时超时
         }
     )
+    existing_servers[port] = server
+    sys._cgi_rpyc_servers = existing_servers
+    # 兼容旧探针：不要再用这个单值标记阻止其他 foreground 端口启动。
     sys._cgi_rpyc_server = server
 
     def run_server():

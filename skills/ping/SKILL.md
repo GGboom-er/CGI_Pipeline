@@ -2,6 +2,8 @@
 skill_id: "ping"
 name: "心跳测试"
 dcc: "maya"
+tier: "read"
+pairs_with: []
 skip_audit: true
 description: "检测 Maya Worker 是否存活，返回 Maya 版本号"
 parameters: {}

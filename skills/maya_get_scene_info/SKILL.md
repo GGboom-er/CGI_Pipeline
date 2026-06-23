@@ -2,6 +2,10 @@
 skill_id: "maya_get_scene_info"
 name: "获取场景总览"
 dcc: "maya"
+tier: "read"
+pairs_with:
+  - "validate_publish"
+  - "maya_master_cleanup"
 description: "获取 Maya 当前场景的全面信息，包括对象统计、面数、材质列表、时间轴、渲染器、引用文件、未知节点等。AI 理解场景全貌的基础能力。"
 parameters: {}
 io:

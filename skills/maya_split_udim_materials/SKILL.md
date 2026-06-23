@@ -2,6 +2,9 @@
 skill_id: "maya_split_udim_materials"
 name: "UDIM 材质自动拆分"
 dcc: "maya"
+tier: "write"
+pairs_with:
+  - "maya_assign_udim_materials"
 description: "根据 geo 组内 mesh 的 UV 象限自动拆分材质球并重连贴图。支持 UDIM 格式贴图的自动匹配与按面赋予。"
 parameters:
   tex_root:
@@ -12,6 +15,14 @@ parameters:
     type: "string"
     default: ""
     description: "贴图文件名前缀过滤（如角色名）"
+  geo_group:
+    type: "string"
+    default: ""
+    description: "几何根组，用于定位目标 mesh"
+  asset_name:
+    type: "string"
+    default: ""
+    description: "资产名称，用于材质命名前缀"
 io:
   inputs:
     - name: "scene"

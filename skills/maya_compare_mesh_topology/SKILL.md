@@ -2,6 +2,9 @@
 skill_id: "maya_compare_mesh_topology"
 name: "Mesh 拓扑对比"
 dcc: "maya"
+tier: "read"
+pairs_with:
+  - "maya_build_asset_info"
 skip_audit: true
 description: "无头模式对比参考组和目标组的 mesh 拓扑，报告未匹配项和顶点位置差异。只读操作。"
 parameters:

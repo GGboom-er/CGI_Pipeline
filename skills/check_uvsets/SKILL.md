@@ -2,6 +2,9 @@
 skill_id: "check_uvsets"
 name: "UV Set 检查"
 dcc: "maya"
+tier: "read"
+pairs_with:
+  - "simplify_uvsets"
 description: "只读扫描 cache 组下所有 mesh 的 UV set 状况。报告每个 mesh 有几个 UV set、哪些有数据、哪些是空壳，并标记需要清理的 mesh。建议在执行 simplify_uvsets 之前先运行此技能查看现状。"
 parameters:
   cache_group:
@@ -32,7 +35,7 @@ category: "inspect"
 ### 🟡 参数规则 (PARAMETERS)
 - `cache_group` (string): 选填 | `cache` | 指定所需进行体检的父级节点。支持自动查找 `|Group|cache` 等变体。
 
-### 🟣 输出字段 (OUTPUTS)
-- `outputs.result.total_meshes` (int): 扫描到的 mesh 数。
-- `outputs.result.need_cleanup` (int): 需要清理的 mesh 数。
-- `outputs.result.problems` (list): 可被下游或 AI 消费的问题清单。
+### 🟣 标准执行记录 (RECORD)
+- `output.result.total_meshes` (int): 扫描到的 mesh 数。
+- `output.result.need_cleanup` (int): 需要清理的 mesh 数。
+- `output.result.problems` (list): 可被下游或 AI 消费的问题清单。

@@ -2,6 +2,9 @@
 skill_id: "maya_clean_skinweights"
 name: "清理蒙皮权重"
 dcc: "maya"
+tier: "destructive"
+pairs_with:
+  - "validate_publish"
 description: "移除蒙皮权重中的微量噪声（低于阈值），规范化权重总和为 1.0。需要提供包含蒙皮网格的源场景文件。"
 parameters:
   threshold:

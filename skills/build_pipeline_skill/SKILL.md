@@ -2,6 +2,8 @@
 skill_id: "build_pipeline_skill"
 name: "Skill 生成与更新规范"
 dcc: "pipeline"
+tier: "read"
+pairs_with: []
 description: "唯一的 CGI Pipeline skill 生成与更新规范文档。当用户要求新增、修改、整理、规范化 skill 时，必须先使用本 skill。"
 parameters: {}
 io:
@@ -21,6 +23,8 @@ category: "system"
 
 其它文档不得另写一套 skill 规范。
 
+后续开发先读 `docs/ai_startup/02_KNOWLEDGE_BASE.md`，再回到本文处理 skill 规则。本文只管 skill 契约；运行时边界、报告渲染、对比拼装和测试门禁分别由知识库链接到对应专项文档。
+
 ## 🔴 核心限制 (CRITICAL CONSTRAINTS)
 
 - 不允许直接写散装脚本到 `skills/` 根目录。
@@ -31,6 +35,33 @@ category: "system"
 - 修改 DCC 场景的 skill 必须只处理沙盒副本，不能覆盖源资产或发布目录。
 - 不允许写源文件同目录 fallback，不允许吞异常后返回成功。
 - 需要用户决策的设计变更，先给蓝图，不直接写代码。
+- 跨 skill 复用的经验、红线和避坑规则必须回归本文；单个 `skills/{skill_id}/SKILL.md` 只能记录该 skill 的本地职责、参数和实现细节，不得成为唯一知识源。
+- 涉及多 skill 链路的稳定规则必须同步 `docs/ai_startup/02_KNOWLEDGE_BASE.md`；`tasks/lessons.md` 只作索引，不作规范来源。
+
+## 🧠 跨 Skill 共享经验 (SHARED LESSONS)
+
+这些规则适用于所有新增、改造和审查 skill。遇到同类问题时先按本节修正，再决定是否补充单个 skill 的本地说明。
+
+### 经验回归归属
+
+- 能影响两个及以上 skill、workflow 或数据契约的经验，必须写入本文。
+- 单个 skill 的 `SKILL.md` 不得独占跨链路规则；最多写“本 skill 遵循本文某规则”的本地约束。
+- `docs/ai_startup/02_KNOWLEDGE_BASE.md` 记录当前最小事实集，本文记录 skill 设计与改造细则，两者冲突时先收敛冲突再继续实现。
+- `tasks/lessons.md` 只写短索引，不能把它当作后续 AI 的规范入口。
+
+### Alembic / DAG 层级
+
+- Alembic archive 顶层 `ABC` 是文件容器根，不是业务 DAG。任何读取 ABC 并生成 mesh key 的逻辑必须在数据层剥离该前缀，Maya 拼装结果不得出现 `|ABC` 顶层。
+- 层级修复必须落在事实生产者或解析层，例如 `core.abc_reader.read_abc_as_info`；不要在下游 Maya skill 里用事后重命名掩盖错误数据。
+- Maya DAG 创建后必须立即规整为 long path/fullPath；后续 parent、group、rename、mesh create 等操作不得继续依赖短名。
+
+### 材质贴图语义
+
+- 只有真实 color/albedo/diffuse 语义贴图才能写入 `color.type="texture"` 并连接到 Maya 材质 color。
+- AO、normal/nor/nrm、roughness、metallic、specular、height、bump、displacement、opacity、mask、ORM/ARM 等非 color 语义贴图不得强行作为 color 贴图。
+- 材质采集端和材质消费端都必须防守：采集端不产出错误 color texture；消费端遇到旧 JSON 中的非 color `color.path` 也不创建 file 节点。
+- 找不到真实 color 贴图时，按 Blender 材质球颜色或节点链近似色输出 solid 材质；不要按 `sourceimages` 目录文件名强行猜一个 color 贴图。
+- UDIM 拆分只适用于真实 color 贴图。AO/normal 等非 color 贴图不能因为带 1001/1002/1003 就拆成多个 color 材质条目。
 
 ## 🟢 核心功能 (CORE FUNCTION)
 
@@ -130,6 +161,8 @@ def execute(payload: dict) -> dict:
 |---|---|
 | `skill_id` | 文件夹名、Python 文件名、frontmatter 必须一致 |
 | `dcc` | `maya` / `blender` / `pipeline` |
+| `tier` | `read` / `write` / `destructive`，MCP annotations 的唯一真相源 |
+| `pairs_with` | 稳定前置、后置或常见搭配 skill_id 列表；没有则写 `[]` |
 | 职责边界 | 做什么、不做什么 |
 | 输入参数 | 参数名、类型、是否必填、默认值 |
 | 输出字段 | `output` 中会暴露哪些字段，哪些给下游消费 |
@@ -138,6 +171,8 @@ def execute(payload: dict) -> dict:
 | 验证方式 | 普通 Python 测试、DCC 测试或真实资产测试 |
 
 信息不足时先问用户，不得猜。
+
+涉及 ABC/DAG、材质、路径解析、workflow 输出契约的改动，必须先检查本文“跨 Skill 共享经验”，再写蓝图。
 
 ## 2. 蓝图格式
 
@@ -170,6 +205,9 @@ frontmatter 必填：
 skill_id: "xxx"
 name: "中文显示名"
 dcc: "maya"
+tier: "read"
+pairs_with:
+  - "upstream_or_downstream_skill_id"
 description: "一句话说明什么时候使用这个 skill。"
 parameters:
   param_name:
@@ -188,6 +226,17 @@ io:
 category: "inspect"
 ---
 ```
+
+字段规则：
+
+| 字段 | 取值 | 规则 |
+|---|---|---|
+| `tier` | `read` | 查询、检查、解析、对比；不改源资产或当前 DCC 场景。 |
+| `tier` | `write` | 生成文件、导入/创建对象、写沙盒或改变当前会话状态；不做删除/权重改写/冻结清理。 |
+| `tier` | `destructive` | 任意代码执行、删除/重命名/冻结/清理、改权重、改绑定或可能破坏当前场景的操作。 |
+| `pairs_with` | `[]` 或 skill_id 列表 | 只写已存在的稳定 skill_id；用于 workflow、摘要同步和路由提示，不写自然语言。 |
+
+`mcp_server/tools_operations.py` 只能读取 `tier` 生成 MCP annotations；禁止再用 `skill_id` 前缀猜 read/write/destructive。
 
 正文必须包含：
 
@@ -229,6 +278,7 @@ workflow 只读取上游 `output`：
 - 模板和普通文本混写时转成字符串。
 - 下游 skill 不读 Markdown。
 - 新增或重命名 `output` 字段时，必须同步更新相关 workflow JSON 和测试。
+- 新增或重命名 `output` 字段时，还必须同步更新 `docs/ai_startup/02_KNOWLEDGE_BASE.md`、所属专项文档和 `tests/README.md` 中的门禁说明。
 - 不允许让下游读取 `input`、`summary`、`items`、`report_sections` 或报告正文。
 
 ## 6. 对比类输出
@@ -309,5 +359,6 @@ Pipeline：
 - [ ] 文件路径都是完整路径。
 - [ ] 无旧展示字段。
 - [ ] 报告不需要额外 Markdown 才能说明本 skill 的结果。
+- [ ] 若改动影响 workflow、报告、`output` 字段或测试门禁，已同步 `docs/ai_startup/02_KNOWLEDGE_BASE.md` 与对应专项文档。
 - [ ] 修改 DCC 场景时有 undo / 沙盒保护。
 - [ ] 有测试或明确说明未跑测试的原因。

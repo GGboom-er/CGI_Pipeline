@@ -2,6 +2,9 @@
 skill_id: "maya_freeze_transforms"
 name: "冻结变换"
 dcc: "maya"
+tier: "destructive"
+pairs_with:
+  - "validate_publish"
 description: "冻结场景中所有可变换节点的 Translate/Rotate/Scale，并清除构造历史。"
 parameters:
   target_nodes:

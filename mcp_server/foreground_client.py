@@ -1,4 +1,5 @@
 import json
+import os
 import time
 from pathlib import Path
 from datetime import datetime
@@ -27,10 +28,19 @@ def _write_audit(task_id: str, status: str, skill_id: str, detail: str = ''):
 
 import socket
 
+
+def _maya_port_range() -> range:
+    """返回 Maya commandPort 扫描范围，默认覆盖 7001-7020。"""
+    start = int(os.getenv('MAYA_FOREGROUND_PORT_START', '7001'))
+    end = int(os.getenv('MAYA_FOREGROUND_PORT_END', '7020'))
+    if end < start:
+        start, end = end, start
+    return range(start, end + 1)
+
 def _discover_maya_ports() -> list[int]:
-    """扫描 7001-7010 寻找活跃的 Maya commandPort。"""
+    """扫描配置范围内活跃的 Maya commandPort。"""
     active_ports = []
-    for p in range(7001, 7011):
+    for p in _maya_port_range():
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.settimeout(0.2)
             if s.connect_ex(('127.0.0.1', p)) == 0:
@@ -60,7 +70,8 @@ def submit_foreground_task(payload: dict, sync: bool = False) -> dict:
     if not port:
         active_ports = _discover_maya_ports()
         if not active_ports:
-            err_msg = "无感连接失败：未能在 7001-7010 范围内发现活跃的 Maya 实例，请确保 Maya 已开启并执行了 userSetup.py"
+            ports = _maya_port_range()
+            err_msg = f"无感连接失败：未能在 {ports.start}-{ports.stop - 1} 范围内发现活跃的 Maya 实例，请确保 Maya 已开启并执行了 userSetup.py"
             _write_audit(task_id, 'ERROR', skill_id, err_msg)
             return {
                 'task_id': task_id,

@@ -61,6 +61,110 @@ def _get_resolver(project: str):
     return AssetResolver(cfg)
 
 
+def _coerce_ext_filter(value):
+    """把 workflow/source_ext_filter 配置规整为 AssetResolver 可用的后缀列表。"""
+    if not value:
+        return None
+    if isinstance(value, str):
+        parts = [x.strip() for x in value.split(',') if x.strip()]
+    elif isinstance(value, (list, tuple, set)):
+        parts = [str(x).strip() for x in value if str(x).strip()]
+    else:
+        return None
+    return [x if x.startswith('.') else f'.{x}' for x in parts]
+
+
+def _resolve_workflow_source_candidate(
+    wf: dict,
+    project_config: dict,
+    asset_name: str,
+    extra_params: dict,
+    resolver_cls=None,
+) -> tuple[str, dict]:
+    """按 workflow 的 source_resolution 元数据把资产名解析为真实源文件。"""
+    source_resolution = wf.get('source_resolution') or {}
+    if not source_resolution:
+        return '', {}
+
+    if not asset_name or asset_name == 'untitled':
+        if source_resolution.get('required', True):
+            raise FileNotFoundError('workflow 需要 source_path 或有效 asset_name')
+        return '', {}
+
+    from core.asset_resolver import AssetResolver
+    resolver = (resolver_cls or AssetResolver)(project_config)
+    category = (
+        extra_params.get('category')
+        or source_resolution.get('category')
+        or 'chr'
+    )
+    pipeline = (
+        extra_params.get('source_pipeline')
+        or source_resolution.get('pipeline')
+        or None
+    )
+    stage = (
+        extra_params.get('source_stage')
+        or source_resolution.get('stage')
+        or None
+    )
+    ext_filter = _coerce_ext_filter(
+        extra_params.get('source_ext_filter')
+        or source_resolution.get('ext_filter')
+    )
+
+    resolved = None
+    if stage:
+        stage_dir = resolver._resolve_stage_dir(category, asset_name, stage)
+        latest = resolver._find_latest_in_dir(stage_dir, ext_filter)
+        if latest:
+            resolved = {
+                'asset': asset_name,
+                'stage': stage,
+                'task': resolver._get_primary_task(stage),
+                'version': latest.name,
+                'path': str(latest),
+                'valid': True,
+            }
+    else:
+        resolved = resolver.resolve_by_stage(
+            category, asset_name, pipeline=pipeline, ext_filter=ext_filter
+        )
+
+    if resolved and resolved.get('path'):
+        return resolved['path'], resolved
+
+    if source_resolution.get('required', True):
+        desc = []
+        if pipeline:
+            desc.append(f'pipeline={pipeline}')
+        if stage:
+            desc.append(f'stage={stage}')
+        if ext_filter:
+            desc.append(f'ext={ext_filter}')
+        suffix = f" ({', '.join(desc)})" if desc else ''
+        raise FileNotFoundError(
+            f'未能按资产名解析 workflow 源文件: {category}/{asset_name}{suffix}'
+        )
+    return '', {}
+
+
+def _select_segment_source_path(
+    segment_index: int,
+    resolved_steps: list,
+    workflow_source_path: str,
+    all_outputs: dict,
+) -> str:
+    """选择当前 workflow 分段要打开的源文件。"""
+    if resolved_steps and 'source_path' in resolved_steps[0]:
+        return resolved_steps[0].get('source_path') or ''
+    if segment_index == 0:
+        return workflow_source_path
+    if 'resolve_asset' in all_outputs and 'source_path' in all_outputs['resolve_asset']:
+        return all_outputs['resolve_asset']['source_path']
+    return ''
+
+
 def _open_source_file(worker, task_id: str, source_path: str, dcc_type: str):
     """在 DCC Worker 中打开源文件，链式和单技能共用。返回 (ok, error_msg)。"""
     from core.dcc_factory import open_source_file
@@ -212,6 +316,9 @@ def execute_skill_chain(self, payload: dict):
         _write_audit('FILE_STAGED', json.dumps(record, ensure_ascii=False))
 
     def _finalize_runtime_report(status: str, error: str = '', tb: str = ''):
+        # workflow 子段只负责 upsert step；最终 header/final 和 marker 清理由父 workflow 统一完成。
+        if is_subchain:
+            return
         if report_path:
             elapsed_min = (time.time() - _t_chain_start) / 60
             ctx = dict(report_context)
@@ -327,7 +434,16 @@ def execute_skill_chain(self, payload: dict):
             _write_audit('CHAIN_FILE_OPENED', source_path, -1, 'open_file')
         elif not source_path and dcc_type in ('maya', 'blender'):
             # 对于 Warm Pool，如果没有源文件，必须强制清空场景防止污染
-            _open_source_file(worker, task_id, "", dcc_type)
+            ok, err = _open_source_file(worker, task_id, "", dcc_type)
+            if not ok:
+                meaningful_err = _translate_error(err, "open_file")
+                _write_audit('CHAIN_ABORTED', f'清空场景失败: {meaningful_err}')
+                _finalize_runtime_report('CHAIN_ABORTED', error=meaningful_err)
+                return {
+                    'task_id': task_id, 'status': 'CHAIN_ABORTED',
+                    'failed_step': -1, 'error': f'清空场景失败: {meaningful_err}',
+                    'chain_results': [], 'report_path': report_path,
+                }
 
         # 从 payload 中提取 workflow_id（由 execute_workflow 注入）
         _wf_id = payload.get('workflow_id', '')
@@ -405,14 +521,16 @@ def execute_skill_chain(self, payload: dict):
             ):
                 raw_detail = json.dumps(result, ensure_ascii=False, default=str)
 
+            translated_err = ''
             if step_status == 'ERROR':
                 translated_err = _translate_error(str(raw_detail), step_skill_id)
-                raw_detail = translated_err
-                result['detail'] = translated_err
+                result['error'] = translated_err
 
             receipt = _report_writer.extract_receipt(raw_detail or result, step_skill_id, step_status)
             if step_status != 'SUCCESS' and receipt.get('status') == 'SUCCESS':
                 receipt['status'] = step_status
+            if step_status == 'ERROR' and translated_err and not receipt.get('error'):
+                receipt['error'] = translated_err
 
             mem_gb = worker.get_memory_gb() if hasattr(worker, 'get_memory_gb') else -1
             step_result = {
@@ -491,11 +609,18 @@ def execute_skill_chain(self, payload: dict):
                 }
 
             if step_status != 'SUCCESS':
-                _write_audit('CHAIN_ABORTED', f'step {i} failed: {step_skill_id}')
-                _finalize_runtime_report('CHAIN_ABORTED', error=f'step {i} failed: {step_skill_id}')
+                chain_error = receipt.get('error') or translated_err or f'step {i} failed: {step_skill_id}'
+                _write_audit('CHAIN_ABORTED', f'step {i} failed: {step_skill_id}: {chain_error}')
+                _finalize_runtime_report(
+                    'CHAIN_ABORTED',
+                    error=f'step {i} ({step_skill_id}) failed: {chain_error}',
+                )
                 return {
                     'task_id': task_id, 'status': 'CHAIN_ABORTED',
-                    'failed_step': i, 'chain_results': chain_results,
+                    'failed_step': i, 'failed_skill': step_skill_id,
+                    'error': chain_error,
+                    'detail': detail_str,
+                    'chain_results': chain_results,
                     'report_path': report_path,
                 }
 
@@ -753,11 +878,11 @@ def execute_dcc_skill(self, payload: dict):
         if result['status'] != 'SUCCESS':
             raw_status = result.get('status', 'ERROR') or 'ERROR'
             translated_err = _translate_error(str(raw_detail), skill_id) if raw_status == 'ERROR' else raw_detail
-            raw_detail = translated_err
-            result['detail'] = translated_err
             receipt = _report_writer.extract_receipt(raw_detail or result, skill_id, raw_status)
             if receipt.get('status') == 'SUCCESS':
                 receipt['status'] = raw_status
+            if raw_status == 'ERROR' and translated_err and not receipt.get('error'):
+                receipt['error'] = translated_err
             _report_writer.upsert_step_finished(
                 report_path, step_report_context, receipt,
                 worker_status=raw_status, raw_detail=str(raw_detail),
@@ -765,11 +890,12 @@ def execute_dcc_skill(self, payload: dict):
             audit_status = f'STEP_{raw_status}' if raw_status in (
                 'BLOCKED', 'AUDIT_FAILED', 'NEEDS_ATTENTION'
             ) else 'STEP_ERROR'
-            _write_audit(audit_status, translated_err)
+            _write_audit(audit_status, str(raw_detail))
             _finalize_runtime_report(raw_status if raw_status != 'ERROR' else 'SKILL_ERROR',
                                      error=str(translated_err))
             return {'task_id': task_id, 'status': raw_status if raw_status != 'ERROR' else 'SKILL_ERROR',
-                    'detail': translated_err,
+                    'detail': raw_detail,
+                    'error': translated_err,
                     'report_path': report_path}
 
         receipt = _report_writer.extract_receipt(raw_detail or result, skill_id, 'SUCCESS')
@@ -875,6 +1001,31 @@ def execute_workflow(self, payload: dict):
         if not steps:
             _write_audit('WORKFLOW_ERROR', '工作流无步骤')
             return {'task_id': task_id, 'status': 'WORKFLOW_ERROR', 'error': '工作流无步骤'}
+
+        if not source_path:
+            try:
+                resolved_source, resolved_meta = _resolve_workflow_source_candidate(
+                    wf, project_config, asset_name, extra_params
+                )
+                if resolved_source:
+                    source_path = resolved_source
+                    extra_params.setdefault('source_path', source_path)
+                    extra_params.setdefault('resolved_source_path', source_path)
+                    for key in ('stage', 'task', 'version_num'):
+                        if key in resolved_meta:
+                            extra_params.setdefault(f'resolved_source_{key}', resolved_meta[key])
+                    _write_audit(
+                        'WORKFLOW_SOURCE_RESOLVED',
+                        json.dumps(resolved_meta, ensure_ascii=False, default=str),
+                    )
+            except FileNotFoundError as e:
+                _write_audit('WORKFLOW_ERROR', str(e))
+                return {
+                    'task_id': task_id,
+                    'status': 'WORKFLOW_ERROR',
+                    'workflow_id': workflow_id,
+                    'error': str(e),
+                }
 
         # ── 创建运行目录(沙盒) + 统一报告 ──
         run_dir = create_run_dir(task_id, project, asset_name, payload.get('submitted_at'))
@@ -1039,11 +1190,9 @@ def execute_workflow(self, payload: dict):
                 'message': f'段 {seg_idx}/{len(segments)}: {seg_dcc} ({len(resolved_steps)} 步)',
             })
 
-            seg_source_path = source_path
-            if resolved_steps and resolved_steps[0].get('source_path'):
-                seg_source_path = resolved_steps[0]['source_path']
-            elif 'resolve_asset' in all_outputs and 'source_path' in all_outputs['resolve_asset']:
-                seg_source_path = all_outputs['resolve_asset']['source_path']
+            seg_source_path = _select_segment_source_path(
+                seg_idx, resolved_steps, source_path, all_outputs
+            )
 
             # 构建链式 payload：steps 用 resolved（已解析 input/config/跨段 outputs），
             # chain 引擎内部还会按每步完成后的 _chain_outputs 补解析剩余模板。

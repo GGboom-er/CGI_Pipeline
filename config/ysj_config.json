@@ -194,6 +194,7 @@
 
     "rig_sync_profile": {
         "description": "Rig-Asset 同步算法参数。所有距离单位均为 cm。",
+        "transfer_weights": false,
 
         "pairing": {
             "enable_cpd": true,

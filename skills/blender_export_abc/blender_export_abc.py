@@ -150,9 +150,11 @@ def execute(payload: dict) -> dict:
         summary_count=mesh_count,
         summary_label='mesh',
         outputs={
-            'abc_path': abc_path,
             'output_path': abc_path,
-            'mesh_count': mesh_count,
-            'cache_group': cache_group_name,
+            'result': {
+                'abc_path': abc_path,
+                'mesh_count': mesh_count,
+                'cache_group': cache_group_name,
+            },
         },
     )

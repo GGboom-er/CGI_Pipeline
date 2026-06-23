@@ -2,6 +2,11 @@
 skill_id: "pipeline_compare_asset"
 name: "资产对比（统一入口）"
 dcc: "pipeline"
+tier: "read"
+pairs_with:
+  - "blender_build_asset_info"
+  - "maya_build_asset_info"
+  - "maya_sync_rig_incremental"
 description: "纯 JSON/ABC 数据对比。三步漏斗（路径→等点数→空间）配对，输出 source 侧每个 mesh 相对 target 的 4 种事实归属 + 算法层 7 标签细分。"
 parameters:
   input_source:
@@ -82,11 +87,15 @@ category: "inspect"
 
 标准执行记录 `output`:
 - `output_path` (str): 标准 `compare_result.json` 路径。
+- `matched_total` (int): `matched_same + matched_different`。
 - `matched_same` (int): source 在 target 中找到可接受配对的数量。
 - `matched_different` (int): source 在 target 中找到配对但几何不同的数量。
 - `only_source` (int): 只存在于 source 的对象数量。
 - `only_target` (int): 只存在于 target 的对象数量。
-- `blocking` (bool): 是否存在会阻断后续同步的差异。
+- `blocking` (int): 用户视角阻断差异数量。
+- `action_counts` (dict): 算法层 actionability 计数。
+- `compare_sources` (list): source/target 源文件与数据路径短明细。
+- `matched_same_items` / `matched_different_items` / `only_source_items` / `only_target_items` (list): 报告 Details 使用的精简明细。
 - `compare_result` (dict): 标准 `compare_result.v1` 机器字典，供 workflow 直接传给后续节点。
 
 `compare_result.json` 结构：

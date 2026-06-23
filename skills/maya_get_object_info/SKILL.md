@@ -2,6 +2,8 @@
 skill_id: "maya_get_object_info"
 name: "查询对象信息"
 dcc: "maya"
+tier: "read"
+pairs_with: []
 description: "获取 Maya 场景中单个对象的详细信息：变换矩阵、包围盒、mesh 统计（面/顶点/边/三角形/UV集）、材质列表、修改器历史、骨骼朝向、相机参数等。"
 parameters:
   object_name:

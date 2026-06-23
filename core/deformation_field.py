@@ -577,6 +577,9 @@ class DeformationField:
         k = min(k, self._super_verts.shape[0])
         tree = cKDTree(self._super_verts)
         dists, idx = tree.query(query_points, k=k)
+        if k == 1:
+            dists = dists[:, np.newaxis]
+            idx = idx[:, np.newaxis]
 
         eps = 1e-10
         inv_dist = 1.0 / (dists + eps)

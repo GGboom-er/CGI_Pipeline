@@ -2,6 +2,10 @@
 skill_id: "maya_check_asset_hierarchy"
 name: "maya_check_rig_geometry_layout"
 dcc: "maya"
+tier: "read"
+pairs_with:
+  - "maya_fix_asset_hierarchy"
+  - "maya_compare_asset_in_scene"
 description: "纯 QC 检查：从项目配置读取当前 stage 的标准几何根，确认标准根存在、标准根下有有效 mesh，并输出层级修复节点需要消费的只读事实。"
 parameters:
   stage:
@@ -15,7 +19,7 @@ parameters:
   block_on_fail:
     type: "boolean"
     default: true
-    description: "检查失败时是否返回 AUDIT_FAILED。false 时仍返回 SUCCESS，但 outputs.result.passed=false。"
+    description: "检查失败时是否返回 AUDIT_FAILED。false 时仍返回 SUCCESS，但 output.result.passed=false。"
   block_extra_top_nodes:
     type: "boolean"
     default: false
@@ -50,15 +54,18 @@ category: "inspect"
 
 ### 🔵 核心代码与扩展 (IMPLEMENTATION)
 - 入口：`skills.maya_check_asset_hierarchy.maya_check_asset_hierarchy.execute(payload)`。
-- 失败统一写入 `outputs.result.code = "ASSET_HIERARCHY_INVALID"`；具体事实保留 `required_root_exists`、`cache_mesh_count`、`legacy_geo_roots`、`active_rig_root`、`safe_delete_top_nodes`、`manual_review_top_nodes`、`candidate_source_roots`。
+- 失败统一写入标准记录 `output.result.code = "ASSET_HIERARCHY_INVALID"`；具体事实保留 `required_root_exists`、`cache_mesh_count`、`legacy_geo_roots`、`active_rig_root`、`safe_delete_top_nodes`、`manual_review_top_nodes`、`candidate_source_roots`。
 - 如未来项目配置拆出 `required_geom_root`，只需要调整读取标准根的函数，检查逻辑不变。
 
 ### 🟡 参数规则 (PARAMETERS)
 - `stage` (string): 选填 | `rig` | 必须存在于项目配置 `stages` 中，且该 stage 必须配置 `geom_roots[0]`。
 - `phase` (string): 选填 | `post_sync` | `pre_sync` 用于 sync 前旧绑定几何根检查；`post_sync` 用于最终标准 cache 检查。
-- `block_on_fail` (boolean): 选填 | `true` | true 时 QC 失败返回 `AUDIT_FAILED`；false 时返回 `SUCCESS` 但 `outputs.result.passed=false`。
+- `block_on_fail` (boolean): 选填 | `true` | true 时 QC 失败返回 `AUDIT_FAILED`；false 时返回 `SUCCESS` 但 `output.result.passed=false`。
 - `block_extra_top_nodes` (boolean): 选填 | `false` | true 时非空额外顶层节点会导致 `passed=false`；false 时只进入输出报告。
 
+
+**框架注入参数**（由 workflow/chain 框架自动注入，用户不需要手动传入）：
+- `project` 由调度框架根据当前任务上下文自动填充。
 ### 🟣 标准执行记录 (RECORD)
 - `input.source_path`: 当前 Maya 场景路径。
 - `input.stage`: 本次检查使用的阶段。
@@ -78,3 +85,4 @@ category: "inspect"
 - `output.result.candidate_source_roots`: 层级修复节点可迁移的非标准源根。
 - `output.result.active_rig_root`: 后续 compare/sync 应读取的旧绑定几何根。
 - `output.result.active_rig_mesh_count`: `active_rig_root` 下有效 mesh 数量。
+- `output.extra_top_nodes` / `output.manual_review_top_nodes` / `output.legacy_geo_roots` / `output.candidate_source_roots` / `output.issues`: 报告 Details 使用的精简明细；与 `output.result` 中的同名事实保持一致。
