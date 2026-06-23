@@ -25,6 +25,8 @@ memory/
 md_list*.txt
 app/
 research/
+tools/archive/
+tests/archive/experimental/
 
 # ── 备份文件 ──
 *.bak_*
