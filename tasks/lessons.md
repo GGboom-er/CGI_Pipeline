@@ -33,6 +33,7 @@
 - [新技能 CHAIN_ABORTED "混合多个DCC类型"] → [长驻 Worker 进程的 skill_registry 快照过期，新技能 get_skill_dcc 返回默认值 'maya'] → [在 tasks.py 三处关键位置注入 _reload_skill_registry()：链DCC校验前、单技能执行前、工作流分段前] → [任何依赖注册表的判断逻辑前，必须先热重载，因为 Worker 可能运行数天]
 - [shutdown_all() 无法杀旧Worker] → [只遍历 _managed_procs（空列表，因为 Worker 由其他进程启动）] → [增加 PID 文件扫描逻辑，根据 pidfile 内容 os.kill] → [进程管理不能只依赖内存中的句柄，必须有持久化的 PID 文件作为兜底]
 - [DCC启动延迟] → [冷启动耗时5-8s] → [实现WarmWorkerProxy常驻池] → [高频任务用常驻池，50次自动重启]
+- [DCC疑难根因定位慢] → [后台maya_exec_code的receipt不可查("审计文件为空")、开大rig易卡、整workflow每轮约2.5分钟，盲试多轮难定位] → [让用户开前台commandPort用maya_exec_code(execution_mode='foreground',sync=True)即时交互式探测，或代码里写探针落盘文件再读] → [DCC疑难优先前台即时exec定位根因，别用慢的后台整跑试错循环；结果不可观测时主动加文件探针]
 
 ## 数据安全与路径
 
@@ -72,6 +73,7 @@
 - [RIG_geo匹配丢失] → [根RIG_也被剥掉] → [保根剥子级] → [DAG映射区分根和子节点]
 - [层级误阻断] → [额外非空顶层当失败] → [输出风险不默认阻断] → [绑定辅助根默认保留]
 - [层级回归难发现] → [只靠专项测试] → [并入总门禁] → [关键 workflow 契约进 verify]
+- [绑定替换sync崩"Destination is locked"] → [发布rig把renderPartition/defaultTextureList1等默认着色节点用lockNode -lockUnpublished锁成locked container，sync重建mesh后新建SG/纹理自动连入其multi属性时崩；lockUnpublished与普通lock独立，cmds.setAttr/OpenMaya isLocked都清不掉] → [sync建着色前调_ensure_shading_nodes_unlocked：命名默认着色节点集清lockUnpublished+命中即全扫兜底] → [报"locked container"但场景无container节点时查lockUnpublished而非lock；清它只能用lockNode(node, lockUnpublished=False)]
 
 ## 技能开发
 

@@ -2023,6 +2023,47 @@ def _derive_report_dir(rig_path: str, tex_src: str) -> str:
     return os.path.join(_PROJECT_ROOT, "projects", project, f"{ts}_{safe_asset}_sync")
 
 
+# Maya 默认着色/渲染列表单例节点——新建 shader / file 纹理 / utility / SG / light
+# 会自动连入它们的 multi 属性。locked-asset 交付的 rig 可能把这些用 lockUnpublished 锁住。
+_DEFAULT_SHADING_NODES = (
+    "defaultShaderList1", "defaultTextureList1", "defaultRenderUtilityList1",
+    "defaultLightList1", "defaultRenderingList1", "lightLinker1",
+)
+
+
+def _ensure_shading_nodes_unlocked():
+    """清除默认着色/渲染节点的 lockUnpublished 锁（建/复制 SG 与材质前调用）。
+
+    某些 rig 发布时用 ``lockNode -lockUnpublished on`` 把 renderPartition /
+    defaultTextureList1 / defaultShaderList1 等默认着色基础节点锁成 "locked container"
+    语义，导致其成员 multi 属性不可改；sync 重建 mesh 后新建 SG / file 纹理 / utility
+    自动连入这些节点的 sets/textures/shaders[-1] 时会因 'Destination is locked' 崩溃并
+    整步回滚。lockUnpublished 与普通 lock 是两个独立标志（节点 lock 可为 False 而
+    unpublished 锁仍在），cmds.setAttr / OpenMaya isLocked 都清不掉，必须用
+    lockNode(..., lockUnpublished=False)。正常资产无此锁，本函数为无副作用空操作。"""
+    targets = list(cmds.ls(type="partition") or [])  # renderPartition 等
+    targets += [n for n in _DEFAULT_SHADING_NODES if cmds.objExists(n)]
+    found_lock = False
+    for node in targets:
+        try:
+            if (cmds.lockNode(node, q=True, lockUnpublished=True) or [False])[0]:
+                cmds.lockNode(node, lockUnpublished=False)
+                found_lock = True
+            if (cmds.lockNode(node, q=True, lock=True) or [False])[0]:
+                cmds.lockNode(node, lock=False)
+        except Exception as e:
+            logger.debug("清 %s lockUnpublished 失败: %s", node, e)
+    # 命中默认节点 lockUnpublished（locked-asset 交付的 rig）才全量兜底扫一遍，
+    # 清掉命名集外其它挡住着色连接的锁定节点；正常资产首轮无锁，不触发全扫。
+    if found_lock:
+        for node in (cmds.ls() or []):
+            try:
+                if (cmds.lockNode(node, q=True, lockUnpublished=True) or [False])[0]:
+                    cmds.lockNode(node, lockUnpublished=False)
+            except Exception:
+                pass
+
+
 def execute(payload: dict) -> dict:
     import numpy as np
 
@@ -2105,6 +2146,10 @@ def execute(payload: dict) -> dict:
 
     cmds.undoInfo(openChunk=True, chunkName="sync_rig_incremental_v9")
     try:
+        # 个别 rig 发布时把默认着色节点（renderPartition/defaultTextureList1/defaultShaderList1 等）
+        # 用 lockNode -lockUnpublished 锁成 locked container，导致 sync 建新 SG / 纹理 / utility
+        # 自动连入时 'Destination is locked' 崩溃整步回滚；建着色前先清这些锁（正常资产无锁，无副作用）。
+        _ensure_shading_nodes_unlocked()
         # ── 幂等保护：已跑过直接拒绝 ──
         already_done, done_reason = _check_sync_already_done(cache_group)
         if already_done:
