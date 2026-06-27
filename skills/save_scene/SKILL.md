@@ -1,4 +1,5 @@
 ---
+mcp_expose: true
 skill_id: "save_scene"
 name: "maya_save_scene_as_next_version"
 dcc: "maya"

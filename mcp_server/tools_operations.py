@@ -35,27 +35,8 @@ from core.skill_registry import get_all_skills, get_skill_map
 SKILL_TIERS = {'read', 'write', 'destructive'}
 
 
-def _maya_port_range():
-    """返回 Maya commandPort 扫描范围，默认覆盖 7001-7020。"""
-    start = int(os.getenv('MAYA_FOREGROUND_PORT_START', '7001'))
-    end = int(os.getenv('MAYA_FOREGROUND_PORT_END', '7020'))
-    if end < start:
-        start, end = end, start
-    return range(start, end + 1)
-
-
-def _scan_foreground_ports():
-    """扫描本机活跃 Maya commandPort，供显式端口提示使用。"""
-    active_ports = []
-    for port in _maya_port_range():
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.settimeout(0.2)
-                if s.connect_ex(('127.0.0.1', port)) == 0:
-                    active_ports.append(port)
-        except OSError:
-            pass
-    return active_ports
+# 端口扫描抽到共享叶子模块 mcp_server.ports（消除 tools_readonly/tools_operations/foreground_client 三处重复）
+from mcp_server.ports import discover_maya_ports
 
 
 def _require_explicit_foreground_port(params, tool_name):
@@ -68,7 +49,7 @@ def _require_explicit_foreground_port(params, tool_name):
         'status': 'NEEDS_ATTENTION',
         'tool': tool_name,
         'error': 'foreground 模式必须显式传 foreground_port，避免多 Maya commandPort 会话时误连。',
-        'active_ports': _scan_foreground_ports(),
+        'active_ports': discover_maya_ports(),
         'recovery_hint': '先用 maya_list_foreground_sessions 确认端口，再显式传 foreground_port。Maya 端建议开启：cmds.commandPort(name=":7009", sourceType="python", echoOutput=True)',
     }
 
@@ -97,43 +78,15 @@ def register_operation_tools(mcp):
     # ── 动态注册所有标准技能 Tools ──
     from core.skill_registry import get_all_skills
     
-    # 排除的技能：有专属手动 Tool、低频可被 maya_exec_code 替代、或仅内部/workflow 使用
-    # 被排除的技能仍可通过 execute_skill(skill_id=...) 兜底接口调用，能力无损
-    EXCLUDED_DYNAMIC_SKILLS = {
-        # ── 有专属手动注册 Tool ──
-        'ping',                          # 内部心跳
-        'copy_files',                    # 手动 pipeline_copy_files
-        'pipeline_compare_asset',        # 手动注册
-        'pipeline_export_abc_auto',      # 被 workflow 调用
-        'maya_sync_rig_incremental',     # 手动注册
-        # ── 双重注册修复 ──
-        'exec_code',                     # 与手动 maya_exec_code 重复
-        # ── 低频，可被 maya_exec_code 一行代码替代 ──
-        'maya_create_primitive',
-        'maya_freeze_transforms',
-        'maya_conform_normals',
-        'maya_set_attribute',
-        'maya_select_objects',
-        'maya_get_object_info',
-        'maya_get_hierarchy',
-        'maya_open_scene',               # 框架自动打开
-        'maya_capture_viewport',
-        'blender_capture_viewport',
-        # ── 被更高级工具覆盖 ──
-        'maya_check_textures',           # 低频 QC
-        'maya_split_udim_materials',     # 被 maya_assign_udim_materials 覆盖
-        'maya_compare_mesh_topology',    # 被 maya_compare_asset_in_scene 包含
-        # ── 内部/workflow 专用 ──
-        'build_pipeline_skill',          # AI 内部脚手架
-        'write_task_report',             # 调度层自动调用
-        'maya_deformation_inherit_skin', # 被 sync_rig 内部调用
-        'maya_build_mesh_from_abc',      # 被 sync_rig 内部调用
-        'blender_build_asset_info',      # 通常由 workflow 自动调用
-    }
+    # ── 白名单式暴露 ──
+    # 只有 SKILL.md frontmatter 显式声明 mcp_expose: true 的技能才注册为具名 MCP 工具。
+    # 新增 skill 默认不暴露（需显式开启），符合最小暴露原则；未暴露的技能仍可经
+    # execute_skill(skill_id=...) 兜底调用，能力无损。不声明 mcp_expose 的常见原因：
+    # 有专属手动 Tool / 低频可被 exec_code 替代 / 被更高级工具覆盖 / 仅内部或 workflow 调用。
     
     for skill in get_all_skills():
         skill_id = skill.get('skill_id')
-        if not skill_id or skill_id in EXCLUDED_DYNAMIC_SKILLS:
+        if not skill_id or not skill.get('mcp_expose', False):
             continue
             
         # 动态创建 Input Model
@@ -200,6 +153,17 @@ def register_operation_tools(mcp):
         guard = _require_explicit_foreground_port(params, 'execute_skill')
         if guard:
             return guard
+
+        # exec_code / blender_exec_code 有专属具名工具，兜底入口挡掉，避免同一能力多入口
+        _NAMED_TOOL_FOR = {'exec_code': 'maya_exec_code', 'blender_exec_code': 'blender_exec_code'}
+        if params.skill_id in _NAMED_TOOL_FOR:
+            named = _NAMED_TOOL_FOR[params.skill_id]
+            return {
+                'status': 'ERROR',
+                'error': f'技能 "{params.skill_id}" 有专属具名工具，请直接用 {named}；execute_skill 仅兜底无具名工具的技能。',
+                'use_tool': named,
+                'recovery_hint': f'改调用 {named}。',
+            }
 
         if params.skill_id not in _SKILL_MAP:
             return {

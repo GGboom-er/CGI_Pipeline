@@ -1,4 +1,5 @@
 ---
+mcp_expose: true
 skill_id: "maya_fix_asset_hierarchy"
 name: "maya_fix_rig_geometry_layout"
 dcc: "maya"

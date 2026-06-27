@@ -282,22 +282,10 @@ def register_readonly_tools(mcp):
 
         在前台操作 Maya 前必须先调用此工具获取端口。
         """
-        import os
-        import socket
-        start = int(os.getenv('MAYA_FOREGROUND_PORT_START', '7001'))
-        end = int(os.getenv('MAYA_FOREGROUND_PORT_END', '7020'))
-        if end < start:
-            start, end = end, start
-        active_ports = []
-        for port in range(start, end + 1):
-            try:
-                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                s.settimeout(0.2)
-                s.connect(('127.0.0.1', port))
-                s.close()
-                active_ports.append(port)
-            except (ConnectionRefusedError, TimeoutError, OSError):
-                pass
+        from mcp_server.ports import maya_port_range, discover_maya_ports
+        rng = maya_port_range()
+        start, end = rng.start, rng.stop - 1
+        active_ports = discover_maya_ports()
                 
         return {
             'status': 'SUCCESS',

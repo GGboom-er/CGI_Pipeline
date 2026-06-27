@@ -1,4 +1,5 @@
 ---
+mcp_expose: true
 skill_id: "rename_asset"
 name: "标准化资产重命名"
 dcc: "maya"

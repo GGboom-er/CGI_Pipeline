@@ -1,4 +1,5 @@
 ---
+mcp_expose: true
 skill_id: "maya_build_asset_info"
 name: "Maya 资产信息采集"
 dcc: "maya"

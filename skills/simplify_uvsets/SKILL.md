@@ -1,4 +1,5 @@
 ---
+mcp_expose: true
 skill_id: "simplify_uvsets"
 name: "UV Set 精简"
 dcc: "maya"

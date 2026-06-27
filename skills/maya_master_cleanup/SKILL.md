@@ -1,4 +1,5 @@
 ---
+mcp_expose: true
 skill_id: "maya_master_cleanup"
 name: "管线全自动清理与优化"
 dcc: "maya"

@@ -1,4 +1,5 @@
 ---
+mcp_expose: true
 skill_id: "maya_export_abc"
 name: "Maya 导出 ABC"
 dcc: "maya"

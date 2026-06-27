@@ -1,4 +1,5 @@
 ---
+mcp_expose: true
 skill_id: "blender_export_abc"
 name: "blender_export_cache_to_abc"
 dcc: "blender"

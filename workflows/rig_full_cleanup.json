@@ -21,9 +21,7 @@
     {
       "step_id": "save",
       "skill_id": "save_scene",
-      "parameters": {
-        "save_path": "{{publish.save_path}}"
-      }
+      "parameters": {}
     }
   ]
 }
