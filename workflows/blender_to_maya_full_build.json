@@ -1,5 +1,6 @@
 {
   "workflow_id": "blender_to_maya_full_build",
+  "status": "active",
   "name": "Blender 导出 → Maya PyAlembic 构建 + 材质赋予",
   "description": "从 Blender 导出 ABC + 材质 JSON，在 Maya 中用 PyAlembic 纯数据构建 mesh 并赋予材质，保存文件",
   "source_resolution": {

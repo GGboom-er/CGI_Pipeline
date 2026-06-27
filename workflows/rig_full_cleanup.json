@@ -1,5 +1,6 @@
 {
   "workflow_id": "rig_full_cleanup",
+  "status": "active",
   "name": "绑定全清理",
   "description": "蒙皮权重清理 → Shape 命名修复 → 场景全清理 → 另存",
   "steps": [

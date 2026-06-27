@@ -21,6 +21,7 @@ def list_workflows() -> list[dict]:
             results.append({
                 'workflow_id': wf['workflow_id'],
                 'name': wf.get('name', ''),
+                'status': wf.get('status', 'active'),
                 'description': wf.get('description', ''),
                 'steps': [s['skill_id'] for s in wf.get('steps', [])],
             })

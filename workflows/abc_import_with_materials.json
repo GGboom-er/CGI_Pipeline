@@ -1,5 +1,6 @@
 {
   "workflow_id": "abc_import_with_materials",
+  "status": "active",
   "name": "ABC PyAlembic 构建 + 材质分配",
   "description": "用 PyAlembic 在 Maya 中纯数据构建 mesh 并按 _materials.json 分配材质（配对 blender_export_abc）",
   "steps": [

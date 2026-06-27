@@ -1,5 +1,6 @@
 {
   "workflow_id": "qc_and_publish",
+  "status": "incomplete",
   "name": "QC 质量门禁",
   "description": "场景清理检查 → 发布前质量门禁（publish_asset 尚未实现，暂不包含发布步骤）",
   "steps": [
