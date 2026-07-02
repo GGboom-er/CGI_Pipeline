@@ -701,7 +701,7 @@ def execute_dcc_skill(self, payload: dict):
                 import json
                 _audit_file.parent.mkdir(parents=True, exist_ok=True)
                 with open(_audit_file, 'a', encoding='utf-8') as f:
-                    f.write(json.dumps({'task_id': task_id, 'skill_id': skill_id, 'status': status, 'detail': msg, 'ts': time.time()}, ensure_ascii=False) + '\\n')
+                    f.write(json.dumps({'task_id': task_id, 'skill_id': skill_id, 'status': status, 'detail': msg, 'ts': time.time()}, ensure_ascii=False) + '\n')
             except Exception: pass
         
         _write_err('ERROR', error_msg)

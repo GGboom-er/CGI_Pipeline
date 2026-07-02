@@ -89,6 +89,7 @@ def _submit_to_celery(skill_id: str, payload: dict) -> dict:
     params = payload.get('parameters', {})
     params.pop('execution_mode', None)
     params.pop('foreground_port', None)
+    params.pop('sync', None)
     
     queue = _resolve_queue(skill_id)
 
