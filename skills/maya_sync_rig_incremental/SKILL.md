@@ -8,7 +8,7 @@ pairs_with:
   - "pipeline_compare_asset"
   - "maya_apply_materials"
   - "save_scene"
-description: "在 target rig 场景中，依据前置 compare_result 和 source ABC 增量重建/更新 mesh。对 IDENTICAL/ORIG_INJECT 走快速搬运或坐标注入，对 PAIRED/UNPAIRED 走 SuperMesh 包裹重建并迁移权重/BS。"
+description: "在 target rig 场景中，依据前置 compare_result 和 source ABC 增量重建/更新 mesh。对 IDENTICAL/ORIG_INJECT 走快速搬运+坐标注入并同步 source UV，对 PAIRED/UNPAIRED 走 SuperMesh 包裹重建并迁移权重/BS。"
 parameters:
   compare_result:
     type: "string"
@@ -62,8 +62,8 @@ category: "sync"
 - **Phase 1**: target `cache` 组全员加 `RIG_` 前缀，避免与新 mesh 命名冲突。
 - **Phase 2**: 读取 `compare_result.json` 或上游 `output.compare_result` 字典作为同步指令；同步结果写入标准执行记录 `input/output`，不额外落散报告。
 - **Phase 3**: 按 `pairing_groups[].action` 分发（见 `core.asset_info_schema.compare()` 契约）：
-  - `IDENTICAL` → fast path：搬运 target rig mesh 到新 cache 对应层级，不改坐标
-  - `ORIG_INJECT` → fast path：搬运后注入 source 坐标（点数/点序一致）
+  - `IDENTICAL` → fast path：搬运 target rig mesh 到新 cache 对应层级，不改坐标；面数一致时把 source ABC 的 UV 刷进 shape（资产 UV-only 更新也要传到 rig）
+  - `ORIG_INJECT` → fast path：搬运后注入 source 坐标（点数/点序一致），并同上刷 source UV
   - `PAIRED` → 多对多配对组进入 voting pool，带候选 rig 源用于定向投射权重
   - `UNPAIRED` → source 独有组进入 `_source_only`，后续用 Chamfer 自动配对或按新 mesh 处理
   - `target_only_dags` → target 独有节点进入 `_target_only`，原位保留供审核

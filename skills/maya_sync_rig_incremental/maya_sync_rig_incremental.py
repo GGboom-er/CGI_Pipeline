@@ -1579,23 +1579,53 @@ def _relocate_rig_mesh(rig_dag, new_name, target_parent, rig_prefix, inject_poin
             except Exception:
                 pass
 
-    # ORIG_INJECT：注坐标到 ShapeOrig
+    # ORIG_INJECT：把正式资产坐标刷进该 transform 下所有 mesh shape（可见 shape 与 orig 都刷），
+    # 用 kWorld 按世界坐标换算到各自局部，确保两者所有点坐标一模一样（用户 2026-06-30 拍板·R5）。
+    # inject_points 是世界坐标（abc_reader 已乘 world_matrix）；点数一致才刷（ORIG_INJECT 保证点序点数同）。
     if inject_points is not None:
-        orig_shape = _find_orig_shape(transform)
-        if orig_shape:
-            try:
-                sel = om2.MSelectionList()
-                sel.add(orig_shape)
-                fn_mesh = om2.MFnMesh(sel.getDagPath(0))
-                pa = om2.MPointArray()
-                arr = np.asarray(inject_points).reshape(-1, 3)
-                for p in arr:
-                    pa.append(om2.MPoint(float(p[0]), float(p[1]), float(p[2])))
-                fn_mesh.setPoints(pa)
-            except Exception:
-                pass
+        arr = np.asarray(inject_points).reshape(-1, 3)
+        pa = om2.MPointArray()
+        for p in arr:
+            pa.append(om2.MPoint(float(p[0]), float(p[1]), float(p[2])))
+        for sh in cmds.listRelatives(transform, shapes=True, type="mesh", fullPath=True) or []:
+            sel = om2.MSelectionList()
+            sel.add(sh)
+            fn_mesh = om2.MFnMesh(sel.getDagPath(0))
+            if fn_mesh.numVertices == len(arr):
+                fn_mesh.setPoints(pa, om2.MSpace.kWorld)
 
     return transform
+
+
+def _inject_abc_uv(transform, tex_data):
+    """把 ABC 的 UV(map1) 刷进 transform 下拓扑匹配的 mesh shape。
+
+    ORIG_INJECT/IDENTICAL 复用旧绑定 mesh 时，顶点位置由 setPoints 注入，
+    但 UV 不随 setPoints 变；资产只改了 UV（位置没变）时需在此显式注入，
+    否则 rig 留旧 UV。UV 数据来自 tex_data（read_abc_as_info full 模式已读）。
+    面数不一致（拓扑不符）的 shape 跳过，不硬写。
+    """
+    u_arr = tex_data.get("u_array", [])
+    v_arr = tex_data.get("v_array", [])
+    uv_ids = tex_data.get("uv_indices", [])
+    fc = tex_data.get("face_counts", [])
+    if not (u_arr and v_arr and uv_ids and fc):
+        return False
+    fc_int = om2.MIntArray(fc)
+    uv_i_int = om2.MIntArray(uv_ids)
+    u_f = om2.MFloatArray(u_arr)
+    v_f = om2.MFloatArray(v_arr)
+    wrote = False
+    for sh in cmds.listRelatives(transform, shapes=True, type="mesh", fullPath=True) or []:
+        sel = om2.MSelectionList()
+        sel.add(sh)
+        fn_mesh = om2.MFnMesh(sel.getDagPath(0))
+        if fn_mesh.numPolygons != len(fc):
+            continue
+        fn_mesh.setUVs(u_f, v_f, "map1")
+        fn_mesh.assignUVs(fc_int, uv_i_int, "map1")
+        wrote = True
+    return wrote
 
 
 def _assign_materials_from_info(materials_info, all_mesh_nodes, tex_meshes_keys):
@@ -2258,10 +2288,11 @@ def execute(payload: dict) -> dict:
             items.append(make_item('Report', f'报告生成失败: {e}'))
 
 
-        # ── Phase 2: 提取旧 RIG 骨骼与权重 ──
-        _plog(f"Phase2a: extract skin data for {len(rig_meshes)} rig meshes")
+        # ── Phase 2: 提取旧 RIG 骨骼与权重（geom_only 跳过：纯对比模式不传权重，提取是白工）──
+        _skin_src = {} if geom_only else rig_meshes
+        _plog(f"Phase2a: extract skin data for {len(_skin_src)} rig meshes (geom_only={geom_only})")
         rig_skin_data = {}
-        for i, (rig_dag, rig_data) in enumerate(rig_meshes.items()):
+        for i, (rig_dag, rig_data) in enumerate(_skin_src.items()):
             if i % 10 == 0:
                 _plog(f"  Phase2a progress: {i}/{len(rig_meshes)}")
             skin_node, src_shape = _find_skin_cluster(rig_dag)
@@ -2292,10 +2323,11 @@ def execute(payload: dict) -> dict:
                     _plog(msg)
                     items.append(make_item(rig_dag.split("|")[-1] or rig_dag, msg[:200]))
 
-        # ── Phase 2b: 提取旧 RIG BlendShape 数据 ──
-        _plog(f"Phase2b: extract BS data for {len(rig_meshes)} rig meshes")
+        # ── Phase 2b: 提取旧 RIG BlendShape 数据（geom_only 跳过：纯对比模式不复刻 BS）──
+        _bs_src = [] if geom_only else list(rig_meshes.keys())
+        _plog(f"Phase2b: extract BS data for {len(_bs_src)} rig meshes (geom_only={geom_only})")
         rig_bs_data = {}
-        for i, rig_dag in enumerate(rig_meshes.keys()):
+        for i, rig_dag in enumerate(_bs_src):
             if i % 10 == 0:
                 _plog(f"  Phase2b progress: {i}/{len(rig_meshes)}")
             bs_infos = _extract_blendshape_data(rig_dag)
@@ -2456,7 +2488,8 @@ def execute(payload: dict) -> dict:
                 )
                 if new_transform:
                     reused_rig_dags.add(rig_full)
-                    items.append(make_item(target_name, f"{action}: 搬运 + 改名"))
+                    uv_done = _inject_abc_uv(new_transform, tex_data)
+                    items.append(make_item(target_name, f"{action}: 搬运 + 改名" + (" + 注 UV" if uv_done else "")))
                     # IDENTICAL 与 ORIG_INJECT 都不建 layer：几何一致/宽松一致，仅做层级与命名修复，
                     # 绑定师整体校验时再由后续 QC 技能统一标注，避免 outliner 被单物体 layer 撑满。
                 else:
@@ -2543,7 +2576,7 @@ def execute(payload: dict) -> dict:
         rig_vert_offsets = {}
         vert_offset = 0
 
-        for rig_dag, rig_data in rig_meshes.items():
+        for rig_dag, rig_data in (({} if geom_only else rig_meshes).items()):  # geom_only 跳过：不投射权重，无需 SuperMesh
             if rig_dag in reused_rig_dags:
                 continue
             verts = np.array(rig_data["vert_positions"]).reshape(-1, 3)
@@ -2563,8 +2596,8 @@ def execute(payload: dict) -> dict:
             super_tree = cKDTree(sv_arr)
             items.append(make_item("SuperWrap 初始化", f"构建全局 KDTree: {len(sv_arr)} 个源顶点参与融合包裹"))
 
-        # ── Phase 3.5: Chamfer Distance 自动配对 ──
-        auto_pairings = _auto_pair_by_chamfer(voting_pool_tex, rig_meshes, rig_skin_data, reused_rig_dags, profile=profile)
+        # ── Phase 3.5: Chamfer Distance 自动配对（geom_only 跳过：不借权重，无需配对）──
+        auto_pairings = {} if geom_only else _auto_pair_by_chamfer(voting_pool_tex, rig_meshes, rig_skin_data, reused_rig_dags, profile=profile)
         for dag_tex, best_rig_dag in auto_pairings.items():
             voting_pool_tex[dag_tex]["_paired_rig_dag"] = best_rig_dag
         if auto_pairings:
@@ -2598,6 +2631,13 @@ def execute(payload: dict) -> dict:
                 group_records[_gid]["abc_nodes"].append(new_mesh)
             elif tex_data.get("_unpaired"):
                 unpaired_nodes.append(new_mesh)
+
+            # 没匹配（UNPAIRED）的 mesh 不自动借权重/绑定：输出干净几何交绑定师手绑（用户 2026-06-30 拍板·R2）。
+            # 放在权重投射前拦截，使 Chamfer 给它的 _paired_rig_dag 与 Super-Wrap 都不生效。
+            if tex_data.get("_unpaired"):
+                new_nodes.append(new_mesh)
+                items.append(make_item(target_name, "UNPAIRED: 干净几何，不自动绑定（交绑定师手绑）"))
+                continue
 
             # 按配置跳过权重/BS 复刻：只搭几何，网格未绑定，交给绑定师手绑
             if not transfer_weights:
@@ -2955,7 +2995,8 @@ def execute(payload: dict) -> dict:
                 except Exception as e:
                     items.append(make_item(target_name, f"GLOBAL WRAP FAILED: {str(e)[:80]}"))
 
-        # 新建的 ABC mesh 必须补齐标准 ShapeOrig，确保后置 compare 仍按严格采集规则工作。
+        # 只给真正带绑定（有 skinCluster）的新 mesh 补齐标准 ShapeOrig，便于后置 compare 采集；
+        # 没匹配/未绑定的 mesh（UNPAIRED 等）保持干净，不注 ShapeOrig（用户 2026-06-30 拍板·R1）。
         created_mesh_nodes = []
         for rec in group_records.values():
             created_mesh_nodes.extend(rec.get("abc_nodes", []))
@@ -2964,6 +3005,9 @@ def execute(payload: dict) -> dict:
         orig_init_errors = []
         orig_created = 0
         for node in created_mesh_nodes:
+            skin, _ = _find_skin_cluster(node)
+            if not skin:
+                continue  # 未绑定 mesh 不注 ShapeOrig，保持干净
             ok, detail = _ensure_collectable_shape_orig(node)
             if not ok:
                 orig_init_errors.append(f"{node}: {detail}")

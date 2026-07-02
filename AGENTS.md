@@ -54,6 +54,13 @@ python -m celery -A core.tasks worker -Q workflow_queue --pool=solo -c 1 -l info
 **Celery 装在 conda 环境里，不在系统 PATH**。没激活环境就用 `conda run -n cgi_pipeline ...`。Maya worker 必须用 `mayapy` 启动，这块 `service_manager.py` 会自动处理。
 `service_manager.py` 会同时检查 PID 文件和 Celery 队列心跳；心跳窗口默认 5 秒，PID 存活但对应队列心跳丢失时会自动重启 Worker。
 
+**运维实测事实（2026-07 · AI/人排队都照这个来，别提前掐进程）**：
+- mayapy worker 冷启动到心跳注册需 45~90s：启动/重启后首查前等 90s，NO_HEARTBEAT 超 120s 才允许重启一次，连环重启会反复掐死正在启动的进程。
+- `tex_to_rig_verify_and_sync` 全程约 3~4 分钟（blender 段 ~30s、maya 段 2~3 分钟）：提交后一次等够再查，别 30s 一轮空询。
+- 任务终态取结果直接读沙盒 `projects/{project}/{时间戳}_{资产}/REPORT.md`；`maya_query_task` 终态带全量日志（可达数十万字符），只用于中途 PROGRESS 轮询。
+- 后台 `exec_code` 的结果不落审计文件：验证类 exec 让代码把结果写 JSON 到沙盒再读盘，或走 foreground+sync 直返。
+- X: 为网络盘：禁止递归 Glob/搜索整盘，只列单层目录。
+
 ### CLI（脱离 AI 直接跑技能/工作流）
 
 ```bash
@@ -174,7 +181,7 @@ Maya 场景内几何采集放在 `dccs/maya/asset_info_collector.py`，不要放
 - 从 `cache_group` 全层级子孙里自身带 mesh shape 的 transform 出发。
 - mesh key 使用标准非 intermediate mesh shape 的绝对 DAG 路径；transform 可见性不参与过滤。
 - 顶点数据优先来自 Maya 图关系求出的唯一 Orig，不靠名称猜测；兜底才接受同 transform 下唯一有效的 intermediate mesh。
-- 找不到唯一 Orig 时保留 mesh 条目但写空几何；诊断由对比/报告暴露，不由采集器修复。
+- 找不到唯一 Orig（未绑定/新注入的纯 mesh 本就没有 Orig）时回退读标准 shape 本身；仅"有 intermediate 但 Orig 认不出"的模糊情况仍写空几何交由对比暴露。
 
 ### 对比/拼装主线
 
