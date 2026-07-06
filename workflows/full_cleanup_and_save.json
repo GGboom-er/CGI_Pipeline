@@ -2,8 +2,13 @@
   "workflow_id": "full_cleanup_and_save",
   "status": "active",
   "name": "全清理 + 保存",
-  "description": "场景全清理（Fix 模式）→ Shape 命名修复 → 法线统一 → 另存为",
+  "description": "蒙皮权重清理 → 场景全清理（Fix 模式）→ Shape 命名修复 → 法线统一 → 另存为",
   "steps": [
+    {
+      "step_id": "clean_weights",
+      "skill_id": "maya_clean_skinweights",
+      "parameters": {}
+    },
     {
       "step_id": "cleanup",
       "skill_id": "maya_master_cleanup",

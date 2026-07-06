@@ -469,7 +469,7 @@ def register_operation_tools(mcp):
         - blender_tex_export: Blender 导出 ABC + 采集 info
         - tex_to_rig_verify: 资产名/显式路径 → Blender source → Maya rig 校验（跨 DCC）
         - tex_to_rig_verify_and_sync: 资产名/显式路径 → 对比 → 拼装 → 材质 → 保存
-        - rig_full_cleanup: 蒙皮清理 → Shape 修复 → 全清理 → 保存
+        - full_cleanup_and_save: 权重清理 → 全清理 → Shape 修复 → 法线统一 → 保存
         - abc_import_with_materials: ABC 导入 + UDIM 材质分配
         """
         return _submit_workflow({

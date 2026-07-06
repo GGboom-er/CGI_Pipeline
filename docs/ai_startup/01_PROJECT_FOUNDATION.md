@@ -135,8 +135,7 @@ Workflow 基本规则：
 | `blender_to_maya_full_build` | 从 Blender 源文件导出 ABC，在空 Maya 场景中构建 mesh、赋材质、保存。 |
 | `blender_tex_export` | Blender 导出 ABC、材质和 asset_info。 |
 | `abc_import_with_materials` | Maya 侧从 ABC 构建 mesh 并赋材质。 |
-| `full_cleanup_and_save` | Maya 全清理、Shape 修复、法线处理、保存。 |
-| `rig_full_cleanup` | 绑定文件权重清理、Shape 修复、全清理、保存。 |
+| `full_cleanup_and_save` | Maya 权重清理、全清理、Shape 修复、法线处理、保存。 |
 | `qc_and_publish` | QC 检查和发布门禁骨架。 |
 
 当前主 workflow 是：
