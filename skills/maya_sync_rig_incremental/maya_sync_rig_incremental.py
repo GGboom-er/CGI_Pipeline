@@ -1622,6 +1622,9 @@ def _inject_abc_uv(transform, tex_data):
         fn_mesh = om2.MFnMesh(sel.getDagPath(0))
         if fn_mesh.numPolygons != len(fc):
             continue
+        # 复用旧绑定 mesh 时 map1 里可能残留旧 UV/指派；先清空再灌，
+        # 否则 setUVs 撞旧指派报 (kInvalidParameter) value not in valid range。
+        fn_mesh.clearUVs("map1")
         fn_mesh.setUVs(u_f, v_f, "map1")
         fn_mesh.assignUVs(fc_int, uv_i_int, "map1")
         wrote = True
@@ -2180,16 +2183,6 @@ def execute(payload: dict) -> dict:
         # 用 lockNode -lockUnpublished 锁成 locked container，导致 sync 建新 SG / 纹理 / utility
         # 自动连入时 'Destination is locked' 崩溃整步回滚；建着色前先清这些锁（正常资产无锁，无副作用）。
         _ensure_shading_nodes_unlocked()
-        # ── 幂等保护：已跑过直接拒绝 ──
-        already_done, done_reason = _check_sync_already_done(cache_group)
-        if already_done:
-            cmds.undoInfo(closeChunk=True)
-            return _sync_receipt(
-                "ERROR", t0, "preflight",
-                error=f"场景似乎已被 sync 处理过，请从原始 rig 场景重新开始。原因：{done_reason}",
-                items=items,
-                recovery_hint="使用沙盒内原始 rig 副本重新执行 workflow；不要在已同步场景上重复运行 sync。",
-            )
 
         # ── Phase 0: 扫描硬编码路径引用（只报告，不改写）──
         hardcoded_refs = _scan_hardcoded_refs(rig_prefix)
@@ -3083,12 +3076,16 @@ def execute(payload: dict) -> dict:
             if "|cache" in node or node == "cache":
                 new_cache_node = node
                 break
-        _mark_sync_done(new_cache_node)
         _plog("sync main body done")
 
     except Exception as e:
+        import traceback as _tb
+        try:
+            with open(os.path.join(str(_PROJECT_ROOT), "logs", "sync_crash.log"), "a", encoding="utf-8", errors="replace") as _f:
+                _f.write(f"\n===== SYNC CRASH rig={rig_path} =====\n{_tb.format_exc()}\n")
+        except Exception:
+            pass
         cmds.undoInfo(closeChunk=True)
-        cmds.undo()
         return _sync_receipt(
             "ERROR", t0, "execute",
             error=f"执行崩溃，已撤销: {e}",
