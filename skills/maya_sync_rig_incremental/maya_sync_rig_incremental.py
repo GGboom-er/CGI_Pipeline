@@ -1597,6 +1597,75 @@ def _relocate_rig_mesh(rig_dag, new_name, target_parent, rig_prefix, inject_poin
     return transform
 
 
+def _inject_uv_via_sandbox(target_shape, u_f, v_f, fc_int, uv_i_int):
+    """用沙盒法把 UV 灌进 target_shape 的 map1，规整成唯一 map1，且不在绑定文件里留历史。
+
+    为什么走沙盒：在「带输入历史」的 shape 上做 clearUVs/setUVs，Maya 会插 polyModifier
+    (polyMapDel 等) 垃圾历史。改为把几何整块搬进临时 mesh，在临时件上规整 uvset + 写 UV，
+    删掉临时件历史后，用 outMesh→inMesh 的「整块 datablock 替换」回灌 target——datablock
+    替换不是编辑操作、不生历史；临时件是无输入的独立节点，其上 clearUVs 也无副作用。
+    """
+    temp_shape = cmds.createNode("mesh")
+    temp_tr = cmds.listRelatives(temp_shape, parent=True, fullPath=True)[0]
+    try:
+        # 1. 把 target 当前几何整块灌进沙盒(连→求值→断，沙盒随即持有缓存 datablock)
+        cmds.connectAttr(target_shape + ".outMesh", temp_shape + ".inMesh", force=True)
+        cmds.getAttr(temp_shape + ".boundingBoxMin")
+        cmds.disconnectAttr(target_shape + ".outMesh", temp_shape + ".inMesh")
+
+        # 2. 沙盒上规整 uvset：只留一个、名为 map1
+        existing = cmds.polyUVSet(temp_shape, q=True, allUVSets=True) or []
+        if "map1" not in existing:
+            if existing:
+                cmds.polyUVSet(temp_shape, rename=True, uvSet=existing[0], newUVSet="map1")
+            else:
+                cmds.polyUVSet(temp_shape, create=True, uvSet="map1")
+            existing = cmds.polyUVSet(temp_shape, q=True, allUVSets=True) or []
+        for uv in existing:
+            if uv != "map1":
+                try:
+                    cmds.polyUVSet(temp_shape, delete=True, uvSet=uv)
+                except Exception:
+                    pass
+
+        # 3. 沙盒上写 ABC UV(沙盒无输入历史、随后整体删，clearUVs 在此无副作用)
+        temp_sel = om2.MSelectionList()
+        temp_sel.add(temp_shape)
+        fn = om2.MFnMesh(temp_sel.getDagPath(0))
+        fn.clearUVs("map1")
+        fn.setUVs(u_f, v_f, "map1")
+        fn.assignUVs(fc_int, uv_i_int, "map1")
+        cmds.delete(temp_tr, ch=True)
+
+        # 4. 整块 datablock 回灌 target(替换非编辑，不生历史)
+        cmds.connectAttr(temp_shape + ".outMesh", target_shape + ".inMesh", force=True)
+        cmds.getAttr(target_shape + ".boundingBoxMin")
+        cmds.disconnectAttr(temp_shape + ".outMesh", target_shape + ".inMesh")
+
+        # 5. 拔幽灵 uvset 名字槽：datablock 回灌只覆盖 map1 数据，target 上旧的非 map1
+        # uvSet 名字槽会「粘」在节点上残留。移除它们，保证有且仅有一个名为 map1 的 uvset。
+        # removeMultiInstance 改的是节点属性槽，非 mesh 编辑，不生 polyMapDel。
+        indices = cmds.getAttr(target_shape + ".uvSet", multiIndices=True) or []
+        for i in indices:
+            slot = "{}.uvSet[{}]".format(target_shape, i)
+            try:
+                if cmds.getAttr(slot + ".uvSetName") != "map1":
+                    cmds.removeMultiInstance(slot, b=True)
+            except Exception:
+                pass
+        try:
+            cmds.setAttr(target_shape + ".currentUVSet", "map1", type="string")
+        except Exception:
+            pass
+        return True
+    except Exception as e:
+        cmds.warning("UV 沙盒注入失败 %s: %s" % (target_shape, e))
+        return False
+    finally:
+        if cmds.objExists(temp_tr):
+            cmds.delete(temp_tr)
+
+
 def _inject_abc_uv(transform, tex_data):
     """把 ABC 的 UV(map1) 刷进 transform 下拓扑匹配的 mesh shape。
 
@@ -1616,18 +1685,20 @@ def _inject_abc_uv(transform, tex_data):
     u_f = om2.MFloatArray(u_arr)
     v_f = om2.MFloatArray(v_arr)
     wrote = False
-    for sh in cmds.listRelatives(transform, shapes=True, type="mesh", fullPath=True) or []:
+    # 绑定体：UV 只能注入「变形输入」shape(ShapeOrig)，让 UV 顺变形链自然流到可见 shape；
+    # 无 ShapeOrig(静态件)才回退写唯一可见 shape。
+    # 注入一律走沙盒(_inject_uv_via_sandbox)：先在临时件规整成唯一 map1 再写 UV，整块回灌，
+    # 绝不在真 shape 上 clearUVs/setUVs——否则带输入历史的 shape 会留 polyMapDel 垃圾历史。
+    all_shapes = cmds.listRelatives(transform, shapes=True, type="mesh", fullPath=True) or []
+    orig_shapes = [s for s in all_shapes if cmds.getAttr(s + ".intermediateObject")]
+    target_shapes = orig_shapes or all_shapes
+    for sh in target_shapes:
         sel = om2.MSelectionList()
         sel.add(sh)
-        fn_mesh = om2.MFnMesh(sel.getDagPath(0))
-        if fn_mesh.numPolygons != len(fc):
+        if om2.MFnMesh(sel.getDagPath(0)).numPolygons != len(fc):
             continue
-        # 复用旧绑定 mesh 时 map1 里可能残留旧 UV/指派；先清空再灌，
-        # 否则 setUVs 撞旧指派报 (kInvalidParameter) value not in valid range。
-        fn_mesh.clearUVs("map1")
-        fn_mesh.setUVs(u_f, v_f, "map1")
-        fn_mesh.assignUVs(fc_int, uv_i_int, "map1")
-        wrote = True
+        if _inject_uv_via_sandbox(sh, u_f, v_f, fc_int, uv_i_int):
+            wrote = True
     return wrote
 
 
