@@ -353,6 +353,55 @@ def _await_worker_ready(dcc: str, timeout_sec: float = 30.0) -> bool:
     return False
 
 
+def _clear_stale_pidfile(dcc: str):
+    """Popen 前清理残留 pidfile：文件在但进程已死则删，防 celery O_EXCL 撞死残留。"""
+    pidfile = RUNTIME_DIR / f'worker_{dcc}.pid'
+    if not pidfile.exists():
+        return
+    try:
+        pid = int(pidfile.read_text().strip())
+    except (ValueError, OSError):
+        pidfile.unlink(missing_ok=True)  # 坏 pidfile 直接清
+        return
+    if not _is_pid_alive(pid):
+        pidfile.unlink(missing_ok=True)
+
+
+def _acquire_start_lock(dcc: str, stale_after_sec: float) -> bool:
+    """原子抢启动锁，串行化并发 start（跨进程：dashboard vs MCP）。
+
+    抢到返回 True；已有 starter 持锁返回 False。锁文件 mtime 超过 stale_after_sec
+    视为上个 starter 崩溃残留，偷锁重来（不因单次崩溃永久堵死）。
+    """
+    import time
+    lockpath = RUNTIME_DIR / f'worker_{dcc}.starting.lock'
+    try:
+        fd = os.open(str(lockpath), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        os.write(fd, str(os.getpid()).encode())
+        os.close(fd)
+        return True
+    except FileExistsError:
+        try:
+            age = time.time() - lockpath.stat().st_mtime
+        except OSError:
+            return False
+        if age > stale_after_sec:
+            # 残留锁：偷锁（删掉重抢，抢不到就让给刚介入的那个）
+            lockpath.unlink(missing_ok=True)
+            try:
+                fd = os.open(str(lockpath), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                os.write(fd, str(os.getpid()).encode())
+                os.close(fd)
+                return True
+            except FileExistsError:
+                return False
+        return False
+
+
+def _release_start_lock(dcc: str):
+    (RUNTIME_DIR / f'worker_{dcc}.starting.lock').unlink(missing_ok=True)
+
+
 def start_worker(dcc: str = 'maya', wait: bool = True, timeout_sec: float = 30.0) -> bool:
     """启动指定 DCC 的 Celery Worker（幂等，已运行则跳过）。
 
@@ -367,11 +416,23 @@ def start_worker(dcc: str = 'maya', wait: bool = True, timeout_sec: float = 30.0
     if alive:
         return True
 
+    # 抢启动锁：只允许一个 starter 真正 Popen，其余等健康——治 LockFailed 并发抢 pidfile 竞态。
+    # 输家不 Popen 竞争（那会让 celery O_EXCL 撞车），改等就绪，天然幂等符合「已运行则跳过」。
+    if not _acquire_start_lock(dcc, stale_after_sec=timeout_sec + 5.0):
+        return _await_worker_ready(dcc, timeout_sec) if wait else False
+
     queue = _queue_for_dcc(dcc)
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
     pidfile = RUNTIME_DIR / f'worker_{dcc}.pid'
     logfile = LOGS_DIR / f'worker_{dcc}.log'
+
+    # 拿锁后二次确认：抢锁瞬间可能已被别的 starter 起好；再清残留 pidfile 防 celery O_EXCL 撞车
+    alive, _ = is_worker_alive(dcc)
+    if alive:
+        _release_start_lock(dcc)
+        return True
+    _clear_stale_pidfile(dcc)
 
     flags = 0
     if sys.platform == 'win32':
@@ -417,6 +478,10 @@ def start_worker(dcc: str = 'maya', wait: bool = True, timeout_sec: float = 30.0
     except Exception as e:
         print(f'[ServiceManager] {dcc} Worker 启动失败: {e}')
         return False
+    finally:
+        # 无论成败都释放启动锁：Popen 已发起（celery 接手 pidfile），锁使命已尽，
+        # 保留会误堵下一个合法 starter；wait=False 时也在此释放。
+        _release_start_lock(dcc)
 
 
 def stop_worker(dcc: str = 'maya', timeout: float = 8.0) -> bool:
