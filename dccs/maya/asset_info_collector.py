@@ -162,6 +162,28 @@ def get_shape_orig(shape_full, transform):
     return None
 
 
+def get_deform_input(transform):
+    """给一个 transform，返回 (可见 shape, orig 或 None) —— 全库统一的 orig 入口。
+
+    orig 一律走权威 get_shape_orig(deformableShape → tweak → 连接的唯一 intermediate，
+    只认 Maya 图关系、不猜名字/后缀)。可见 shape 不唯一(重影/无可见 shape)时 orig 返回 None，
+    交调用方按语义处理(注入类报错、采集/清理类跳过)。
+
+    返回:
+      (visible_shape_long 或 None, orig_shape_long 或 None)
+      - orig 非 None: 绑定件，变形输入 = orig
+      - orig 为 None 且 visible 非 None: 无绑定(静态/新建件)，几何 = visible
+      - visible 为 None: 该 transform 下无唯一可见 mesh shape
+    """
+    shapes = _child_mesh_shapes(transform)
+    visible = [s for s in shapes if not cmds.getAttr(s + ".intermediateObject")]
+    if len(visible) != 1:
+        vis = (cmds.ls(visible[0], long=True) or [visible[0]])[0] if visible else None
+        return vis, None
+    vis = (cmds.ls(visible[0], long=True) or [visible[0]])[0]
+    return vis, get_shape_orig(vis, transform)
+
+
 def _cache_group_candidates(cache_group):
     raw_text = normalize_cache_group_param(cache_group)
     raw_items = [item.strip() for item in raw_text.split(";") if item.strip()]
@@ -222,7 +244,12 @@ def collect_scene_info(cache_group, include_topology=False, precision=4):
     if not actual_cache:
         raise RuntimeError(f'场景中未找到 cache 组: {cache_group}')
 
+    # RIG 来源组(RIG_geo/RIG_ 前缀)理论上每个 mesh 都必须有 orig；无 orig=未绑定，
+    # 摘出进 nonrig_meshes、不进对比。cache(拼装结果)组允许无 orig(新建件)，回退用 shape。
+    is_rig_group = "RIG_" in str(actual_cache or "")
+
     asset_info = make_empty_info()
+    nonrig_meshes = []
 
     for transform_path in mesh_transforms_under(actual_cache):
         standard_shapes = [
@@ -235,7 +262,11 @@ def collect_scene_info(cache_group, include_topology=False, precision=4):
         for shape_full in standard_shapes:
             shape_dag = (cmds.ls(shape_full, long=True) or [shape_full])[0]
             shape_orig = get_shape_orig(shape_full, transform_path)
-            # 绑定 mesh 取 Orig(静止态)；无 Orig(未绑定/新注入 mesh)时标准 shape 本身即几何,回退直接读
+            if is_rig_group and not shape_orig:
+                # RIG 来源组里无 orig = 未绑定，摘出、不进对比
+                nonrig_meshes.append(shape_dag)
+                continue
+            # 绑定 mesh 取 Orig(静止态)；无 Orig(cache 新建件)时标准 shape 本身即几何,回退直接读
             geo_shape = shape_orig or shape_dag
 
             try:
@@ -256,4 +287,5 @@ def collect_scene_info(cache_group, include_topology=False, precision=4):
             asset_info["meshes"][shape_dag] = entry
 
     asset_info["source_file"] = cmds.file(query=True, sceneName=True) or ""
+    asset_info["nonrig_meshes"] = nonrig_meshes  # RIG 组内无 orig(未绑定)的 mesh，不进对比、供建 NoneRig 层
     return asset_info

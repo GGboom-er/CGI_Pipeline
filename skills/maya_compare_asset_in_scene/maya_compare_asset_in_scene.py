@@ -89,6 +89,21 @@ def execute(payload: dict) -> dict:
             error=str(e)
         )
 
+    # RIG 来源组里无 orig 的 mesh = 未绑定，已被 collect 摘出对比。就地归入 NoneRig 显示层，
+    # 让绑定师一眼看到哪些没绑；这些件不参与对比、不复用。
+    nonrig_meshes = target_info.get('nonrig_meshes', []) or []
+    nonrig_layer_count = 0
+    if nonrig_meshes:
+        try:
+            if not cmds.objExists('NoneRig'):
+                cmds.createDisplayLayer(name='NoneRig', empty=True)
+            valid = [m for m in nonrig_meshes if cmds.objExists(m)]
+            if valid:
+                cmds.editDisplayLayerMembers('NoneRig', *valid, noRecurse=True)
+                nonrig_layer_count = len(valid)
+        except Exception as e:
+            cmds.warning(f'NoneRig 层归类失败: {e}')
+
     try:
         report = compare(
             source_info, target_info,
@@ -151,6 +166,8 @@ def execute(payload: dict) -> dict:
             'only_source': counts['only_source'],
             'only_target': counts['only_target'],
             'blocking': counts['blocking'],
+            'nonrig_count': nonrig_layer_count,
+            'nonrig_meshes': [m.split('|')[-1] for m in nonrig_meshes],
             'compare_result': compare_result_payload,
             **output_details,
         },

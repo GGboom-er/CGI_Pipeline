@@ -17,6 +17,37 @@ from core.bootstrap import PROJECT_ROOT as _PROJECT_ROOT
 from core.receipt import make_receipt, make_item, _sec_to_min
 
 
+def _rewire_junk_orig_to_true(junk_shape, true_orig):
+    """把垃圾 orig 的下游消费者(变形器 inputGeometry 等)改接到真 orig，完成统一。
+
+    只有拓扑(点数)与真 orig 一致才改——一致=同一几何的过时副本，安全统一；
+    不一致=真混用(不同几何各喂不同变形器)，判冲突、不动、交人工。
+    返回 (ok, reason)：ok=True 已改接可删；ok=False 未动(冲突/失败)。
+    """
+    try:
+        junk_vtx = cmds.polyEvaluate(junk_shape, vertex=True)
+        true_vtx = cmds.polyEvaluate(true_orig, vertex=True)
+    except Exception as e:
+        return False, f"点数查询失败({e})"
+    if not isinstance(junk_vtx, int) or junk_vtx != true_vtx:
+        return False, f"点数不一致({junk_vtx} vs {true_vtx})"
+    # [srcPlug, destPlug, ...]：srcPlug 在垃圾 orig 上(如 .worldMesh[0]/.outMesh)，destPlug 是消费者
+    conns = cmds.listConnections(
+        junk_shape, source=False, destination=True, plugs=True, connections=True
+    ) or []
+    for i in range(0, len(conns), 2):
+        src_plug = conns[i]
+        dst_plug = conns[i + 1]
+        attr = src_plug.split('.', 1)[1] if '.' in src_plug else 'outMesh'
+        new_src = f"{true_orig}.{attr}"
+        try:
+            cmds.disconnectAttr(src_plug, dst_plug)
+            cmds.connectAttr(new_src, dst_plug, force=True)
+        except Exception as e:
+            return False, f"改接失败({e})"
+    return True, "已改接"
+
+
 def execute(payload: dict) -> dict:
     t0 = time.time()
     params = payload.get('parameters', {})
@@ -79,44 +110,53 @@ def execute(payload: dict) -> dict:
                 continue
                 
             main_shape = active_shapes[0]
-            
-            # 判断 Orig 形状：必须有下游连接才算真正的 Orig
-            true_origs = []
-            dead_origs = []
-            
-            for sh in intermediate_shapes:
-                # 检查是否有任何连接输出
-                outs = cmds.listConnections(sh, source=False, destination=True)
-                if outs:
-                    true_origs.append(sh)
-                else:
-                    dead_origs.append(sh)
-                    
-            # 动作追踪
+
+            # 权威定 THE 真 orig（deformableShape 图关系，不靠"有没有连接"猜）
+            from dccs.maya.asset_info_collector import get_shape_orig
+            true_orig = get_shape_orig(main_shape, tr)
+            true_orig_long = (cmds.ls(true_orig, long=True) or [true_orig])[0] if true_orig else None
+
             actions_taken = []
             deleted_nodes = []
-            
-            # 1. 删死节点
-            for dead in dead_origs:
+
+            # 清理其余 intermediate：真 orig 保留；死残壳(无连接)删；
+            # 垃圾 orig(有连接但非真 orig)→ 改接消费者到真 orig，拓扑一致才删、不一致标冲突不动。
+            for sh in intermediate_shapes:
+                sh_long = (cmds.ls(sh, long=True) or [sh])[0]
+                if true_orig_long and sh_long == true_orig_long:
+                    continue  # 真 orig，保留
+                sh_short = sh.split('|')[-1]
                 try:
-                    # 尝试解锁
-                    if cmds.lockNode(dead, q=True, lock=True)[0]:
-                        cmds.lockNode(dead, lock=False)
-                    dead_short = dead.split('|')[-1]
-                    cmds.delete(dead)
-                    deleted_nodes.append(dead_short)
-                except Exception as e:
-                    report_list.append({'transform': tr_short, 'status': 'WARNING', 'msg': f'删除死节点失败: {dead}: {e}'})
-                    
-            # 2. 定位唯一的 Orig
-            actual_orig_to_rename = None
-            if len(true_origs) == 0:
-                pass # 可能只是白模，没有加变形器，也就不存在 Orig，正常
-            elif len(true_origs) == 1:
-                actual_orig_to_rename = true_origs[0]
-            else:
-                report_list.append({'transform': tr_short, 'status': 'WARNING', 'msg': f'有 {len(true_origs)} 个带有输出的 Orig 节点，可能堆叠了极其复杂的变形树，拒绝自动命名。'})
-                # 但仍然可以命名 main_shape
+                    if cmds.lockNode(sh, q=True, lock=True)[0]:
+                        cmds.lockNode(sh, lock=False)
+                except Exception:
+                    pass
+                outs = cmds.listConnections(sh, source=False, destination=True) or []
+                if not outs:
+                    # 死残壳：直接删
+                    try:
+                        cmds.delete(sh)
+                        deleted_nodes.append(sh_short)
+                    except Exception as e:
+                        report_list.append({'transform': tr_short, 'status': 'WARNING', 'msg': f'删除死节点失败: {sh}: {e}'})
+                    continue
+                # 有连接的垃圾 orig
+                if not true_orig_long:
+                    report_list.append({'transform': tr_short, 'status': 'WARNING', 'msg': f'垃圾 orig {sh_short} 有连接但无法确定真 orig（可能重影/多可见 shape），跳过不动。'})
+                    continue
+                ok, why = _rewire_junk_orig_to_true(sh, true_orig_long)
+                if ok:
+                    try:
+                        cmds.delete(sh)
+                        deleted_nodes.append(sh_short)
+                        actions_taken.append(f"垃圾 orig {sh_short} 改接真 orig 并删除")
+                    except Exception as e:
+                        report_list.append({'transform': tr_short, 'status': 'WARNING', 'msg': f'垃圾 orig 改接后删除失败: {sh}: {e}'})
+                else:
+                    report_list.append({'transform': tr_short, 'status': 'WARNING', 'msg': f'垃圾 orig {sh_short} 与真 orig {why}，判为混用冲突，标记不动、交人工。'})
+
+            # 要改名的 orig（权威版）
+            actual_orig_to_rename = true_orig_long
                 
             # 3. 规范化命名
             ideal_main_name = f"{tr_short}Shape"

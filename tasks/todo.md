@@ -277,3 +277,17 @@
 - [x] 治理检查新增两侧 frontmatter 漂移检测。
 - 完成标志：同步脚本可运行；两侧 SKILL 摘要一致；治理检查能测漂移。
 - 2026-06-05 收口：新增 `tools/sync_notes_skill_index.py`，写入 Notes 项目层 `ai/projects/cgi_pipeline_skill_catalog.md`，并刷新 `ai/projects/cgi_pipeline.md` 的 skill 工具摘要；新增 `tests/README.md` Skill 元数据门禁。
+
+## 绑定替换资产流程重构（2026-07-07 定死 · 目标流程见 [[ai/projects/cgi_pipeline]] 同名段）
+
+- 背景：`tex_to_rig_verify_and_sync` 现状与目标流程有差距；orig 找法 4 套互斥、复用件缺"清材质+清 .pnts"、传权重/BS 及重建迁移代码要砍、收尾缺"删垃圾 orig"。
+- 用户建议：规划好任务后全开（分期落地，每期动手前把该期逻辑与用户对齐）。
+- [x] 期0 · UV 注入改沙盒整块回灌，绑定件不留 polyMapDel（已提交 `fix/rig-sync-uv-inject-sandbox`；测试球+niumowang 36/36+baNiang 25/25 验证）
+  - 遗留：沙盒里仍有 clearUVs（限沙盒、够不着真文件、安全）；如要"代码零 clearUVs"改成"删旧 map1+建新空 map1"。
+- [ ] 期1 · 地基：统一 orig 权威找法到 `asset_info_collector.get_shape_orig`（Maya2025 `deformableShape`），删 sync `_find_orig_shape` / bridge `_find_orig_shape` / simplify `_get_target_shape` 弱版；注入前删多余垃圾 orig（保证唯一）。**关键决策**：`get_shape_orig` 返回 None（拿不到唯一 orig）时调用点策略——注入类报错、采集类宽松？动手前定。
+- [ ] 期2 · 清理：复用件注入前清 shape+orig 的材质链接 + .pnts 顶点位移信息；点只灌 orig（可见 shape 由变形器算出，不直接写）。
+- [x] 期3 · 瘦身：删传权重/BS + live-target/voting/chamfer/SuperMesh 死码（sync 3208→1330 行，删~1878 行；27 函数+import 全清，0 残留死引用）；非复用件改纯几何未绑定；同步删 test_sync_action_dispatch 相关断言。**待回归验证 + SKILL.md 文档更新 + test_sync_maya_integration(pre-broken 废文件)处置。**
+- [ ] 期4 · 收尾：整理层级 + 规范 shape/orig 名 + 删垃圾 orig。**post-compare 保留**（要前后 delta 确认拼装差别，不删不改）；可选增强——让 post-compare 顺带 diff UV。
+- [ ] 期5 · 法线：先做"判翻转"手段（按 ABC 参考逐面比法线），确认翻转才反转+conform；仅静态/新建件需要，复用件免。
+- 命门（贯穿）：整块回灌不许改顶点数/顶点序，否则 skinCluster/BS 权重按序错位、蒙皮崩。
+- 完成标志：目标流程 6 步全落地；orig 找法唯一；绑定件零垃圾历史/垃圾 orig；权重 BS 迁移代码清除。
