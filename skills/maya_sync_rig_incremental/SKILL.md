@@ -76,7 +76,7 @@ category: "sync"
 - **底层驱动**: `om.MFnMesh.setPoints()` / `om.MFnMesh.create()`（纯几何，不再依赖 scipy KDTree/权重投射）
 - **契约层**: `skills.maya_sync_rig_incremental.sync_contract`，不依赖 Maya，可用普通 Python 单测覆盖。
 - **复用件绑定保留**: IDENTICAL/ORIG_INJECT 搬运复用旧 rig mesh，skinCluster/BS 靠 MObject 连接随搬运保留；不做权重/BS 迁移。
-- **Signed Volume 绕序修正**: ABC 纯数据建 mesh 时自动检测法线朝向，反向面自动翻转。
+- **法线**: 当前 sync/建 mesh **不做**法线翻转检测（绕序来自 ABC 原样）；整体翻转的判定与修正见期5 规划（`tasks/todo.md`），未落地。
 - **扩展**: `update_joints` 控制流预留给需要重拟合骨骼空间的角色 rig，目前默认关闭。
 
 ### 🟡 参数规则 (PARAMETERS)
