@@ -12,6 +12,51 @@ from core.receipt import make_receipt
 
 
 MAX_DETAIL_ITEMS = 20
+NORMAL_FLIP_THRESHOLD = 30.0  # ray-cast 自相交率超过此值即判整体翻转
+
+
+def _self_hit_pct(shape, samples=120):
+    """ray-cast 自相交率：从面心沿面法线射线，击中自身=法线朝内。
+
+    返回 0..100 的百分比；越高越可能整体翻转（法线朝内）。纯几何查询，只读。
+    对闭合件(眼球正0/反100)与开放件(发丝正~10/反~90)都能区分（实测）。
+    """
+    import random
+    sel = om2.MSelectionList()
+    sel.add(shape)
+    fn = om2.MFnMesh(sel.getDagPath(0))
+    nf = fn.numPolygons
+    if nf == 0:
+        return 0.0
+    pts = fn.getPoints(om2.MSpace.kWorld)
+    idx = random.sample(range(nf), min(samples, nf))
+    bb = cmds.exactWorldBoundingBox(shape)
+    diag = ((bb[3] - bb[0]) ** 2 + (bb[4] - bb[1]) ** 2 + (bb[5] - bb[2]) ** 2) ** 0.5
+    if diag <= 0:
+        return 0.0
+    eps = max(diag * 0.001, 1e-4)
+    acc = fn.autoUniformGridParams()
+    hit = 0
+    for f in idx:
+        nr = fn.getPolygonNormal(f, om2.MSpace.kWorld)
+        v = fn.getPolygonVertices(f)
+        c = [sum(pts[x][i] for x in v) / len(v) for i in range(3)]
+        src = om2.MFloatPoint(c[0] + nr.x * eps, c[1] + nr.y * eps, c[2] + nr.z * eps)
+        r = fn.anyIntersection(src, om2.MFloatVector(nr.x, nr.y, nr.z),
+                               om2.MSpace.kWorld, diag, False, accelParams=acc)
+        if r and r[2] >= 0:
+            hit += 1
+    return round(hit / len(idx) * 100.0, 1)
+
+
+def _reverse_per_face(arr, face_counts):
+    """把 per-face-vertex 数组(face_indices / uv_indices)按面逐面逆序。"""
+    out = []
+    off = 0
+    for c in face_counts:
+        out.extend(arr[off:off + c][::-1])
+        off += c
+    return out
 
 
 def create_mesh(name, mesh_data, parent_path=""):
@@ -33,14 +78,30 @@ def create_mesh(name, mesh_data, parent_path=""):
         return None
 
     pos_arr = om2.MFloatPointArray([(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]) for i in range(num_v)])
-    pc = om2.MIntArray(fc)
-    pi = om2.MIntArray(fi)
 
     fn = om2.MFnMesh()
-    new_obj = fn.create(pos_arr, pc, pi)
+    new_obj = fn.create(pos_arr, om2.MIntArray(fc), om2.MIntArray(fi))
     temp_name = cmds.rename(om2.MFnDependencyNode(new_obj).name(), "TEMP_" + name)
 
     warnings = []
+    uv_ids = mesh_data.get("uv_indices", [])
+
+    # ── 法线翻转检测 + 数据层修正（新建件；ray-cast 自相交率 > 阈值 = 整体翻转）──
+    # 修法：逐面逆序 face_indices（连带 uv_indices 同步逆序保 UV 不乱）重新 MFnMesh.create，
+    # 纯数据反转、零历史、不碰绑定；不用 cmds.polyNormal（会生历史节点、扰变形）。
+    try:
+        cur_sh = cmds.listRelatives(temp_name, shapes=True, fullPath=True, ni=True) or []
+        if cur_sh and _self_hit_pct(cur_sh[0]) > NORMAL_FLIP_THRESHOLD:
+            fi = _reverse_per_face(fi, fc)
+            if uv_ids:
+                uv_ids = _reverse_per_face(uv_ids, fc)
+            cmds.delete(temp_name)
+            fn = om2.MFnMesh()
+            new_obj = fn.create(pos_arr, om2.MIntArray(fc), om2.MIntArray(fi))
+            temp_name = cmds.rename(om2.MFnDependencyNode(new_obj).name(), "TEMP_" + name)
+            warnings.append("法线翻转已修正（逐面逆序重建，零历史）")
+    except Exception as e:
+        warnings.append(f"法线翻转检测跳过: {e}")
 
     try:
         cmds.sets(temp_name, edit=True, forceElement="initialShadingGroup")
@@ -50,7 +111,6 @@ def create_mesh(name, mesh_data, parent_path=""):
     # UV 写入
     u_arr = mesh_data.get("u_array", [])
     v_arr = mesh_data.get("v_array", [])
-    uv_ids = mesh_data.get("uv_indices", [])
     if u_arr and v_arr and uv_ids:
         shapes = cmds.listRelatives(temp_name, shapes=True, fullPath=True)
         if shapes:
