@@ -297,22 +297,8 @@ def restart_worker(dcc: str = 'maya', wait_sec: float = 1.0) -> bool:
     if dcc not in _WORKER_DCCS:
         return False
 
-    pidfile = RUNTIME_DIR / f'worker_{dcc}.pid'
-    if pidfile.exists():
-        try:
-            pid = int(pidfile.read_text().strip())
-            if _is_pid_alive(pid):
-                _kill_process_tree(pid)
-        except Exception:
-            pass
-        finally:
-            pidfile.unlink(missing_ok=True)
-
-    started = start_worker(dcc)
-    if started and wait_sec > 0:
-        import time
-        time.sleep(wait_sec)
-    return started
+    stop_worker(dcc)  # 权威停：确认死才删 pidfile（不再无条件 unlink）
+    return start_worker(dcc)  # 诚实起：等到 HEALTHY 才返回 True
 
 
 def ensure_worker_healthy(
@@ -337,19 +323,42 @@ def ensure_worker_healthy(
     if health.get('state') == 'HEALTHY':
         return True, f'{dcc} Worker 健康 (PID={health.get("pid")})'
 
+    # PID 存活但 inspect 探活超时/出错：solo 单进程 worker 正忙于长任务（同步等 maya/blender
+    # 子任务，数十秒到数百秒）时无法在超时窗口内应答控制命令——这是「忙」不是「死」。
+    # 不再杀活进程重启（旧逻辑会把正在跑 workflow 的 worker 误杀，导致反复重启 + 任务被
+    # acks_late 重投 + 调用方看到的「孤立」）；新任务会在队列里排队等它腾出。
+    # 仅 PID 不存在时才拉起（上面已处理）；restart_on_stale 保留作 API 兼容，活进程一律不强杀。
     stale_states = {'NO_HEARTBEAT', 'INSPECT_ERROR'}
-    if restart_on_stale and health.get('state') in stale_states:
-        ok = restart_worker(dcc)
-        return ok, (
-            f'{dcc} Worker 心跳异常，已自动重启'
-            if ok else f'{dcc} Worker 心跳异常且重启失败'
+    if health.get('state') in stale_states:
+        return True, (
+            f'{dcc} Worker PID={health.get("pid")} 存活但繁忙'
+            f'（inspect {heartbeat_timeout_sec}s 超时），按存活处理、不重启'
         )
 
     return False, health.get('error') or f'{dcc} Worker 状态异常: {health.get("state")}'
 
 
-def start_worker(dcc: str = 'maya') -> bool:
-    """启动指定 DCC 的 Celery Worker（幂等，已运行则跳过）"""
+def _await_worker_ready(dcc: str, timeout_sec: float = 30.0) -> bool:
+    """轮询等 worker 真正就绪（Celery 心跳在消费队列），就绪返回 True，超时 False。
+
+    治「发射后不管的谎言」：start 不再 Popen 完就报成功，而是等到 get_worker_health
+    == HEALTHY（队列真被消费）才算起来。pidfile 由 celery 初始化完才写，心跳才是真凭据。
+    """
+    import time
+    deadline = time.time() + timeout_sec
+    while time.time() < deadline:
+        if get_worker_health(dcc, heartbeat_timeout_sec=2.0).get('state') == 'HEALTHY':
+            return True
+        time.sleep(1.0)
+    return False
+
+
+def start_worker(dcc: str = 'maya', wait: bool = True, timeout_sec: float = 30.0) -> bool:
+    """启动指定 DCC 的 Celery Worker（幂等，已运行则跳过）。
+
+    wait=True（默认）：等到 worker 真正 HEALTHY 才返回 True；超时返回 False（诚实报失败）。
+    wait=False：仅发起启动即返回（一次性工具/不需确认时用），不保证已就绪。
+    """
     dcc = _normalize_dcc(dcc)
     if dcc not in _WORKER_DCCS:
         return False
@@ -397,10 +406,51 @@ def start_worker(dcc: str = 'maya') -> bool:
         )
         _managed_procs.append(proc)
         print(f'[ServiceManager] {dcc} Worker 已拉起 (PID={proc.pid})')
-        return True
+        if not wait:
+            return True
+        # 诚实确认：等到 Celery 心跳真在消费队列才算起来；超时报失败（不再"发射后不管")
+        if _await_worker_ready(dcc, timeout_sec):
+            print(f'[ServiceManager] {dcc} Worker 就绪确认 (PID={proc.pid})')
+            return True
+        print(f'[ServiceManager] {dcc} Worker {timeout_sec}s 内未就绪，判失败')
+        return False
     except Exception as e:
         print(f'[ServiceManager] {dcc} Worker 启动失败: {e}')
         return False
+
+
+def stop_worker(dcc: str = 'maya', timeout: float = 8.0) -> bool:
+    """权威停指定 worker：按 pidfile 杀整棵进程树 → 确认死 → 才删 pidfile。
+
+    治「杀失败也删 pidfile → 下次起竞争 worker」：只有确认进程真死才删 pidfile；
+    漏杀则保留 pidfile 交下次补刀。pidfile 是跨进程单一真相源，不靠 _managed_procs。
+    返回 True=已确认停止（或本就没在跑）；False=杀失败仍存活。
+    """
+    import time
+    dcc = _normalize_dcc(dcc)
+    if dcc not in _WORKER_DCCS:
+        return False
+    pidfile = RUNTIME_DIR / f'worker_{dcc}.pid'
+    if not pidfile.exists():
+        return True  # 本就没在跑
+    try:
+        pid = int(pidfile.read_text().strip())
+    except (ValueError, OSError):
+        pidfile.unlink(missing_ok=True)  # 坏 pidfile，清掉
+        return True
+    if not _is_pid_alive(pid):
+        pidfile.unlink(missing_ok=True)  # 进程已不在，清残留 pidfile
+        return True
+    _kill_process_tree(pid, timeout=timeout)
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if not _is_pid_alive(pid):
+            pidfile.unlink(missing_ok=True)  # 确认死了才删
+            print(f'[ServiceManager] {dcc} Worker 已停止 (PID={pid})')
+            return True
+        time.sleep(0.3)
+    print(f'[ServiceManager] {dcc} Worker 杀失败仍存活 (PID={pid})，保留 pidfile 待补刀')
+    return False
 
 
 # ═══════════════════════════════════════════════════
@@ -539,19 +589,9 @@ def shutdown_all():
                 pass
     _managed_procs.clear()
 
-    # 3. 杀 PID 文件记录的 worker（可能由上一轮进程拉起，非本进程 _managed_procs）
+    # 3. 权威停 PID 文件记录的 worker（跨进程真相源；确认死才删 pidfile，杀失败保留待补刀）
     for dcc in ('maya', 'blender', 'workflow'):
-        pidfile = RUNTIME_DIR / f'worker_{dcc}.pid'
-        if not pidfile.exists():
-            continue
-        try:
-            pid = int(pidfile.read_text().strip())
-            if _is_pid_alive(pid):
-                _kill_process_tree(pid)
-        except Exception:
-            pass
-        finally:
-            pidfile.unlink(missing_ok=True)
+        stop_worker(dcc)
 
     # 4. 兜底：扫描孤儿 mayapy（celery worker 已死但 mayapy 还活）
     try:

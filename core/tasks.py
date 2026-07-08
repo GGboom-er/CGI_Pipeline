@@ -1404,6 +1404,17 @@ def execute_workflow(self, payload: dict):
             'error': f'{type(exc).__name__}: {exc}',
         }
 
+    finally:
+        # workflow 跑完（成功/失败都）自动关 DCC worker 省资源（用户 2026-07-08 拍板·甲）。
+        # workflow worker solo 一次只跑一个 workflow，此刻 maya/blender 段已完、空闲，权威停。
+        # workflow worker 自身在跑本任务，不自杀（最轻，留着；shutdown_all/下次任务重起兜）。
+        try:
+            from core.service_manager import stop_worker
+            for _dcc in ('maya', 'blender'):
+                stop_worker(_dcc, timeout=6.0)
+        except Exception:
+            pass
+
 
 def _resolve_template_vars(params: dict, outputs: dict, extra_params: dict, config: dict = None) -> dict:
     """替换参数中的模板变量。

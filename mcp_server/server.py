@@ -181,6 +181,13 @@ async def read_maya_selection(port: str) -> str:
 # ══════════════════════════════════════════════════
 
 if __name__ == '__main__':
+    # 长驻进程：装退出钩子，MCP 退出时 reap 它拉起的 worker，堵最大孤儿源
+    # （MCP 懒起 worker 却从不 reap → MCP 一死 worker 成孤儿）。install_exit_hooks 幂等。
+    try:
+        from core.service_manager import install_exit_hooks
+        install_exit_hooks()
+    except Exception as _e:
+        print(f'[cgi_pipeline_mcp] install_exit_hooks 失败(非致命): {_e}')
     if '--http' in sys.argv:
         host = os.getenv('MCP_HOST', '0.0.0.0')
         port = int(os.getenv('MCP_PORT', '8000'))

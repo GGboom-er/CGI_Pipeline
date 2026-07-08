@@ -7,6 +7,9 @@ load_dotenv()
 broker_url             = os.getenv('REDIS_URL', 'redis://127.0.0.1:6379/0')
 result_backend         = os.getenv('REDIS_RESULT_URL', 'redis://127.0.0.1:6379/1')
 
+# 启动时重试 broker 连接：扛 redis 尚未就绪/重启竞态（Celery 6.0 起默认关，显式开）
+broker_connection_retry_on_startup = True
+
 # 序列化
 task_serializer        = 'json'
 result_serializer      = 'json'
