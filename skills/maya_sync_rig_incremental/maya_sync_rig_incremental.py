@@ -492,8 +492,8 @@ def _relocate_rig_mesh(rig_dag, new_name, target_parent, rig_prefix, inject_poin
     1. reparent rig_dag 的 transform 到 target_parent（按 abc 结构重建的中间组）
     2. rename transform: RIG_xxx → new_name（去前缀）
     3. rename shape:     RIG_xxxShape → new_nameShape
-    4. 若 inject_points 不为 None（ORIG_INJECT）：setPoints 到 ShapeOrig 注入新坐标
-       （skin/BS 会按新 ShapeOrig 自动重算变形）
+    4. 若 inject_points 不为 None（ORIG_INJECT）：datablock 整块回灌 ShapeOrig 的 base
+       （写进底层 .vrts，非 .pnts；skin/BS 会按新 ShapeOrig 自动重算变形）
 
     所有 Maya 原生连接（skin / BS / constraint / rivet / follicle 等）走 MObject，
     reparent + rename 不断。字符串硬编码引用由 _scan_hardcoded_refs 提前上报。
@@ -538,21 +538,25 @@ def _relocate_rig_mesh(rig_dag, new_name, target_parent, rig_prefix, inject_poin
             except Exception:
                 pass
 
-    # ORIG_INJECT：把正式资产坐标刷进该 transform 下所有 mesh shape（可见 shape 与 orig 都刷），
-    # 用 kWorld 按世界坐标换算到各自局部，确保两者所有点坐标一模一样（用户 2026-06-30 拍板·R5）。
-    # inject_points 是世界坐标（abc_reader 已乘 world_matrix）；点数一致才刷（ORIG_INJECT 保证点序点数同）。
+    # ORIG_INJECT：把正式资产世界坐标写进「变形输入」shape(ShapeOrig)的 base 几何。
+    # 关键：走 datablock 整块回灌（outMesh→inMesh），不用 setPoints。
+    #   setPoints 是点级 API，对带 .pnts/喂 deformer 的 shape 只写进 .pnts tweak 层、改不动
+    #   底层 base(.vrts)。base 脏的件(如 eyeoutside_r：base 在错位、靠 .pnts 撑着)注入后 base
+    #   仍脏，末尾统一清 .pnts 时 base 就露馅偏位。datablock 把坐标真正写进 base，之后清 .pnts
+    #   → base=ABC、pnts=0、orig 正确（用户 2026-07-09 定位：真实几何存 base、pnts 恒空、
+    #   orig 对了再经变形器传给 shape）。
+    # 只灌 ShapeOrig(变形输入)，可见 shape 让 skin/BS 自动重算；无 orig 的静态件回退灌可见 shape。
     if inject_points is not None:
         arr = np.asarray(inject_points).reshape(-1, 3)
-        pa = om2.MPointArray()
-        for p in arr:
-            pa.append(om2.MPoint(float(p[0]), float(p[1]), float(p[2])))
-        for sh in cmds.listRelatives(transform, shapes=True, type="mesh", fullPath=True) or []:
+        all_sh = cmds.listRelatives(transform, shapes=True, type="mesh", fullPath=True) or []
+        orig_sh = [s for s in all_sh if cmds.getAttr(s + ".intermediateObject")]
+        targets = orig_sh or all_sh
+        for sh in targets:
             sel = om2.MSelectionList()
             sel.add(sh)
             fn_mesh = om2.MFnMesh(sel.getDagPath(0))
             if fn_mesh.numVertices == len(arr):
-                _clear_pnts_tweak(sh)  # 先清 .pnts 顶点位移残留，再灌新坐标（不叠加旧偏移）
-                fn_mesh.setPoints(pa, om2.MSpace.kWorld)
+                _inject_points_via_datablock(sh, arr)
 
     return transform
 
@@ -584,6 +588,47 @@ def _clear_pnts_tweak(shape):
             cmds.setAttr("{}.pnts[{}]".format(shape, i), 0.0, 0.0, 0.0, type="double3")
     except Exception:
         pass
+
+
+def _inject_points_via_datablock(target_shape, world_pts):
+    """把世界坐标 world_pts 写进 target_shape 的 base 几何（.vrts），走 datablock 整块回灌。
+
+    为什么不用 setPoints：setPoints 是点级 API，对带 .pnts / 喂 deformer 的 shape 只落到
+    .pnts tweak 层，改不动底层 base。若 base 本身脏（如靠 .pnts 撑着定位的绑定件），注入后
+    base 仍脏，末尾清 .pnts 就露馅偏位。datablock 替换写的是整块 mesh data(base)。
+
+    做法：拷 target 现有拓扑 + 新点 → 无输入历史的临时 mesh → outMesh→inMesh 灌回 target
+    （datablock 替换非编辑操作、不生历史）→ 删临时件。灌完调用方负责清 .pnts。
+    world_pts: numpy (n,3) 或等价序列，世界坐标（abc_reader 已乘 world_matrix）。
+    返回 True=已灌。
+    """
+    sel = om2.MSelectionList()
+    sel.add(target_shape)
+    dag = sel.getDagPath(0)
+    src = om2.MFnMesh(dag)
+    counts, conn = src.getVertices()
+    pts = om2.MPointArray()
+    for p in world_pts:
+        pts.append(om2.MPoint(float(p[0]), float(p[1]), float(p[2])))
+    if src.numVertices != len(pts):
+        return False
+    temp_shape = cmds.createNode("mesh")
+    temp_tr = cmds.listRelatives(temp_shape, parent=True, fullPath=True)[0]
+    try:
+        # 临时件：现有拓扑 + 新点（世界坐标；temp 无父级变换，object==world）
+        tsel = om2.MSelectionList(); tsel.add(temp_shape)
+        om2.MFnMesh().create(pts, counts, conn, parent=tsel.getDependNode(0))
+        # datablock 整块回灌 target 的 base
+        cmds.connectAttr(temp_shape + ".outMesh", target_shape + ".inMesh", force=True)
+        cmds.getAttr(target_shape + ".boundingBoxMin")  # 强制求值，让 datablock 落地
+        cmds.disconnectAttr(temp_shape + ".outMesh", target_shape + ".inMesh")
+        return True
+    except Exception as e:
+        cmds.warning("datablock 注入失败 %s: %s" % (target_shape, e))
+        return False
+    finally:
+        if cmds.objExists(temp_tr):
+            cmds.delete(temp_tr)
 
 
 def _inject_uv_via_sandbox(target_shape, u_f, v_f, fc_int, uv_i_int):
@@ -1035,7 +1080,7 @@ def execute(payload: dict) -> dict:
 
         # ── Phase 3: 按 pairing_groups 分发（4 标签）──
         # IDENTICAL    → 搬运 RIG_xxx 到新 cache 对应层级 + 去前缀（不建独立 layer，报告清单）
-        # ORIG_INJECT  → 同搬运 + setPoints 注入 abc 坐标（1 个独立 layer）
+        # ORIG_INJECT  → 同搬运 + datablock 灌 abc 坐标进 base（1 个独立 layer）
         # PAIRED (M→N) → 每个 abc 进 voting pool，挂 _pairing_group_id + _pairing_rig_candidates
         #                Phase 4 投射权重后，新 mesh 和组内 rig 共同进 1 个 layer
         # UNPAIRED     → 进 voting pool，无 rig 源；Phase 4 走 Chamfer 自动配对；全部进 _source_only
@@ -1298,10 +1343,12 @@ def execute(payload: dict) -> dict:
                 break
 
         # ── 统一清理 .pnts：所有几何写完后，对 cache 组下每片 mesh(可见 + ShapeOrig)一次性清零 ──
-        # 与注入(setPoints)对偶的收尾。搬运复用的绑定件其 ShapeOrig 可能带原绑定遗留的 .pnts
-        # tweak：base 已被 setPoints 写成 ABC，但残留 tweak 会把几何顶偏(实测 pengmowang 翅膀 ~158)。
-        # 放在最后无条件清，一举覆盖 IDENTICAL(旧代码整段跳过清理)与 ORIG_INJECT(旧代码清得没生效)
-        # 两条分支；新建件无 tweak，清零为无副作用 no-op。（修 587 翅膀飘位，用户 2026-07-09 定位）
+        # 终态要求：真实几何存 base(.vrts)、.pnts 恒空、orig 正确再经变形器传给可见 shape
+        # （用户 2026-07-09 拍板）。注入已用 datablock 把 ABC 写进 base（见 _relocate_rig_mesh /
+        # _inject_points_via_datablock），base 本身即正确；这里清掉一切 .pnts 残留，使
+        # orig = base = ABC、pnts=0。因 base 已对，清 .pnts 只会归位、不会露脏 base——这正是
+        # 之前 setPoints 注入（只写 .pnts、base 未改）会被此清理弄塌的根因，改 datablock 后消除。
+        # 覆盖 IDENTICAL 与 ORIG_INJECT 两条分支；新建件本就无残留，清零为 no-op。
         _pnts_cleared = 0
         if new_cache_node and cmds.objExists(new_cache_node):
             for _m in cmds.listRelatives(new_cache_node, allDescendents=True,
