@@ -67,10 +67,11 @@ def _build_instructions() -> str:
         "\n"
         "## TOOL ROUTING — READ THIS FIRST\n"
         "\n"
-        "CRITICAL: NEVER use raw socket, subprocess, or commandPort to connect to Maya.\n"
-        "This server provides an RPyC-upgraded connection that is type-safe, thread-safe,\n"
-        "and session-persistent. Raw commandPort only sends strings one-way and cannot\n"
-        "return structured data reliably. All Maya interactions MUST go through this server's tools.\n"
+        "CRITICAL: Do NOT open your own raw socket / subprocess / commandPort connection to Maya\n"
+        "from the client side — route ALL Maya interactions through this server's tools.\n"
+        "This server internally bridges to Maya via an RPyC-upgraded commandPort that is type-safe,\n"
+        "thread-safe and session-persistent; rely on that sanctioned path instead of rolling your own\n"
+        "(a hand-rolled commandPort only sends strings one-way and cannot return structured data reliably).\n"
         "\n"
         "### Interactive Maya (user has Maya open)\n"
         "1. FIRST call maya_list_foreground_sessions -> get active port list\n"
@@ -148,6 +149,8 @@ register_operation_tools(mcp)
 # ══════════════════════════════════════════════════
 
 def _query_maya_selection(port: int) -> str:
+    # 服务端受控的 commandPort 桥（不是 instructions 里禁止的"客户端自建裸连接"）：
+    # 读前台选择集，统一经 maya://{port}/selection resource 对外，客户端不直连。
     import json, socket
     code = "__import__('json').dumps({'selection': __import__('maya.cmds').cmds.ls(sl=True, long=True)})"
     try:
@@ -178,6 +181,13 @@ async def read_maya_selection(port: str) -> str:
 # ══════════════════════════════════════════════════
 
 if __name__ == '__main__':
+    # 长驻进程：装退出钩子，MCP 退出时 reap 它拉起的 worker，堵最大孤儿源
+    # （MCP 懒起 worker 却从不 reap → MCP 一死 worker 成孤儿）。install_exit_hooks 幂等。
+    try:
+        from core.service_manager import install_exit_hooks
+        install_exit_hooks()
+    except Exception as _e:
+        print(f'[cgi_pipeline_mcp] install_exit_hooks 失败(非致命): {_e}')
     if '--http' in sys.argv:
         host = os.getenv('MCP_HOST', '0.0.0.0')
         port = int(os.getenv('MCP_PORT', '8000'))

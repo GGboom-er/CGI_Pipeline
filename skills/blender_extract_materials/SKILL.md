@@ -1,4 +1,5 @@
 ---
+mcp_expose: true
 skill_id: "blender_extract_materials"
 name: "blender_extract_cache_materials"
 dcc: "blender"

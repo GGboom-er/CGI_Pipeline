@@ -1,4 +1,5 @@
 ---
+mcp_expose: true
 skill_id: "maya_compare_asset_in_scene"
 name: "maya_compare_abc_to_scene_geometry"
 dcc: "maya"

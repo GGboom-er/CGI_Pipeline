@@ -614,8 +614,20 @@ def _dag_display(dag):
     return last.split(":")[-1]
 
 
+_GEOM_ROOT_LEAVES = ("cache", "geo")  # 几何根叶（配置 geom_roots 的末段：|Group|cache / |Group|Geometry|cache / |*|geo）
+
+
 def _normalize_dag(dag):
-    """Step 1 路径匹配的规范化：对每段剥 RIG_ 前缀和 namespace。"""
+    """Step 1 路径匹配的规范化：剥 RIG_ 前缀和 namespace，并锚定几何根叶取相对子路径。
+
+    tex 根是 |Group|cache、rig 根是 |Group|Geometry|cache，两边只差 root 前缀（末段都叫
+    cache/geo）。若保留全路径，Step 1 永远不相等 → 名字快路径失效、所有件挤 Step 2 的
+    O(n²) 等点数+位置竞争。这里锚定「最后一个名为 cache/geo 的段」，取其后的相对子路径，
+    使 tex `Group|cache|A|B` 与 rig `Group|Geometry|cache|A|B` 都归一为 `A|B` → Step 1 命中。
+    命中后仍验点数+点信息（_judge_action），名字只用于定位候选、不下结论：名字变了自然落空、
+    掉到 Step 2 靠几何配（符合“绑定后命名/层级可能变、点信息才是裁判”）。
+    无 cache/geo 段时回退全路径归一（行为不变）。
+    """
     parts = dag.strip("|").split("|")
     norm = []
     for seg in parts:
@@ -623,6 +635,13 @@ def _normalize_dag(dag):
         if seg.startswith("RIG_"):
             seg = seg[4:]
         norm.append(seg)
+    # 锚定几何根叶：取「最后一个 cache/geo 段」之后的相对子路径（须有后续段，避免误切叶名本身）
+    anchor = -1
+    for i in range(len(norm) - 1):  # 不含最后一段（shape 名），防 mesh 恰名为 cache/geo
+        if norm[i] in _GEOM_ROOT_LEAVES:
+            anchor = i
+    if anchor >= 0:
+        norm = norm[anchor + 1:]
     return "|".join(norm)
 
 

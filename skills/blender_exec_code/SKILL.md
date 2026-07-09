@@ -1,4 +1,5 @@
 ---
+mcp_expose: true
 skill_id: "blender_exec_code"
 name: "Blender 动态代码执行"
 dcc: "blender"

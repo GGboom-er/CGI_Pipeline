@@ -701,7 +701,7 @@ def execute_dcc_skill(self, payload: dict):
                 import json
                 _audit_file.parent.mkdir(parents=True, exist_ok=True)
                 with open(_audit_file, 'a', encoding='utf-8') as f:
-                    f.write(json.dumps({'task_id': task_id, 'skill_id': skill_id, 'status': status, 'detail': msg, 'ts': time.time()}, ensure_ascii=False) + '\\n')
+                    f.write(json.dumps({'task_id': task_id, 'skill_id': skill_id, 'status': status, 'detail': msg, 'ts': time.time()}, ensure_ascii=False) + '\n')
             except Exception: pass
         
         _write_err('ERROR', error_msg)
@@ -1403,6 +1403,27 @@ def execute_workflow(self, payload: dict):
             'status': 'WORKFLOW_ERROR',
             'error': f'{type(exc).__name__}: {exc}',
         }
+
+    finally:
+        # workflow 跑完（成功/失败都）自动关 DCC worker 省资源（用户 2026-07-08 拍板·甲）。
+        # workflow worker solo 一次只跑一个 workflow，此刻 maya/blender 段已完、空闲，权威停。
+        try:
+            from core.service_manager import stop_worker
+            for _dcc in ('maya', 'blender'):
+                stop_worker(_dcc, timeout=6.0)
+        except Exception:
+            pass
+        # workflow worker 自身也跑完即温关（用户 2026-07-08 拍板·乙：跑完全清零，宁可下次冷启动）。
+        # 不能在此直接 stop 自己：acks_late=True 下 ack 在 return 之后，硬杀会触发
+        # reject_on_worker_lost 重投 → 整条 workflow 重跑。改发温关广播（fire-and-forget）：
+        # solo 池此刻正跑本任务收不到控制命令，必然排到「本任务 return → ack → 消费 shutdown
+        # → 退出」，先 ack 再退，不重投。终态已在 WORKFLOW_SUCCESS 落盘、_read_audit 读盘不读
+        # 结果后端，故 worker 退了客户端照样查得到。温关由 Celery 自删 pidfile，下次提交
+        # _ensure_worker('workflow') 冷启动重起（纯 Python 秒级，无 mayapy）。
+        try:
+            self.app.control.shutdown(destination=[self.request.hostname])
+        except Exception:
+            pass
 
 
 def _resolve_template_vars(params: dict, outputs: dict, extra_params: dict, config: dict = None) -> dict:

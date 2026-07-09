@@ -1,4 +1,5 @@
 ---
+mcp_expose: true
 skill_id: "maya_clean_skinweights"
 name: "清理蒙皮权重"
 dcc: "maya"

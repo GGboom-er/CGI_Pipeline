@@ -52,13 +52,14 @@ def _find_skin_cluster(dag_path):
 
 
 def _find_orig_shape(transform):
-    """找到 ShapeOrig（绑定前冻结拓扑）节点。"""
-    import maya.cmds as cmds
-    shapes = cmds.listRelatives(transform, shapes=True, fullPath=True) or []
-    for s in shapes:
-        if cmds.getAttr(s + ".intermediateObject"):
-            return s
-    return None
+    """找到 ShapeOrig（绑定前冻结拓扑）节点。
+
+    委托权威 get_deform_input（deformableShape 图关系，只认 Maya 连接、不猜名字）；
+    找不到唯一 orig 返回 None，调用方回退可见 shape。
+    """
+    from dccs.maya.asset_info_collector import get_deform_input
+    _, orig = get_deform_input(transform)
+    return orig
 
 
 def _triangulate_poly(face_counts, face_indices):

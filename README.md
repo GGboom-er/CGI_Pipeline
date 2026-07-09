@@ -196,8 +196,7 @@ python cli.py list-skills
 | `tex_to_rig_verify` | 资产名/显式路径解析 → Blender 导 ABC → Maya 场景内采集 target → 写 compare_result | Pipeline→Blender→Maya |
 | `blender_tex_export` | Blender 导出 ABC + 材质 + info | Blender |
 | `abc_import_with_materials` | PyAlembic 构建 + 材质赋予 | Maya |
-| `full_cleanup_and_save` | 全清理 + Shape 修复 + 法线 + 保存 | Maya |
-| `rig_full_cleanup` | 权重清理 + Shape + 全清理 + 保存 | Maya |
+| `full_cleanup_and_save` | 权重清理 + 全清理 + Shape 修复 + 法线 + 保存 | Maya |
 | `qc_and_publish` | QC 检查 + 发布门禁 | Maya |
 
 ## 许可

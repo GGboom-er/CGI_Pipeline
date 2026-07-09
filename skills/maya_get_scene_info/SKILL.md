@@ -1,4 +1,5 @@
 ---
+mcp_expose: true
 skill_id: "maya_get_scene_info"
 name: "获取场景总览"
 dcc: "maya"

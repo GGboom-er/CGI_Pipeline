@@ -1,5 +1,6 @@
 {
   "workflow_id": "blender_tex_export",
+  "status": "active",
   "name": "Blender 贴图资产导出",
   "description": "从 Blender 导出 ABC + 采集材质信息 + 采集几何 info JSON",
   "source_resolution": {

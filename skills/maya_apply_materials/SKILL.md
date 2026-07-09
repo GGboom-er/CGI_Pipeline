@@ -1,4 +1,5 @@
 ---
+mcp_expose: true
 skill_id: "maya_apply_materials"
 name: "maya_apply_materials_to_cache"
 dcc: "maya"

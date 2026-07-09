@@ -1,4 +1,5 @@
 ---
+mcp_expose: true
 skill_id: "resolve_asset_files"
 name: "pipeline_resolve_tex_rig_paths"
 dcc: "pipeline"

@@ -1,4 +1,5 @@
 ---
+mcp_expose: true
 skill_id: "maya_fix_shape_names"
 name: "maya_fix_cache_shape_names"
 dcc: "maya"

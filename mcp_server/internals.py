@@ -89,6 +89,7 @@ def _submit_to_celery(skill_id: str, payload: dict) -> dict:
     params = payload.get('parameters', {})
     params.pop('execution_mode', None)
     params.pop('foreground_port', None)
+    params.pop('sync', None)
     
     queue = _resolve_queue(skill_id)
 
@@ -326,6 +327,16 @@ def _read_audit(task_id: str) -> dict:
         'total_entries': len(entries),
         'entries': entries,  # 暴露全部审计条目，供调用方遍历链步骤
     }
+
+    # 终态瘦身：全量审计可达数十万字符，会撑爆 MCP 调用方；只留末 3 条并截断长 detail。
+    # 完整日志仍在审计文件（audit_path 随结果返回），需要全量直接读文件。
+    if latest.get('status') in TERMINAL_STATUSES:
+        def _clip(text, cap=800):
+            text = text if isinstance(text, str) else str(text)
+            return text if len(text) <= cap else text[:cap] + f'…[截断,共{len(text)}字符,全量见 audit_path]'
+        result['detail'] = _clip(result['detail'])
+        result['entries'] = [{**e, 'detail': _clip(e.get('detail', ''))} for e in entries[-3:]]
+        result['audit_path'] = str(audit_path)
 
     # 任务到达终态时，尽量回填沙盒报告路径。成功和失败都应有报告。
     if latest.get('status') in TERMINAL_STATUSES:

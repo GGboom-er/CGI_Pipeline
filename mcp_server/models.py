@@ -17,7 +17,7 @@ class _SkillInput(BaseModel):
     asset_name: str = Field(..., description="资产名称，如 'xiaotianquan'。与 category 组合定位资产目录", min_length=1, max_length=100)
     source_path: str = Field(default="", description="Maya 场景文件路径（.ma/.mb）。建议先用 maya_resolve_asset 获取。为空则操作当前已打开的场景")
     execution_mode: str = Field(default="background", description="执行模式：background(后台无头) 或 foreground(当前界面)")
-    foreground_port: int = Field(default=7002, description="Foreground port. REQUIRED when execution_mode='foreground'. Get it from maya_list_foreground_sessions first. Do NOT hardcode. Ignored in background mode. 前台端口，必须从 maya_list_foreground_sessions 获取。")
+    foreground_port: Optional[int] = Field(default=None, description="Foreground port. REQUIRED when execution_mode='foreground'. Get it from maya_list_foreground_sessions first. Do NOT hardcode. Ignored in background mode. 前台端口，foreground 模式必须显式从 maya_list_foreground_sessions 获取后传入。")
 
 
 # ══════════════════════════════════════════════════
@@ -29,12 +29,8 @@ def create_skill_model(skill_info: dict) -> type[BaseModel]:
     fields = {}
     skill_id = skill_info.get('skill_id', 'unknown_skill')
     
-    # 基础字段（继承 _SkillInput 的概念）
-    fields['project'] = (str, Field(..., description="项目代号，如 'ysj'。用于加载项目配置和路径规则", min_length=1, max_length=50))
-    fields['asset_name'] = (str, Field(..., description="资产名称，如 'xiaotianquan'。与 category 组合定位资产目录", min_length=1, max_length=100))
-    fields['source_path'] = (str, Field(default="", description="场景文件路径。建议先用 maya_resolve_asset 获取。为空则操作当前已打开的场景"))
-    fields['execution_mode'] = (str, Field(default="background", description="执行模式：background(后台无头) 或 foreground(当前界面)"))
-    fields['foreground_port'] = (int, Field(default=7002, description="Foreground port. REQUIRED when execution_mode='foreground'. Get it from maya_list_foreground_sessions first. Do NOT hardcode. Ignored in background mode. 前台端口，必须从 maya_list_foreground_sessions 获取。"))
+    # 基础字段 project/asset_name/source_path/execution_mode/foreground_port 从 _SkillInput 继承
+    # （见下方 create_model 的 __base__）；此处 fields 只收 skill 专属动态参数，单一真相源
     
     # 动态参数
     parameters = skill_info.get('parameters', {})
@@ -62,7 +58,8 @@ def create_skill_model(skill_info: dict) -> type[BaseModel]:
     # 类名构造: 'maya_clean_skinweights' -> 'MayaCleanSkinweightsInput'
     model_name = ''.join(word.capitalize() for word in skill_id.split('_')) + 'Input'
     
-    return create_model(model_name, __config__=ConfigDict(str_strip_whitespace=True), **fields)
+    # 基础字段继承自 _SkillInput（单一真相源，含 foreground_port 等框架字段）
+    return create_model(model_name, __base__=_SkillInput, **fields)
 
 
 # ══════════════════════════════════════════════════
@@ -78,7 +75,7 @@ class ExecCodeInput(BaseModel):
     asset_name: str = Field(default="untitled", description="资产名称")
     source_path: str = Field(default="", description="执行前先打开此场景文件（可选）")
     execution_mode: str = Field(default="background", description="执行模式：background(后台无头) 或 foreground(当前界面)")
-    foreground_port: int = Field(default=7002, description="Foreground port. REQUIRED when execution_mode='foreground'. Get it from maya_list_foreground_sessions first. Do NOT hardcode. Ignored in background mode. 前台端口，必须从 maya_list_foreground_sessions 获取。")
+    foreground_port: Optional[int] = Field(default=None, description="Foreground port. REQUIRED when execution_mode='foreground'. Get it from maya_list_foreground_sessions first. Do NOT hardcode. Ignored in background mode. 前台端口，foreground 模式必须显式从 maya_list_foreground_sessions 获取后传入。")
     sync: bool = Field(default=True, description="仅 foreground 有效：True（默认）直接同步等 RPyC 返回并在响应里带 receipt，省掉 query_task 轮询（亚秒级响应）。传 False 恢复异步行为。")
 
 
@@ -100,7 +97,7 @@ class ExecuteChainInput(BaseModel):
     asset_name: str = Field(default="untitled", description="资产名称")
     skill_chain: list[ChainStep] = Field(..., description="按顺序执行的技能步骤列表。save_scene 必须放最后一步", min_length=1)
     execution_mode: str = Field(default="background", description="执行模式：background(后台无头) 或 foreground(当前界面)")
-    foreground_port: int = Field(default=7002, description="Foreground port. REQUIRED when execution_mode='foreground'. Get it from maya_list_foreground_sessions first. Do NOT hardcode. Ignored in background mode. 前台端口，必须从 maya_list_foreground_sessions 获取。")
+    foreground_port: Optional[int] = Field(default=None, description="Foreground port. REQUIRED when execution_mode='foreground'. Get it from maya_list_foreground_sessions first. Do NOT hardcode. Ignored in background mode. 前台端口，foreground 模式必须显式从 maya_list_foreground_sessions 获取后传入。")
 
 
 # ══════════════════════════════════════════════════
@@ -145,7 +142,7 @@ class ExecuteSkillInput(BaseModel):
     source_path: str = Field(default="", description="源文件路径，建议先用 maya_resolve_asset 获取")
     parameters: Optional[dict] = Field(default=None, description="技能专属参数，用 maya_list_skills 查看每个技能的参数 Schema")
     execution_mode: str = Field(default="background", description="执行模式：background(后台无头) 或 foreground(当前界面)")
-    foreground_port: int = Field(default=7002, description="Foreground port. REQUIRED when execution_mode='foreground'. Get it from maya_list_foreground_sessions first. Do NOT hardcode. Ignored in background mode. 前台端口，必须从 maya_list_foreground_sessions 获取。")
+    foreground_port: Optional[int] = Field(default=None, description="Foreground port. REQUIRED when execution_mode='foreground'. Get it from maya_list_foreground_sessions first. Do NOT hardcode. Ignored in background mode. 前台端口，foreground 模式必须显式从 maya_list_foreground_sessions 获取后传入。")
 
 class StartWorkerInput(BaseModel):
     """启动 DCC Worker 参数"""

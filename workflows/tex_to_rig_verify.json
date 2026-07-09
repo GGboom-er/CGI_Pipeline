@@ -1,5 +1,6 @@
 {
   "workflow_id": "tex_to_rig_verify",
+  "status": "active",
   "name": "贴图资产 → 绑定校验",
   "description": "解析资产 tex/rig 文件（支持只传资产名或显式路径）→ Blender 导出 source ABC → Maya 打开 rig 一次并场景内采集 target 信息 → 写出 compare_result。",
   "steps": [

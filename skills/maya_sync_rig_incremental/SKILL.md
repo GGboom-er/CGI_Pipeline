@@ -8,7 +8,7 @@ pairs_with:
   - "pipeline_compare_asset"
   - "maya_apply_materials"
   - "save_scene"
-description: "在 target rig 场景中，依据前置 compare_result 和 source ABC 增量重建/更新 mesh。对 IDENTICAL/ORIG_INJECT 走快速搬运或坐标注入，对 PAIRED/UNPAIRED 走 SuperMesh 包裹重建并迁移权重/BS。"
+description: "在 target rig 场景中，依据前置 compare_result 和 source ABC 增量重建/更新 mesh（纯几何）。IDENTICAL/ORIG_INJECT 走搬运+坐标注入并同步 source UV（保留原绑定），PAIRED/UNPAIRED 从 ABC 重建几何+传 UV、保持未绑定交绑定师手绑（不传权重/BS）。"
 parameters:
   compare_result:
     type: "string"
@@ -62,22 +62,21 @@ category: "sync"
 - **Phase 1**: target `cache` 组全员加 `RIG_` 前缀，避免与新 mesh 命名冲突。
 - **Phase 2**: 读取 `compare_result.json` 或上游 `output.compare_result` 字典作为同步指令；同步结果写入标准执行记录 `input/output`，不额外落散报告。
 - **Phase 3**: 按 `pairing_groups[].action` 分发（见 `core.asset_info_schema.compare()` 契约）：
-  - `IDENTICAL` → fast path：搬运 target rig mesh 到新 cache 对应层级，不改坐标
-  - `ORIG_INJECT` → fast path：搬运后注入 source 坐标（点数/点序一致）
-  - `PAIRED` → 多对多配对组进入 voting pool，带候选 rig 源用于定向投射权重
-  - `UNPAIRED` → source 独有组进入 `_source_only`，后续用 Chamfer 自动配对或按新 mesh 处理
+  - `IDENTICAL` → fast path：搬运 target rig mesh 到新 cache 对应层级，不改坐标；面数一致时把 source ABC 的 UV 刷进 shape（资产 UV-only 更新也要传到 rig）
+  - `ORIG_INJECT` → fast path：搬运后注入 source 坐标（点数/点序一致），并同上刷 source UV
+  - `PAIRED` → 多对多配对组进入 voting pool，Phase 4 从 ABC 重建几何、未绑定
+  - `UNPAIRED` → source 独有组进入 `_source_only`，Phase 4 从 ABC 重建几何、未绑定
   - `target_only_dags` → target 独有节点进入 `_target_only`，原位保留供审核
   - 未识别 action → 判定为 compare_result 契约错误，阻断执行
-- **Phase 3.5**: voting pool 里**无** `_paired_rig_dag` 的 mesh 用 Chamfer 距离自动找最近源，定向投射权重。
-- **Phase 4**: SuperMesh KDTree 包裹剩余 mesh，从 ABC 纯数据重建几何、传递 UV 和权重。
+- **Phase 4**: `PAIRED/UNPAIRED` 从 ABC 纯数据重建几何 + 传 UV，新 mesh **保持未绑定**（不刷权重、不复刻 BS），交给绑定师手绑。
 - **Phase 5**: 建 Display Layer 便于审核。
-- **几何-only 模式**: 项目 `rig_sync_profile.transfer_weights=false` 时，Phase 4 对 `PAIRED/UNPAIRED` 只用 ABC 重建几何，**不刷权重、不复刻 BS（含 Live BS）**，新 mesh 保持未绑定，交给绑定师手绑；`IDENTICAL/ORIG_INJECT` 仍走搬运保留原绑定，不受影响。默认 `true` 保持完整权重/BS 投射。
+- **纯几何**: sync 只做几何——`IDENTICAL/ORIG_INJECT` 搬运复用（靠 MObject 连接保留原绑定/BS），`PAIRED/UNPAIRED` 重建纯几何未绑定。权重/BS 传递、live-target、Chamfer 配对、SuperMesh 投射代码已移除（2026-07-07 期3 瘦身，3208→1330 行）。
 
 ### 🔵 核心代码与扩展 (IMPLEMENTATION & EXTENSION)
-- **底层驱动**: `om.MFnMesh.setPoints()` / `om.MFnMesh.create()`、`scipy.spatial.cKDTree`、`scipy.optimize.linear_sum_assignment`
+- **底层驱动**: `om.MFnMesh.setPoints()` / `om.MFnMesh.create()`（纯几何，不再依赖 scipy KDTree/权重投射）
 - **契约层**: `skills.maya_sync_rig_incremental.sync_contract`，不依赖 Maya，可用普通 Python 单测覆盖。
-- **BlendShape 迁移**: target 原 mesh 若有 BS 靶标，更新主几何的 delta 会同步复刻到每个 BS 靶区，保表情不坏。
-- **Signed Volume 绕序修正**: ABC 纯数据建 mesh 时自动检测法线朝向，反向面自动翻转。
+- **复用件绑定保留**: IDENTICAL/ORIG_INJECT 搬运复用旧 rig mesh，skinCluster/BS 靠 MObject 连接随搬运保留；不做权重/BS 迁移。
+- **法线**: 当前 sync/建 mesh **不做**法线翻转检测（绕序来自 ABC 原样）；整体翻转的判定与修正见期5 规划（`tasks/todo.md`），未落地。
 - **扩展**: `update_joints` 控制流预留给需要重拟合骨骼空间的角色 rig，目前默认关闭。
 
 ### 🟡 参数规则 (PARAMETERS)

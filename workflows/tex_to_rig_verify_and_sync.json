@@ -1,5 +1,6 @@
 {
   "workflow_id": "tex_to_rig_verify_and_sync",
+  "status": "active",
   "name": "贴图资产 → 绑定校验 + ABC拼装 + 材质赋予 + 升版本",
   "description": "解析资产 tex/rig 文件（支持只传资产名或显式路径）→ Blender 导出 ABC + 抽材质 → Maya 打开 rig 一次 → 层级预检与修复 → 场景内对比生成 compare_result → 按 compare_result 增量拼装 → 拼装后层级与对比验证 → 升版本。",
   "steps": [
@@ -53,6 +54,13 @@
         "cache_group": "{{outputs.fix_hierarchy_pre.result.active_rig_root}};{{config.stages.rig.geom_roots.0}}",
         "label_source": "tex",
         "label_target": "rig"
+      }
+    },
+    {
+      "step_id": "normalize_uvsets",
+      "skill_id": "simplify_uvsets",
+      "parameters": {
+        "cache_group": "{{outputs.fix_hierarchy_pre.result.active_rig_root}}"
       }
     },
     {

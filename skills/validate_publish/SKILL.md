@@ -1,4 +1,5 @@
 ---
+mcp_expose: true
 skill_id: "validate_publish"
 name: "发布前质量门禁"
 dcc: "maya"

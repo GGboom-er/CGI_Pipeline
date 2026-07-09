@@ -1,4 +1,5 @@
 ---
+mcp_expose: true
 skill_id: "check_uvsets"
 name: "UV Set 检查"
 dcc: "maya"

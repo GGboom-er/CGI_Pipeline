@@ -1,4 +1,5 @@
 ---
+mcp_expose: true
 skill_id: "maya_import_abc"
 name: "导入 ABC 缓存"
 dcc: "maya"

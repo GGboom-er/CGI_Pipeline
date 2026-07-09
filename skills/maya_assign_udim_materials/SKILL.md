@@ -1,4 +1,5 @@
 ---
+mcp_expose: true
 skill_id: "maya_assign_udim_materials"
 name: "UDIM 材质分配"
 dcc: "maya"
