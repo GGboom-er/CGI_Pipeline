@@ -558,20 +558,32 @@ def _relocate_rig_mesh(rig_dag, new_name, target_parent, rig_prefix, inject_poin
 
 
 def _clear_pnts_tweak(shape):
-    """清 mesh shape 的 .pnts 顶点位移(tweak)残留，逐索引归零。
+    """清一个 mesh shape 的 .pnts 顶点位移(tweak)残留，一次性归零。
 
-    改的是节点属性值、非 poly 编辑，不生 polyModifier 历史。注入前先清，
-    避免旧偏移叠加到新灌的 ABC 坐标上。
+    改的是节点属性值、非 poly 编辑，不生 polyModifier 历史。
+    一次性范围 setAttr(.pnts[0:n-1]) 比逐索引快约 9x（实测 3542 点 0.1s vs 0.9s），
+    大件(万级点)差距更大；点数用 numVertices 定，覆盖全部顶点（不依赖已分配的稀疏索引）。
     """
     try:
-        idxs = cmds.getAttr(shape + ".pnts", multiIndices=True) or []
+        sel = om2.MSelectionList()
+        sel.add(shape)
+        n = om2.MFnMesh(sel.getDagPath(0)).numVertices
     except Exception:
+        n = 0
+    if n <= 0:
         return
-    for i in idxs:
-        try:
+    try:
+        cmds.setAttr("{}.pnts[0:{}]".format(shape, n - 1),
+                     *([0.0, 0.0, 0.0] * n), type="double3")
+        return
+    except Exception:
+        pass
+    # 退化：一次性失败时逐索引兜底
+    try:
+        for i in (cmds.getAttr(shape + ".pnts", multiIndices=True) or []):
             cmds.setAttr("{}.pnts[{}]".format(shape, i), 0.0, 0.0, 0.0, type="double3")
-        except Exception:
-            pass
+    except Exception:
+        pass
 
 
 def _inject_uv_via_sandbox(target_shape, u_f, v_f, fc_int, uv_i_int):
@@ -1284,6 +1296,21 @@ def execute(payload: dict) -> dict:
             if "|cache" in node or node == "cache":
                 new_cache_node = node
                 break
+
+        # ── 统一清理 .pnts：所有几何写完后，对 cache 组下每片 mesh(可见 + ShapeOrig)一次性清零 ──
+        # 与注入(setPoints)对偶的收尾。搬运复用的绑定件其 ShapeOrig 可能带原绑定遗留的 .pnts
+        # tweak：base 已被 setPoints 写成 ABC，但残留 tweak 会把几何顶偏(实测 pengmowang 翅膀 ~158)。
+        # 放在最后无条件清，一举覆盖 IDENTICAL(旧代码整段跳过清理)与 ORIG_INJECT(旧代码清得没生效)
+        # 两条分支；新建件无 tweak，清零为无副作用 no-op。（修 587 翅膀飘位，用户 2026-07-09 定位）
+        _pnts_cleared = 0
+        if new_cache_node and cmds.objExists(new_cache_node):
+            for _m in cmds.listRelatives(new_cache_node, allDescendents=True,
+                                         type="mesh", fullPath=True) or []:
+                _clear_pnts_tweak(_m)
+                _pnts_cleared += 1
+        if _pnts_cleared:
+            items.append(make_item("pnts 清理", f"清零 {_pnts_cleared} 个 mesh shape 的顶点偏移残留"))
+        _plog(f"pnts sweep done: {_pnts_cleared} shapes")
         _plog("sync main body done")
 
     except Exception as e:
