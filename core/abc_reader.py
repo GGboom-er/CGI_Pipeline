@@ -228,6 +228,17 @@ def read_abc_as_info(abc_path: str, lightweight: bool = False) -> dict:
             v_array = [v.y for v in vals]
             uv_indices = list(uv_samp.getIndices())
 
+        # 法线数据提取（facevarying / per-face-vertex，顺序同 face_indices）
+        # ABC 存的是资产真法线（含硬边）；注入时优先用它，setFaceVertexNormals 直接赋。
+        # normals_fv：每面顶点一个 [x,y,z]，展平为 [x,y,z, x,y,z, ...]，长度 = len(face_indices)*3。
+        normals_fv = []
+        normal_param = schema.getNormalsParam()
+        if normal_param.valid():
+            n_samp = normal_param.getExpandedValue()
+            n_vals = n_samp.getVals()
+            for n in n_vals:
+                normals_fv.extend([float(n.x), float(n.y), float(n.z)])
+
         # 拓扑数据
         face_counts = list(sample.getFaceCounts())
         face_indices = list(sample.getFaceIndices())
@@ -242,6 +253,11 @@ def read_abc_as_info(abc_path: str, lightweight: bool = False) -> dict:
             # UV 索引也必须同步反转，否则 UV 映射会错位
             if uv_indices:
                 uv_indices = _fix_winding_order(face_counts, uv_indices)
+            # 法线(facevarying)按面同步反转（以 [x,y,z] 三元组为单位），否则法线与反转后的面顶点错位
+            if normals_fv:
+                tris = [normals_fv[i:i + 3] for i in range(0, len(normals_fv), 3)]
+                reordered = _fix_winding_order(face_counts, tris)
+                normals_fv = [c for tri in reordered for c in tri]
             winding_flipped = True
 
         # 材质名称（从 FaceSet 提取）
@@ -256,6 +272,7 @@ def read_abc_as_info(abc_path: str, lightweight: bool = False) -> dict:
             'u_array': u_array,
             'v_array': v_array,
             'uv_indices': uv_indices,
+            'normals_fv': normals_fv,
             'winding_flipped': winding_flipped,
         }
 
