@@ -52,7 +52,6 @@ _REPORT_SKILL_NAME_BY_ID = {
     "simplify_uvsets": "maya_simplify_cache_uv_sets",
     "validate_publish": "maya_validate_publish_scene",
     "maya_get_scene_info": "maya_collect_scene_overview",
-    "maya_get_object_info": "maya_collect_object_info",
     "maya_capture_viewport": "maya_capture_viewport_image",
     "blender_capture_viewport": "blender_capture_viewport_image",
     "ping": "pipeline_ping_worker",

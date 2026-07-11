@@ -124,7 +124,6 @@ _ACTION_BY_SKILL = {
     'simplify_uvsets': 'edit',
     'validate_publish': 'validate',
     'maya_get_scene_info': 'collect',
-    'maya_get_object_info': 'collect',
     'maya_capture_viewport': 'collect',
     'blender_capture_viewport': 'collect',
     'ping': 'default',
