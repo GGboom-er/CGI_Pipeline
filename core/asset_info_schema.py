@@ -15,8 +15,7 @@ from typing import TypedDict, List, Dict, Optional, Literal, Any
 # ═══════════════════════════════════════════
 # compare() 返回结构契约（TypedDict，运行时零开销）
 #
-# 消费者：pipeline_compare_asset skill、maya_sync_rig_incremental、
-# core/pairing_report。
+# 消费者：pipeline_compare_asset skill、maya_sync_rig_incremental。
 #
 # 主输出是 pairing_groups（连通分量列表）——sync 消费它按组执行。
 # 其余字段（paired/only_a/only_b/merge_groups/split_groups/hierarchy/
@@ -234,7 +233,7 @@ def _resolve_profile(profile):
         # fallback：裸默认值（保证即使 config_loader 不可用也能工作）
         return {
             "pairing": {
-                "enable_cpd": True,
+                "enable_cpd": False,
                 "cpd_point_diff_threshold": 0.8,
                 "cpd_max_iterations": 30,
                 "cpd_tolerance": 0.001,
@@ -277,9 +276,8 @@ def compare(info_a, info_b, label_a="A", label_b="B",
 
     profile = _resolve_profile(profile)
     pairing_cfg = profile.get("pairing", {})
-    if enable_cpd is None:
-        # P0-B 决策：默认关闭 CPD 全局预对齐（大场景爆内存；未来降到 S3 小对级别再启用）
-        enable_cpd = False
+    # CPD 全局预对齐已移除（配准算法从未启用、与"信 ABC+顶点序"对比口径冲突）。
+    # enable_cpd 参数保留为已忽略的兼容位，不再有任何作用。
 
     result = {
         "total_issues": 0,
@@ -307,38 +305,6 @@ def compare(info_a, info_b, label_a="A", label_b="B",
     # 白名单过滤：_live_ 驱动体克隆不参与配对
     filtered_b = {dag: entry for dag, entry in meshes_b.items()
                   if '_live_' not in dag.lower()}
-
-    # 可选 CPD 全局预对齐（默认关闭）
-    if enable_cpd and meshes_a and filtered_b:
-        cpd_diff_thr = pairing_cfg.get("cpd_point_diff_threshold", 0.8)
-        cpd_max_iter = pairing_cfg.get("cpd_max_iterations", 30)
-        cpd_tol = pairing_cfg.get("cpd_tolerance", 0.001)
-        try:
-            from .non_rigid_registration import align_pose_non_rigid
-            import numpy as np
-            pts_a_list = [np.array(e["vert_positions"]).reshape(-1, 3)
-                          for e in meshes_a.values()
-                          if e.get("vert_positions")]
-            b_items = [(d, np.array(e["vert_positions"]).reshape(-1, 3))
-                       for d, e in filtered_b.items()
-                       if e.get("vert_positions")]
-            if pts_a_list and b_items:
-                cloud_a = np.vstack(pts_a_list)
-                cloud_b = np.vstack([pts for _, pts in b_items])
-                diff_ratio = abs(len(cloud_a) - len(cloud_b)) / max(len(cloud_a), len(cloud_b))
-                if diff_ratio < cpd_diff_thr:
-                    w_val = min(0.9, diff_ratio * 1.5)
-                    cloud_b_aligned = align_pose_non_rigid(
-                        cloud_b, cloud_a,
-                        max_iterations=cpd_max_iter, tolerance=cpd_tol, w=w_val,
-                    )
-                    offset = 0
-                    for dag_b, pts in b_items:
-                        n = len(pts)
-                        filtered_b[dag_b]["vert_positions"] = cloud_b_aligned[offset:offset+n].flatten().tolist()
-                        offset += n
-        except Exception:
-            pass
 
     # ── Step 1: 按规范化路径匹配 ──
     s1_pairs, s1_remain_a, s1_remain_b, skip_set = _step1_path_match(

@@ -57,13 +57,6 @@
       }
     },
     {
-      "step_id": "normalize_uvsets",
-      "skill_id": "simplify_uvsets",
-      "parameters": {
-        "cache_group": "{{outputs.fix_hierarchy_pre.result.active_rig_root}}"
-      }
-    },
-    {
       "step_id": "sync",
       "skill_id": "maya_sync_rig_incremental",
       "source_path": "{{outputs.resolve_files.result.rig_path}}",

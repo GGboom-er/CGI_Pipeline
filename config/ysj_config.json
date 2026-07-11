@@ -197,7 +197,7 @@
         "transfer_weights": false,
 
         "pairing": {
-            "enable_cpd": true,
+            "enable_cpd": false,
             "cpd_point_diff_threshold": 0.8,
             "cpd_max_iterations": 30,
             "cpd_tolerance": 0.001,

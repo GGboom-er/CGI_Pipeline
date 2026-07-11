@@ -190,3 +190,6 @@ class ExecuteWorkflowInput(BaseModel):
     project: str = Field(default="default", description="项目代号")
     asset_name: str = Field(default="untitled", description="资产名称")
     extra_params: Optional[dict] = Field(default=None, description="工作流额外参数，用于模板变量 {{input.xxx}} 替换")
+    wait: bool = Field(default=True, description="True(默认): 阻塞到工作流终态才返回，附每步 ✓/✗ 清单 + 报告路径，一次调用拿最终结果。False: 提交即返回 task_id，自行用 maya_query_task 轮询。")
+    wait_timeout_sec: int = Field(default=1800, description="wait=True 的最长等待秒数；超时返回 PROGRESS + task_id(工作流仍在后台跑，可用 maya_query_task 续查)")
+    poll_interval_sec: int = Field(default=5, description="wait=True 的轮询间隔秒数")

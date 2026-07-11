@@ -196,13 +196,27 @@ def _get_image_path(image):
     return os.path.normpath(os.path.abspath(bpy.path.abspath(fp))).replace("\\", "/")
 
 
-def _derive_tile_tex_path(template_path, tile):
-    """将 UDIM 模板路径中的 1001 替换为目标 tile 编号。"""
+def _derive_tile_tex_path(template_path, tile, real_tiles=None):
+    """把 UDIM 模板路径解析成目标 tile 的准确文件路径。
+
+    Blender 的 filepath_from_user() 通常返回某个具体 tile 的路径（首 tile，如 body 的
+    ...1001.tif、cloth 的 ...1011.tif），不一定含 <UDIM> 记号，也不一定从 1001 起。
+    旧实现写死替换字面 '1001'：body(含1001)能对，cloth(从1011起、无1001)全落回 1011.tif → 错。
+    正解：用该图真实存在的 tile 号(image.tiles)当锚点，找出路径里出现的那个锚点 tile，
+    替换成目标 tile。既支持 <UDIM> 记号，也支持任意起始 tile。
+    """
     tile_str = str(tile)
-    if '1001' in template_path:
-        candidate = template_path.replace('1001', tile_str)
-        if os.path.isfile(candidate):
-            return candidate
+    # 1) 标准 <UDIM> 记号
+    if '<UDIM>' in template_path:
+        cand = template_path.replace('<UDIM>', tile_str)
+        return cand if os.path.isfile(cand) else template_path
+    # 2) 用真实 tile 列表当锚点（无则退回字面 1001，兼容老行为）
+    anchors = [str(t) for t in (real_tiles or [])] or ['1001']
+    for anchor in anchors:
+        if anchor in template_path:
+            cand = template_path.replace(anchor, tile_str)
+            if os.path.isfile(cand):
+                return cand
     return template_path
 
 
@@ -279,10 +293,12 @@ def _extract_material_color(mat):
                             return {"type": "solid", "value": [round(dv[0], 4), round(dv[1], 4),
                                                                round(dv[2], 4), round(dv[3], 4) if len(dv) > 3 else 1.0]}
                         is_udim = getattr(image, 'source', '') == 'TILED'
+                        udim_tiles = [t.number for t in image.tiles] if is_udim else []
                         return {
                             "type": "texture",
                             "path": image_path,
                             "is_udim": is_udim,
+                            "udim_tiles": udim_tiles,
                         }
                     approx = _eval_color_from_input(color_input)
                     if approx:
@@ -378,7 +394,7 @@ def extract_materials(export_objects):
                         materials_data[entry_name] = {
                             "color": {
                                 "type": "texture",
-                                "path": _derive_tile_tex_path(color_info["path"], tile),
+                                "path": _derive_tile_tex_path(color_info["path"], tile, color_info.get("udim_tiles")),
                                 "is_udim": False,
                             },
                             "alpha": alpha_info,

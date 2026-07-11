@@ -538,26 +538,10 @@ def _relocate_rig_mesh(rig_dag, new_name, target_parent, rig_prefix, inject_poin
             except Exception:
                 pass
 
-    # ORIG_INJECT：把正式资产世界坐标写进「变形输入」shape(ShapeOrig)的 base 几何。
-    # 关键：走 datablock 整块回灌（outMesh→inMesh），不用 setPoints。
-    #   setPoints 是点级 API，对带 .pnts/喂 deformer 的 shape 只写进 .pnts tweak 层、改不动
-    #   底层 base(.vrts)。base 脏的件(如 eyeoutside_r：base 在错位、靠 .pnts 撑着)注入后 base
-    #   仍脏，末尾统一清 .pnts 时 base 就露馅偏位。datablock 把坐标真正写进 base，之后清 .pnts
-    #   → base=ABC、pnts=0、orig 正确（用户 2026-07-09 定位：真实几何存 base、pnts 恒空、
-    #   orig 对了再经变形器传给 shape）。
-    # 只灌 ShapeOrig(变形输入)，可见 shape 让 skin/BS 自动重算；无 orig 的静态件回退灌可见 shape。
-    if inject_points is not None:
-        arr = np.asarray(inject_points).reshape(-1, 3)
-        all_sh = cmds.listRelatives(transform, shapes=True, type="mesh", fullPath=True) or []
-        orig_sh = [s for s in all_sh if cmds.getAttr(s + ".intermediateObject")]
-        targets = orig_sh or all_sh
-        for sh in targets:
-            sel = om2.MSelectionList()
-            sel.add(sh)
-            fn_mesh = om2.MFnMesh(sel.getDagPath(0))
-            if fn_mesh.numVertices == len(arr):
-                _inject_points_via_datablock(sh, arr)
-
+    # 注：几何注入已移出本函数（旧 inject_points/datablock 路径废弃）。
+    # 本函数只做「搬运 + 改名」；ABC 全量注入(点+UV+法线)由 dispatch 调
+    # _clean_orig_upstream → _regularize_uvset_to_map1 → _inject_mesh_data_via_plug 完成。
+    # inject_points 形参保留仅为签名兼容，已不使用。
     return transform
 
 
@@ -590,150 +574,138 @@ def _clear_pnts_tweak(shape):
         pass
 
 
-def _inject_points_via_datablock(target_shape, world_pts):
-    """把世界坐标 world_pts 写进 target_shape 的 base 几何（.vrts），走 datablock 整块回灌。
+# ── 旧注入函数已废弃删除（2026-07-10 重构）──
+# _inject_points_via_datablock / _inject_uv_via_sandbox / _inject_abc_uv 三者：
+#   点注入 create parent 传 mesh shape 直接炸(静默失败)、且 connect/disconnect 不烘 base；
+#   UV 沙盒两趟。统一由 _inject_mesh_data_via_plug(点+UV+法线一次写 cachedInMesh) 替代。
 
-    为什么不用 setPoints：setPoints 是点级 API，对带 .pnts / 喂 deformer 的 shape 只落到
-    .pnts tweak 层，改不动底层 base。若 base 本身脏（如靠 .pnts 撑着定位的绑定件），注入后
-    base 仍脏，末尾清 .pnts 就露馅偏位。datablock 替换写的是整块 mesh data(base)。
 
-    做法：拷 target 现有拓扑 + 新点 → 无输入历史的临时 mesh → outMesh→inMesh 灌回 target
-    （datablock 替换非编辑操作、不生历史）→ 删临时件。灌完调用方负责清 .pnts。
-    world_pts: numpy (n,3) 或等价序列，世界坐标（abc_reader 已乘 world_matrix）。
-    返回 True=已灌。
+def _clean_orig_upstream(orig_shape):
+    """删除 orig 的上游构造历史(polySoftEdge / 上游 mesh 等)，使 orig 成无输入干净头节点。
+
+    ⚠ 禁用 cmds.delete(ch=True)：实测它会连下游 skinCluster/blendShape 一起删（破坏绑定）。
+    变形器消费 orig.outMesh(下游)，不在 orig 的上游 history 内；listHistory(orig) 只回上游，
+    故删上游构造节点安全、不碰变形器。删完 orig.inMesh 应为空，cachedInMesh 才写得住。
+    返回被删节点短名列表。
     """
-    sel = om2.MSelectionList()
-    sel.add(target_shape)
-    dag = sel.getDagPath(0)
-    src = om2.MFnMesh(dag)
-    counts, conn = src.getVertices()
-    pts = om2.MPointArray()
-    for p in world_pts:
-        pts.append(om2.MPoint(float(p[0]), float(p[1]), float(p[2])))
-    if src.numVertices != len(pts):
-        return False
-    temp_shape = cmds.createNode("mesh")
-    temp_tr = cmds.listRelatives(temp_shape, parent=True, fullPath=True)[0]
-    try:
-        # 临时件：现有拓扑 + 新点（世界坐标；temp 无父级变换，object==world）
-        tsel = om2.MSelectionList(); tsel.add(temp_shape)
-        om2.MFnMesh().create(pts, counts, conn, parent=tsel.getDependNode(0))
-        # datablock 整块回灌 target 的 base
-        cmds.connectAttr(temp_shape + ".outMesh", target_shape + ".inMesh", force=True)
-        cmds.getAttr(target_shape + ".boundingBoxMin")  # 强制求值，让 datablock 落地
-        cmds.disconnectAttr(temp_shape + ".outMesh", target_shape + ".inMesh")
-        return True
-    except Exception as e:
-        cmds.warning("datablock 注入失败 %s: %s" % (target_shape, e))
-        return False
-    finally:
-        if cmds.objExists(temp_tr):
-            cmds.delete(temp_tr)
-
-
-def _inject_uv_via_sandbox(target_shape, u_f, v_f, fc_int, uv_i_int):
-    """用沙盒法把 UV 灌进 target_shape 的 map1，规整成唯一 map1，且不在绑定文件里留历史。
-
-    为什么走沙盒：在「带输入历史」的 shape 上做 clearUVs/setUVs，Maya 会插 polyModifier
-    (polyMapDel 等) 垃圾历史。改为把几何整块搬进临时 mesh，在临时件上规整 uvset + 写 UV，
-    删掉临时件历史后，用 outMesh→inMesh 的「整块 datablock 替换」回灌 target——datablock
-    替换不是编辑操作、不生历史；临时件是无输入的独立节点，其上 clearUVs 也无副作用。
-    """
-    temp_shape = cmds.createNode("mesh")
-    temp_tr = cmds.listRelatives(temp_shape, parent=True, fullPath=True)[0]
-    try:
-        # 1. 把 target 当前几何整块灌进沙盒(连→求值→断，沙盒随即持有缓存 datablock)
-        cmds.connectAttr(target_shape + ".outMesh", temp_shape + ".inMesh", force=True)
-        cmds.getAttr(temp_shape + ".boundingBoxMin")
-        cmds.disconnectAttr(target_shape + ".outMesh", temp_shape + ".inMesh")
-
-        # 2. 沙盒上规整 uvset：只留一个、名为 map1
-        existing = cmds.polyUVSet(temp_shape, q=True, allUVSets=True) or []
-        if "map1" not in existing:
-            if existing:
-                cmds.polyUVSet(temp_shape, rename=True, uvSet=existing[0], newUVSet="map1")
-            else:
-                cmds.polyUVSet(temp_shape, create=True, uvSet="map1")
-            existing = cmds.polyUVSet(temp_shape, q=True, allUVSets=True) or []
-        for uv in existing:
-            if uv != "map1":
-                try:
-                    cmds.polyUVSet(temp_shape, delete=True, uvSet=uv)
-                except Exception:
-                    pass
-
-        # 3. 沙盒上写 ABC UV(沙盒无输入历史、随后整体删，clearUVs 在此无副作用)
-        temp_sel = om2.MSelectionList()
-        temp_sel.add(temp_shape)
-        fn = om2.MFnMesh(temp_sel.getDagPath(0))
-        fn.clearUVs("map1")
-        fn.setUVs(u_f, v_f, "map1")
-        fn.assignUVs(fc_int, uv_i_int, "map1")
-        cmds.delete(temp_tr, ch=True)
-
-        # 4. 整块 datablock 回灌 target(替换非编辑，不生历史)
-        cmds.connectAttr(temp_shape + ".outMesh", target_shape + ".inMesh", force=True)
-        cmds.getAttr(target_shape + ".boundingBoxMin")
-        cmds.disconnectAttr(temp_shape + ".outMesh", target_shape + ".inMesh")
-
-        # 5. 拔幽灵 uvset 名字槽：datablock 回灌只覆盖 map1 数据，target 上旧的非 map1
-        # uvSet 名字槽会「粘」在节点上残留。移除它们，保证有且仅有一个名为 map1 的 uvset。
-        # removeMultiInstance 改的是节点属性槽，非 mesh 编辑，不生 polyMapDel。
-        indices = cmds.getAttr(target_shape + ".uvSet", multiIndices=True) or []
-        for i in indices:
-            slot = "{}.uvSet[{}]".format(target_shape, i)
-            try:
-                if cmds.getAttr(slot + ".uvSetName") != "map1":
-                    cmds.removeMultiInstance(slot, b=True)
-            except Exception:
-                pass
-        try:
-            cmds.setAttr(target_shape + ".currentUVSet", "map1", type="string")
-        except Exception:
-            pass
-        return True
-    except Exception as e:
-        cmds.warning("UV 沙盒注入失败 %s: %s" % (target_shape, e))
-        return False
-    finally:
-        if cmds.objExists(temp_tr):
-            cmds.delete(temp_tr)
-
-
-def _inject_abc_uv(transform, tex_data):
-    """把 ABC 的 UV(map1) 刷进 transform 下拓扑匹配的 mesh shape。
-
-    ORIG_INJECT/IDENTICAL 复用旧绑定 mesh 时，顶点位置由 setPoints 注入，
-    但 UV 不随 setPoints 变；资产只改了 UV（位置没变）时需在此显式注入，
-    否则 rig 留旧 UV。UV 数据来自 tex_data（read_abc_as_info full 模式已读）。
-    面数不一致（拓扑不符）的 shape 跳过，不硬写。
-    """
-    u_arr = tex_data.get("u_array", [])
-    v_arr = tex_data.get("v_array", [])
-    uv_ids = tex_data.get("uv_indices", [])
-    fc = tex_data.get("face_counts", [])
-    if not (u_arr and v_arr and uv_ids and fc):
-        return False
-    fc_int = om2.MIntArray(fc)
-    uv_i_int = om2.MIntArray(uv_ids)
-    u_f = om2.MFloatArray(u_arr)
-    v_f = om2.MFloatArray(v_arr)
-    wrote = False
-    # 绑定体：UV 只能注入「变形输入」shape(ShapeOrig)，让 UV 顺变形链自然流到可见 shape；
-    # 无 ShapeOrig(静态件)才回退写唯一可见 shape。
-    # 注入一律走沙盒(_inject_uv_via_sandbox)：先在临时件规整成唯一 map1 再写 UV，整块回灌，
-    # 绝不在真 shape 上 clearUVs/setUVs——否则带输入历史的 shape 会留 polyMapDel 垃圾历史。
-    all_shapes = cmds.listRelatives(transform, shapes=True, type="mesh", fullPath=True) or []
-    orig_shapes = [s for s in all_shapes if cmds.getAttr(s + ".intermediateObject")]
-    target_shapes = orig_shapes or all_shapes
-    for sh in target_shapes:
-        sel = om2.MSelectionList()
-        sel.add(sh)
-        if om2.MFnMesh(sel.getDagPath(0)).numPolygons != len(fc):
+    incoming = cmds.listConnections(orig_shape + ".inMesh", s=True, d=False) or []
+    if not incoming:
+        return []  # 已无上游，干净头节点(如 hair orig)
+    orig_long = (cmds.ls(orig_shape, long=True) or [orig_shape])[0]
+    deformer_types = {
+        "skinCluster", "blendShape", "cluster", "ffd", "wrap", "deltaMush",
+        "tweak", "softMod", "nonLinear", "sculpt", "wire", "groupParts", "groupId",
+    }
+    to_del = []
+    for n in (cmds.listHistory(orig_shape) or []):
+        nl = (cmds.ls(n, long=True) or [None])[0]
+        if not nl or nl == orig_long:
             continue
-        if _inject_uv_via_sandbox(sh, u_f, v_f, fc_int, uv_i_int):
-            wrote = True
-    return wrote
+        nt = cmds.nodeType(n)
+        if nt in deformer_types:
+            continue  # 保变形器
+        if nt.startswith("poly") or nt == "mesh":
+            to_del.append(n)
+    deleted = []
+    for n in to_del:
+        if cmds.objExists(n):
+            try:
+                cmds.delete(n)
+                deleted.append(n.split("|")[-1])
+            except Exception as e:
+                cmds.warning("清上游节点失败 %s: %s" % (n, e))
+    return deleted
+
+
+def _regularize_uvset_to_map1(shape):
+    """把 shape 的 uvSet 规整成有且仅有一套、名为 map1（真 shape 上操作，须在注入写入之前）。
+
+    data 块 MObject 上 renameUVSet 报 Object does not exist、不可用，故 uvSet 名字类操作走真 shape。
+    删多余 set + 把留下的改名 map1；改名/删是节点属性操作，不生 polyModifier 历史。
+    """
+    sets = cmds.polyUVSet(shape, q=True, allUVSets=True) or []
+    if not sets:
+        return
+    keep = "map1" if "map1" in sets else sets[0]
+    for us in sets:
+        if us != keep:
+            try:
+                cmds.polyUVSet(shape, delete=True, uvSet=us)
+            except Exception as e:
+                cmds.warning("删 uvSet %s 失败: %s" % (us, e))
+    if keep != "map1":
+        try:
+            cmds.polyUVSet(shape, rename=True, uvSet=keep, newUVSet="map1")
+        except Exception as e:
+            cmds.warning("uvSet 改名 map1 失败: %s" % e)
+
+
+def _inject_mesh_data_via_plug(orig_shape, abc_entry):
+    """把 ABC 完整几何(点+拓扑+UV+法线)一次写进 orig 的 base(cachedInMesh plug)。
+
+    无临时 DAG mesh：内存 MFnMeshData 承载 ABC 几何 → 直接 setMObject 到 cachedInMesh。
+    - 点：abc_entry['vert_positions'](abc_reader 已乘 world_matrix，含 m→cm 缩放，世界坐标)
+    - UV：abc_entry u/v/uv_indices（单套 map1）
+    - 法线：abc_entry['normals_fv'](facevarying，保硬边)；无则不设 → Maya 按拓扑重算
+    写 cachedInMesh 而非 inMesh：无历史 mesh 的 outMesh 从 cachedInMesh 读；写 inMesh 无连接不触发重算。
+    调用前提：orig 已无上游 inMesh 连接（见 _clean_orig_upstream），否则上游会覆盖本次写入。
+    返回 True=已写。
+    """
+    vp = abc_entry.get("vert_positions", [])
+    fc = abc_entry.get("face_counts", [])
+    fi = abc_entry.get("face_indices", [])
+    if not vp or not fc or not fi:
+        return False
+    pts = om2.MPointArray()
+    for i in range(0, len(vp), 3):
+        pts.append(om2.MPoint(vp[i], vp[i + 1], vp[i + 2]))
+    counts = om2.MIntArray(fc)
+    conn = om2.MIntArray(fi)
+    data = om2.MFnMeshData().create()
+    om2.MFnMesh().create(pts, counts, conn, parent=data)
+    fnd = om2.MFnMesh(data)
+    u = abc_entry.get("u_array", []); v = abc_entry.get("v_array", []); uvi = abc_entry.get("uv_indices", [])
+    if u and v and uvi:
+        setname = (fnd.getUVSetNames() or ["map1"])[0]
+        fnd.setUVs(om2.MFloatArray(u), om2.MFloatArray(v), setname)
+        fnd.assignUVs(counts, om2.MIntArray(uvi), setname)
+    nfv = abc_entry.get("normals_fv", [])
+    if nfv and len(nfv) == len(fi) * 3:
+        normals = om2.MVectorArray()
+        for i in range(0, len(nfv), 3):
+            normals.append(om2.MVector(nfv[i], nfv[i + 1], nfv[i + 2]))
+        face_ids = om2.MIntArray(); vtx_ids = om2.MIntArray()
+        idx = 0
+        for f, c in enumerate(fc):
+            for _k in range(c):
+                face_ids.append(f); vtx_ids.append(fi[idx]); idx += 1
+        try:
+            fnd.setFaceVertexNormals(normals, face_ids, vtx_ids)
+        except Exception as e:
+            cmds.warning("setFaceVertexNormals 失败，回退 Maya 重算: %s" % e)
+    sl = om2.MSelectionList(); sl.add(orig_shape)
+    dep = om2.MFnDependencyNode(sl.getDependNode(0))
+    dep.findPlug("cachedInMesh", False).setMObject(data)
+    cmds.getAttr(orig_shape + ".boundingBoxMin")
+
+    # ── UV 必须直写 orig 的持久属性，不能只靠 cachedInMesh ──
+    # Maya 已知坑（实测 + Autodesk 论坛 "Modify all UVs using Python API 2"）：
+    # setMObject(cachedInMesh) 能把点/拓扑/法线烘进节点持久几何属性（存盘 OK），
+    # 但 UV 分配不落进持久 uv 属性(uvpt)——只活在 cache 数据块里，save→reopen 后
+    # Maya 用节点旧 uv 属性重建 → UV 散乱（maYouD 一开就乱、修好保存重开又乱的根因）。
+    # 修法：点/法线走上面 cachedInMesh；UV 在 cachedInMesh 写完、拓扑就位后，
+    # 用 setUVs+assignUVs 直写 orig DAG shape 的持久属性。前提同上：orig 无上游 inMesh。
+    # 两条都是 OpenMaya 底层直写、均不建 history。
+    if u and v and uvi:
+        try:
+            dag = sl.getDagPath(0); dag.extendToShape()
+            ofn = om2.MFnMesh(dag)
+            oset = (ofn.getUVSetNames() or ["map1"])[0]
+            ofn.setUVs(om2.MFloatArray(u), om2.MFloatArray(v), oset)
+            ofn.assignUVs(counts, om2.MIntArray(uvi), oset)
+        except Exception as e:
+            cmds.warning("UV 直写 orig 持久属性失败: %s" % e)
+    return True
 
 
 def _assign_materials_from_info(materials_info, all_mesh_nodes, tex_meshes_keys):
@@ -1084,6 +1056,7 @@ def execute(payload: dict) -> dict:
         # PAIRED (M→N) → 每个 abc 进 voting pool，挂 _pairing_group_id + _pairing_rig_candidates
         #                Phase 4 投射权重后，新 mesh 和组内 rig 共同进 1 个 layer
         # UNPAIRED     → 进 voting pool，无 rig 源；Phase 4 走 Chamfer 自动配对；全部进 _source_only
+        from dccs.maya.asset_info_collector import get_deform_input
         _plog(f"Phase3: dispatch {len(pairing_groups)} pairing groups")
         for _gi, group in enumerate(pairing_groups):
             if _gi % 10 == 0:
@@ -1120,31 +1093,36 @@ def execute(payload: dict) -> dict:
                 target_name, group_parts = _get_target_name_and_parent(abc_dag)
                 parent_path = _ensure_hierarchy(group_parts)
 
-                inject_pts = None
-                if action == "ORIG_INJECT":
-                    rig_data = rig_meshes[rig_full]
-                    v_new = tex_data.get("vert_positions", [])
-                    num_v_new = tex_data.get("vertices", 0)
-                    if num_v_new > 0 and num_v_new == rig_data.get("vertices", 0):
-                        inject_pts = np.array(v_new, dtype=np.float64).reshape(-1, 3)
-                    else:
-                        voting_pool_tex[abc_dag] = tex_data
-                        items.append(make_item(
-                            target_name,
-                            f"降级 voting pool：ORIG_INJECT 点数不符 "
-                            f"(tex={num_v_new} rig={rig_data.get('vertices', 0)})"
-                        ))
-                        continue
+                # IDENTICAL / ORIG_INJECT 统一：搬运改名 + 从 ABC 全量注入 orig 的 base。
+                # 点数不符则降级 voting pool 重建（保留原防呆）。
+                rig_data = rig_meshes[rig_full]
+                num_v_new = tex_data.get("vertices", 0)
+                if num_v_new <= 0 or num_v_new != rig_data.get("vertices", 0):
+                    voting_pool_tex[abc_dag] = tex_data
+                    items.append(make_item(
+                        target_name,
+                        f"降级 voting pool：点数不符 (tex={num_v_new} rig={rig_data.get('vertices', 0)})"
+                    ))
+                    continue
 
                 new_transform = _relocate_rig_mesh(
-                    rig_full, target_name, parent_path, rig_prefix, inject_points=inject_pts
+                    rig_full, target_name, parent_path, rig_prefix
                 )
                 if new_transform:
                     reused_rig_dags.add(rig_full)
-                    uv_done = _inject_abc_uv(new_transform, tex_data)
-                    items.append(make_item(target_name, f"{action}: 搬运 + 改名" + (" + 注 UV" if uv_done else "")))
-                    # IDENTICAL 与 ORIG_INJECT 都不建 layer：几何一致/宽松一致，仅做层级与命名修复，
-                    # 绑定师整体校验时再由后续 QC 技能统一标注，避免 outliner 被单物体 layer 撑满。
+                    # 取变形输入 shape(orig)；无 orig 的静态件回退可见 shape
+                    vis_sh, orig_sh = get_deform_input(new_transform)
+                    target_sh = orig_sh or vis_sh
+                    injected = False
+                    if target_sh:
+                        _clean_orig_upstream(target_sh)            # 清上游构造历史（禁 delete ch）
+                        _regularize_uvset_to_map1(target_sh)       # uvSet 收成唯一 map1（写入前）
+                        injected = _inject_mesh_data_via_plug(target_sh, tex_data)  # ABC 点+UV+法线一次写 base
+                    items.append(make_item(
+                        target_name,
+                        f"{action}: 搬运 + ABC注入(点/UV/法线)" + ("" if injected else " [注入跳过]")
+                    ))
+                    # IDENTICAL/ORIG_INJECT 都不建 layer：仅层级与命名修复，后续 QC 统一标注。
                 else:
                     voting_pool_tex[abc_dag] = tex_data
                     items.append(make_item(target_name, f"{action}: 搬运失败，降级 voting pool"))
@@ -1344,11 +1322,11 @@ def execute(payload: dict) -> dict:
 
         # ── 统一清理 .pnts：所有几何写完后，对 cache 组下每片 mesh(可见 + ShapeOrig)一次性清零 ──
         # 终态要求：真实几何存 base(.vrts)、.pnts 恒空、orig 正确再经变形器传给可见 shape
-        # （用户 2026-07-09 拍板）。注入已用 datablock 把 ABC 写进 base（见 _relocate_rig_mesh /
-        # _inject_points_via_datablock），base 本身即正确；这里清掉一切 .pnts 残留，使
-        # orig = base = ABC、pnts=0。因 base 已对，清 .pnts 只会归位、不会露脏 base——这正是
-        # 之前 setPoints 注入（只写 .pnts、base 未改）会被此清理弄塌的根因，改 datablock 后消除。
-        # 覆盖 IDENTICAL 与 ORIG_INJECT 两条分支；新建件本就无残留，清零为 no-op。
+        # （用户 2026-07-09 拍板）。注入已由 _inject_mesh_data_via_plug 把 ABC 点+UV+法线写进
+        # base(cachedInMesh)，base 本身即正确；这里清掉一切 .pnts 残留，使 orig=base=ABC、pnts=0。
+        # 因 base 已对，清 .pnts 只会归位、不会露脏 base——这正是旧 setPoints/datablock 注入
+        # （base 未真写、几何靠 .pnts/上游撑）会被此清理弄塌的根因，改直写 cachedInMesh 后消除。
+        # 覆盖 IDENTICAL 与 ORIG_INJECT（已合并统一注入）；新建件本就无残留，清零为 no-op。
         _pnts_cleared = 0
         if new_cache_node and cmds.objExists(new_cache_node):
             for _m in cmds.listRelatives(new_cache_node, allDescendents=True,

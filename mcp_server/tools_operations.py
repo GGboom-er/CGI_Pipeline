@@ -35,6 +35,32 @@ from core.skill_registry import get_all_skills, get_skill_map
 SKILL_TIERS = {'read', 'write', 'destructive'}
 
 
+# ── AI 工具面白名单(单一真相源)──
+# 研究(Harness 130→11、IBM"只暴露业务级"、Anthropic 有效工具):工具越少 AI 选得越准。
+# 全部 skill 能力保留,但不各占 MCP 按钮——经 execute_skill(按名调)/工作流(按名编排)触达,
+# 不占 AI 注意力。maya_list_skills = 命令目录(API 手册)。
+# 收/放某按钮:改本集合 + reload 即生效,可回滚。startup(server.py)与 reload 共用本 prune。
+EXPOSED_TOOLS = {
+    "pipeline_execute_workflow", "list_workflows",     # 跑工作流(生产主入口)
+    "maya_list_skills", "execute_skill",               # 命令库:目录 + 按名调
+    "maya_exec_code", "blender_exec_code", "maya_list_foreground_sessions",  # 调试
+    "maya_start_worker", "pipeline_restart_worker", "pipeline_service_status",  # worker 控制
+    "maya_query_task", "maya_resolve_asset",           # 查询
+    "reload_server",                                    # 开发
+}
+
+
+async def prune_tools_to_whitelist(mcp):
+    """把 EXPOSED_TOOLS 之外的工具从 MCP 面移除(skill 能力仍在,只是不作按钮)。"""
+    for t in await mcp.list_tools():
+        name = getattr(t, "name", None)
+        if name and name not in EXPOSED_TOOLS:
+            try:
+                mcp.remove_tool(name)
+            except Exception:
+                pass
+
+
 # 端口扫描抽到共享叶子模块 mcp_server.ports（消除 tools_readonly/tools_operations/foreground_client 三处重复）
 from mcp_server.ports import discover_maya_ports
 
@@ -460,10 +486,12 @@ def register_operation_tools(mcp):
         }
     )
     async def execute_workflow_tool(params: ExecuteWorkflowInput) -> dict:
-        """执行指定工作流。支持跨 DCC 编排（Blender + Maya + pipeline 混合）。
+        """执行指定工作流（跑注册工作流的唯一入口）。支持跨 DCC 编排（Blender + Maya + pipeline 混合）。
 
-        异步执行，返回 task_id。工作流引擎自动按 DCC 类型分段执行，
-        段间传递输出（通过 {{outputs.step_id.field}} 模板变量）。
+        wait=True(默认): 一次调用阻塞到工作流终态，直接返回最终 status + 每步 ✓/✗ 清单
+        (step_checklist) + report_path，不用再手动轮询。wait=False: 提交即返回 task_id，
+        自行用 maya_query_task 轮询。工作流引擎自动按 DCC 类型分段执行、自动拉起所需 worker、
+        段间传递输出（{{outputs.step_id.field}}）——调用方无需手动开 worker 或写轮询。
 
         典型用法：
         - blender_tex_export: Blender 导出 ABC + 采集 info
@@ -472,13 +500,54 @@ def register_operation_tools(mcp):
         - full_cleanup_and_save: 权重清理 → 全清理 → Shape 修复 → 法线统一 → 保存
         - abc_import_with_materials: ABC 导入 + UDIM 材质分配
         """
-        return _submit_workflow({
+        submit = _submit_workflow({
             'workflow_id': params.workflow_id,
             'source_path': params.source_path,
             'project': params.project,
             'asset_name': params.asset_name,
             'extra_params': params.extra_params or {},
         })
+        if not params.wait or submit.get('status') != 'SUBMITTED':
+            return submit  # 提交失败或 wait=False：保持原语义返回
+
+        # ── wait=True：阻塞轮询到终态，附每步 ✓/✗ 清单 ──
+        import asyncio
+        from core.task_status import is_terminal
+        from mcp_server.internals import _read_audit, collect_workflow_steps, render_step_checklist
+
+        task_id = submit['task_id']
+        deadline = asyncio.get_event_loop().time() + params.wait_timeout_sec
+        state = {}
+        while asyncio.get_event_loop().time() < deadline:
+            await asyncio.sleep(params.poll_interval_sec)
+            state = await asyncio.to_thread(_read_audit, task_id)
+            if is_terminal(state.get('status', '')):
+                break
+        else:
+            # 超时：工作流仍在后台跑，诚实返回，不谎报完成
+            return {
+                'task_id': task_id,
+                'workflow_id': params.workflow_id,
+                'status': 'PROGRESS',
+                'message': f'已等待 {params.wait_timeout_sec}s 未达终态，工作流仍在后台运行。',
+                'recovery_hint': f'用 maya_query_task(task_id="{task_id}") 续查，或加大 wait_timeout_sec。',
+            }
+
+        steps = await asyncio.to_thread(collect_workflow_steps, task_id)
+        final_status = state.get('status', 'UNKNOWN')
+        result = {
+            'task_id': task_id,
+            'workflow_id': params.workflow_id,
+            'status': final_status,
+            'steps': steps,
+            'step_checklist': render_step_checklist(steps),
+        }
+        for k in ('report_path', 'audit_path'):
+            if state.get(k):
+                result[k] = state[k]
+        if final_status not in ('WORKFLOW_SUCCESS', 'SUCCESS', 'CHAIN_SUCCESS'):
+            result['recovery_hint'] = f'工作流未成功({final_status})。看 step_checklist 里 ✗ 的步骤 + report_path 定位。'
+        return result
 
 
     # ── 热重载 ──
@@ -529,6 +598,8 @@ def register_operation_tools(mcp):
             import mcp_server.tools_operations as _top
             _tr.register_readonly_tools(mcp)
             _top.register_operation_tools(mcp)
+            # 重注册后同样按白名单剪枝,否则 reload 会让被收的按钮全回来
+            await _top.prune_tools_to_whitelist(mcp)
             tools_after = await mcp.list_tools()
             re_registered = len(tools_after)
         except Exception as e:

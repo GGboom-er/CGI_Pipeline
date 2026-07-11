@@ -24,15 +24,37 @@ def register_readonly_tools(mcp):
         }
     )
     async def maya_list_skills() -> dict:
-        """List all registered skills and their parameter schemas.
+        """命令目录 / API 手册：列出所有可调用的 skill(命令),按分类分组。
 
-        Read-only query, no DCC process started.
-        Call this when unsure which tool to use for a task.
-        Returns skill_id, name, DCC type, and parameter definitions.
+        用法:要在 Maya/Blender 里做某件事,先查本目录有没有现成命令——
+          有 → execute_skill(skill_id=..., project=..., asset_name=..., parameters={...}) 按名调;
+          没有 → 才用 maya_exec_code 手写。生产整链优先用 pipeline_execute_workflow(工作流)。
+        这些 skill 大多是工作流的积木(工作流按名字自动调),不各占 MCP 按钮。
 
-        列出所有已注册技能及其参数定义。不启动 DCC。
+        Read-only, no DCC started. 返回按 category 分组的命令 + 功能/参数摘要。
         """
-        return {'total': len(_SKILLS), 'skills': _SKILLS}
+        by_cat = {}
+        for s in _SKILLS:
+            cat = s.get('category', 'other') or 'other'
+            params = list((s.get('parameters', {}) or {}).keys())
+            by_cat.setdefault(cat, []).append({
+                'skill_id': s.get('skill_id', ''),
+                'name': s.get('name', ''),
+                'dcc': s.get('dcc', ''),
+                'tier': s.get('tier', ''),
+                'desc': (s.get('description', '') or '')[:80],
+                'params': params,
+                'pairs_with': s.get('pairs_with', []) or [],
+            })
+        for cat in by_cat:
+            by_cat[cat].sort(key=lambda x: x['skill_id'])
+        return {
+            'total': len(_SKILLS),
+            'usage': '命令目录:要做某事先查有没有对应命令→execute_skill(skill_id,...)调;'
+                     '没有再 maya_exec_code;生产整链用 pipeline_execute_workflow。',
+            'categories': sorted(by_cat.keys()),
+            'by_category': by_cat,
+        }
 
 
     @mcp.tool(

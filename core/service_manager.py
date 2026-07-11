@@ -416,14 +416,17 @@ def start_worker(dcc: str = 'maya', wait: bool = True, timeout_sec: float = 30.0
     if alive:
         return True
 
+    # 目录先建：_acquire_start_lock 要在 RUNTIME_DIR 里 os.open 锁文件，
+    # 必须先确保目录存在——否则 runtime/ 缺失（新检出/被清）时锁文件创建报 Errno 2。
+    RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
+
     # 抢启动锁：只允许一个 starter 真正 Popen，其余等健康——治 LockFailed 并发抢 pidfile 竞态。
     # 输家不 Popen 竞争（那会让 celery O_EXCL 撞车），改等就绪，天然幂等符合「已运行则跳过」。
     if not _acquire_start_lock(dcc, stale_after_sec=timeout_sec + 5.0):
         return _await_worker_ready(dcc, timeout_sec) if wait else False
 
     queue = _queue_for_dcc(dcc)
-    RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
-    LOGS_DIR.mkdir(parents=True, exist_ok=True)
     pidfile = RUNTIME_DIR / f'worker_{dcc}.pid'
     logfile = LOGS_DIR / f'worker_{dcc}.log'
 

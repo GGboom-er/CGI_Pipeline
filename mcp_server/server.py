@@ -143,6 +143,21 @@ from mcp_server.tools_operations import register_operation_tools
 register_readonly_tools(mcp)
 register_operation_tools(mcp)
 
+# ── AI 工具面精简(2026-07-11):只暴露控制/派发/查询/调试按钮 ──
+# 白名单单一真相源在 tools_operations.EXPOSED_TOOLS;startup 与 reload 共用同一 prune。
+import asyncio as _asyncio
+from mcp_server.tools_operations import prune_tools_to_whitelist as _prune
+
+try:
+    _asyncio.run(_prune(mcp))
+except RuntimeError:
+    _loop = _asyncio.new_event_loop()
+    _loop.run_until_complete(_prune(mcp))
+    _loop.close()
+except Exception as _e:
+    import logging as _logging
+    _logging.getLogger(__name__).warning("工具面剪枝失败(不影响功能): %s", _e)
+
 
 # ══════════════════════════════════════════════════
 # 注册动态资源 (Resources)

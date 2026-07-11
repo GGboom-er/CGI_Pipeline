@@ -24,6 +24,23 @@ PLACE2D_ATTRS = [
 ]
 
 
+def _ensure_render_partition_unlocked():
+    """解锁场景里被锁定的 partition 成员连接（建 SG 前调用）。
+
+    某些异常导出的 rig 把 :renderPartition 的成员连接设成锁定(connectAttr -l on)，
+    新建 SG 时 Maya 自动把它插入 renderPartition.sets[-1] 会因 'Destination is locked'
+    崩溃并触发整链回滚。建 SG 前先解锁这些连接，让自动插入成功；正常资产无锁定连接，
+    此函数为无副作用空操作。"""
+    for part in (cmds.ls(type="partition") or []):
+        plugs = cmds.listConnections(part, plugs=True, connections=True) or []
+        for plug in plugs:
+            try:
+                if cmds.getAttr(plug, lock=True):
+                    cmds.setAttr(plug, lock=False)
+            except Exception as e:
+                logger.debug("解锁 partition 连接失败 %s: %s", plug, e)
+
+
 def _create_material_and_sg(mat_name, color_info, alpha_info):
     """创建 lambert + SG + 贴图节点，返回 (shader, sg)。"""
     safe_name = mat_name.replace(" ", "_").replace(".", "_")
@@ -38,6 +55,8 @@ def _create_material_and_sg(mat_name, color_info, alpha_info):
             cmds.connectAttr(shader + ".outColor", sg + ".surfaceShader", force=True)
     else:
         shader = cmds.shadingNode("lambert", asShader=True, name=safe_name)
+        # 异常资产可能把 renderPartition 锁死，导致下面 cmds.sets 自动插入 SG 时崩；先解锁再建。
+        _ensure_render_partition_unlocked()
         sg = cmds.sets(renderable=True, noSurfaceShader=True, empty=True, name=sg_name)
         cmds.connectAttr(shader + ".outColor", sg + ".surfaceShader", force=True)
 
@@ -164,6 +183,61 @@ def _assign_faces(sg, transform, face_indices):
     cmds.sets(comps, forceElement=sg)
 
 
+def _clear_shading_assignments(mesh_nodes):
+    """赋新材质前，清除 mesh 旧的材质指派 + shading 侧 groupId。
+
+    复用件（绑定体）身上常残留 rig 原来的材质球连接（整体 SG + per-face），
+    apply 只加不减会新旧并存。这里在赋新材质前先清干净：
+      1. forceElement 到 initialShadingGroup：收回整体+per-face 材质指派，
+         Maya 自动清掉 shape 的 instObjGroups 材质分组项(即 group "part"/component list)。
+      2. 删 shading 侧孤立 groupId：只删连 shadingEngine 的（材质 id），
+         skinCluster/blendShape/tweak 的 groupId/groupParts 是变形器命根子，一个不碰。
+    返回清掉的旧材质 SG 名集合，供末尾清空壳。
+    """
+    touched_sgs = set()
+    for node in mesh_nodes:
+        shapes = cmds.listRelatives(node, shapes=True, fullPath=True, noIntermediate=True) or []
+        for shape in shapes:
+            # 先记录旧材质 SG + shading 侧 groupId（连 shadingEngine 的）
+            old_sgs = cmds.listConnections(shape, type="shadingEngine") or []
+            touched_sgs.update(sg for sg in old_sgs if sg not in ("initialShadingGroup", "initialParticleSE"))
+            shading_gids = []
+            for gid in cmds.ls(cmds.listHistory(shape) or [], type="groupId"):
+                sets = cmds.listConnections(gid, type="objectSet") or []
+                if sets and all(cmds.nodeType(s) == "shadingEngine" for s in sets):
+                    shading_gids.append(gid)
+            # 收回 initialShadingGroup（清整体+per-face 材质指派 / instObjGroups）
+            try:
+                cmds.sets(shape, e=True, forceElement="initialShadingGroup")
+            except Exception as e:
+                logger.debug("重置 SG 失败 %s: %s", shape, e)
+            # 删孤立 shading groupId（变形器 groupId 一律保留）
+            for gid in shading_gids:
+                if cmds.objExists(gid):
+                    try:
+                        cmds.delete(gid)
+                    except Exception as e:
+                        logger.debug("删 shading groupId 失败 %s: %s", gid, e)
+    return touched_sgs
+
+
+def _delete_empty_shading_groups(sg_names):
+    """删已无成员的旧材质 SG 壳(及其孤立 shader/file)，不碰默认 SG。"""
+    for sg in sg_names:
+        if not cmds.objExists(sg) or sg in ("initialShadingGroup", "initialParticleSE"):
+            continue
+        if cmds.sets(sg, q=True) or []:
+            continue  # 还有成员，跳过
+        try:
+            shaders = cmds.listConnections(sg + ".surfaceShader", s=True, d=False) or []
+            cmds.delete(sg)
+            for sh in shaders:
+                if cmds.objExists(sh) and not (cmds.listConnections(sh, type="shadingEngine") or []):
+                    cmds.delete(sh)
+        except Exception as e:
+            logger.debug("删空 SG 失败 %s: %s", sg, e)
+
+
 def apply_materials(materials_info, mesh_nodes=None):
     """核心函数：根据材质信息为场景 mesh 创建材质球并按面赋予。
 
@@ -180,6 +254,9 @@ def apply_materials(materials_info, mesh_nodes=None):
     if mesh_nodes is None:
         mesh_nodes = cmds.ls(type="mesh", noIntermediate=True, long=True) or []
         mesh_nodes = [cmds.listRelatives(m, parent=True, fullPath=True)[0] for m in mesh_nodes]
+
+    # 赋新材质前先清旧材质指派 + shading 侧 groupId（变形器节点不碰）
+    old_sgs = _clear_shading_assignments(mesh_nodes)
 
     by_short, by_suffix = _build_mesh_lookup(mesh_nodes)
     assigned = []
@@ -203,6 +280,9 @@ def apply_materials(materials_info, mesh_nodes=None):
                 assigned.append(f"{mesh_short}→{mat_name}")
             except Exception as e:
                 failed.append(f"{transform.split('|')[-1]}→{mat_name}: {e}")
+
+    # 收尾：删已空的旧材质 SG 壳（新材质已赋，旧 SG 无成员即可清）
+    _delete_empty_shading_groups(old_sgs)
 
     return assigned, failed
 

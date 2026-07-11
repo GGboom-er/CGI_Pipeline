@@ -82,7 +82,7 @@ def get_protected_roots(project: str) -> list[str]:
 
 _DEFAULT_RIG_SYNC_PROFILE = {
     'pairing': {
-        'enable_cpd': True,
+        'enable_cpd': False,
         'cpd_point_diff_threshold': 0.8,
         'cpd_max_iterations': 30,
         'cpd_tolerance': 0.001,
