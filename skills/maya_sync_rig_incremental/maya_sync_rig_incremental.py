@@ -687,6 +687,24 @@ def _inject_mesh_data_via_plug(orig_shape, abc_entry):
     dep = om2.MFnDependencyNode(sl.getDependNode(0))
     dep.findPlug("cachedInMesh", False).setMObject(data)
     cmds.getAttr(orig_shape + ".boundingBoxMin")
+
+    # ── UV 必须直写 orig 的持久属性，不能只靠 cachedInMesh ──
+    # Maya 已知坑（实测 + Autodesk 论坛 "Modify all UVs using Python API 2"）：
+    # setMObject(cachedInMesh) 能把点/拓扑/法线烘进节点持久几何属性（存盘 OK），
+    # 但 UV 分配不落进持久 uv 属性(uvpt)——只活在 cache 数据块里，save→reopen 后
+    # Maya 用节点旧 uv 属性重建 → UV 散乱（maYouD 一开就乱、修好保存重开又乱的根因）。
+    # 修法：点/法线走上面 cachedInMesh；UV 在 cachedInMesh 写完、拓扑就位后，
+    # 用 setUVs+assignUVs 直写 orig DAG shape 的持久属性。前提同上：orig 无上游 inMesh。
+    # 两条都是 OpenMaya 底层直写、均不建 history。
+    if u and v and uvi:
+        try:
+            dag = sl.getDagPath(0); dag.extendToShape()
+            ofn = om2.MFnMesh(dag)
+            oset = (ofn.getUVSetNames() or ["map1"])[0]
+            ofn.setUVs(om2.MFloatArray(u), om2.MFloatArray(v), oset)
+            ofn.assignUVs(counts, om2.MIntArray(uvi), oset)
+        except Exception as e:
+            cmds.warning("UV 直写 orig 持久属性失败: %s" % e)
     return True
 
 
