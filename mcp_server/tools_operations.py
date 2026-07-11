@@ -460,10 +460,12 @@ def register_operation_tools(mcp):
         }
     )
     async def execute_workflow_tool(params: ExecuteWorkflowInput) -> dict:
-        """执行指定工作流。支持跨 DCC 编排（Blender + Maya + pipeline 混合）。
+        """执行指定工作流（跑注册工作流的唯一入口）。支持跨 DCC 编排（Blender + Maya + pipeline 混合）。
 
-        异步执行，返回 task_id。工作流引擎自动按 DCC 类型分段执行，
-        段间传递输出（通过 {{outputs.step_id.field}} 模板变量）。
+        wait=True(默认): 一次调用阻塞到工作流终态，直接返回最终 status + 每步 ✓/✗ 清单
+        (step_checklist) + report_path，不用再手动轮询。wait=False: 提交即返回 task_id，
+        自行用 maya_query_task 轮询。工作流引擎自动按 DCC 类型分段执行、自动拉起所需 worker、
+        段间传递输出（{{outputs.step_id.field}}）——调用方无需手动开 worker 或写轮询。
 
         典型用法：
         - blender_tex_export: Blender 导出 ABC + 采集 info
@@ -472,13 +474,54 @@ def register_operation_tools(mcp):
         - full_cleanup_and_save: 权重清理 → 全清理 → Shape 修复 → 法线统一 → 保存
         - abc_import_with_materials: ABC 导入 + UDIM 材质分配
         """
-        return _submit_workflow({
+        submit = _submit_workflow({
             'workflow_id': params.workflow_id,
             'source_path': params.source_path,
             'project': params.project,
             'asset_name': params.asset_name,
             'extra_params': params.extra_params or {},
         })
+        if not params.wait or submit.get('status') != 'SUBMITTED':
+            return submit  # 提交失败或 wait=False：保持原语义返回
+
+        # ── wait=True：阻塞轮询到终态，附每步 ✓/✗ 清单 ──
+        import asyncio
+        from core.task_status import is_terminal
+        from mcp_server.internals import _read_audit, collect_workflow_steps, render_step_checklist
+
+        task_id = submit['task_id']
+        deadline = asyncio.get_event_loop().time() + params.wait_timeout_sec
+        state = {}
+        while asyncio.get_event_loop().time() < deadline:
+            await asyncio.sleep(params.poll_interval_sec)
+            state = await asyncio.to_thread(_read_audit, task_id)
+            if is_terminal(state.get('status', '')):
+                break
+        else:
+            # 超时：工作流仍在后台跑，诚实返回，不谎报完成
+            return {
+                'task_id': task_id,
+                'workflow_id': params.workflow_id,
+                'status': 'PROGRESS',
+                'message': f'已等待 {params.wait_timeout_sec}s 未达终态，工作流仍在后台运行。',
+                'recovery_hint': f'用 maya_query_task(task_id="{task_id}") 续查，或加大 wait_timeout_sec。',
+            }
+
+        steps = await asyncio.to_thread(collect_workflow_steps, task_id)
+        final_status = state.get('status', 'UNKNOWN')
+        result = {
+            'task_id': task_id,
+            'workflow_id': params.workflow_id,
+            'status': final_status,
+            'steps': steps,
+            'step_checklist': render_step_checklist(steps),
+        }
+        for k in ('report_path', 'audit_path'):
+            if state.get(k):
+                result[k] = state[k]
+        if final_status not in ('WORKFLOW_SUCCESS', 'SUCCESS', 'CHAIN_SUCCESS'):
+            result['recovery_hint'] = f'工作流未成功({final_status})。看 step_checklist 里 ✗ 的步骤 + report_path 定位。'
+        return result
 
 
     # ── 热重载 ──

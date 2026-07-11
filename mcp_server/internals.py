@@ -372,6 +372,69 @@ def _read_audit(task_id: str) -> dict:
     return result
 
 
+def _find_audit_file(task_id: str):
+    """定位某 task_id 的审计文件（按日期分目录优先，扁平回退）。"""
+    if AUDIT_DIR.exists():
+        date_dirs = sorted(
+            [d for d in AUDIT_DIR.iterdir() if d.is_dir() and len(d.name) == 10],
+            reverse=True,
+        )
+        for date_dir in date_dirs:
+            candidate = date_dir / f'{task_id}.json'
+            if candidate.exists():
+                return candidate
+    flat = AUDIT_DIR / f'{task_id}.json'
+    return flat if flat.exists() else None
+
+
+def collect_workflow_steps(task_id: str) -> list[dict]:
+    """汇总工作流每步终态。跨段子链的 workflow_id 被注入成主 wf id，所有段的
+    STEP_* 都写进同一个主 wf 审计文件（非独立 seg 文件）。按文件内出现顺序把
+    STEP_START → STEP_<终态> 配对，拼成有序步骤清单 [{step, skill_id, status}]。
+    段边界天然由顺序保持，不依赖每段自 0 起的 step 索引。
+    """
+    steps: list[dict] = []
+    audit_path = _find_audit_file(task_id)
+    if audit_path is None:
+        return steps
+    try:
+        lines = audit_path.read_text(encoding='utf-8').strip().split('\n')
+    except OSError:
+        return steps
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            e = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        st = e.get('status', '')
+        if not st.startswith('STEP_'):
+            continue
+        skill_id = e.get('skill_id', '')
+        if st == 'STEP_START':
+            steps.append({'step': len(steps) + 1, 'skill_id': skill_id, 'status': 'RUNNING'})
+        elif steps and steps[-1]['status'] == 'RUNNING':
+            steps[-1]['status'] = st[len('STEP_'):]  # STEP_SUCCESS -> SUCCESS
+        else:
+            # 无配对 START 的收尾（防御）：单列一步
+            steps.append({'step': len(steps) + 1, 'skill_id': skill_id, 'status': st[len('STEP_'):]})
+    return steps
+
+
+def render_step_checklist(steps: list[dict]) -> str:
+    """把步骤清单渲染成人读的 ✓/✗ 文本块。"""
+    if not steps:
+        return ''
+    _mark = {'SUCCESS': '✓'}
+    lines = []
+    for s in steps:
+        mark = _mark.get(s['status'], '✗' if s['status'] not in ('RUNNING',) else '…')
+        suffix = '' if s['status'] in ('SUCCESS', 'RUNNING') else f'  [{s["status"]}]'
+        lines.append(f"  {s['step']:>2}. {s['skill_id']:<32} {mark}{suffix}")
+    return '\n'.join(lines)
+
+
 def reload_internals():
     """热重载内部状态（由 reload_server tool 调用）"""
     global _SKILLS, _SKILL_MAP, _DCC_QUEUE_MAP
