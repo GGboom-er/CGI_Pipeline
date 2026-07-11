@@ -44,7 +44,6 @@ _REPORT_SKILL_NAME_BY_ID = {
     "maya_conform_normals": "maya_conform_cache_normals",
     "maya_freeze_transforms": "maya_freeze_scene_transforms",
     "maya_apply_materials": "maya_apply_materials_to_cache",
-    "maya_assign_udim_materials": "maya_assign_udim_materials_to_cache",
     "maya_build_mesh_from_abc": "maya_build_scene_meshes_from_abc",
     "maya_check_textures": "maya_check_scene_textures",
     "maya_check_asset_hierarchy": "maya_check_rig_geometry_layout",

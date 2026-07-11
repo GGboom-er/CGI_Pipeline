@@ -281,7 +281,7 @@ async def preview_node_action(request: Request):
                     # 倾向于推荐带 cache 或 geo 的
                     cache_idx = next((i for i, v in enumerate(geom_roots) if 'cache' in v.lower()), 0)
                     
-                    if skill_id in ['export_abc', 'blender_export_abc', 'export_abc_auto']:
+                    if skill_id in ['export_abc', 'blender_export_abc']:
                         suggested_params['root_nodes'] = geom_roots[cache_idx]
                         
                     if skill_id in ['blender_export_abc', 'blender_build_asset_info', 'maya_build_asset_info']:
@@ -294,7 +294,7 @@ async def preview_node_action(request: Request):
             if stage: suggested_params['stage'] = stage
 
         # === 2. 预测操作输出 ===
-        if skill_id in ['maya_export_abc', 'blender_export_abc', 'pipeline_export_abc_auto', 'export_abc', 'export_abc_auto']:
+        if skill_id in ['maya_export_abc', 'blender_export_abc', 'export_abc']:
             from core.path_guard import is_protected_path
             src_dir = os.path.dirname(source_path)
             src_stem = os.path.splitext(os.path.basename(source_path))[0]
@@ -315,27 +315,6 @@ async def preview_node_action(request: Request):
         elif skill_id == 'save_scene':
             preview_html = f"<b>💾 预估动作:</b> 根据规则创建新场景版本"
 
-        elif skill_id == 'publish_asset':
-            # 从上游 resolve_asset 推断所有参数
-            if project: suggested_params['project'] = project
-            if category: suggested_params['category'] = category
-            if stage: suggested_params['stage'] = stage
-            # asset_name 从 node_data 或者上游推断
-            asset_name = node_data.get('asset_name', '') or data.get('asset_name', '')
-            if asset_name: suggested_params['asset_name'] = asset_name
-            # 预测版本号
-            try:
-                from core.config_loader import load_project_config as _lpc
-                from core.asset_resolver import AssetResolver as _AR
-                _cfg = _lpc(project)
-                _r = _AR(_cfg)
-                _t = _r._get_primary_task(stage) if stage else '?'
-                _pub_dir = _r._resolve_ai_stage_dir(category, asset_name or '?', stage or '?')
-                _existing = _r._scan_versions(_pub_dir) if _pub_dir.exists() else []
-                _next = max(_existing, default=0) + 1
-                preview_html = f"<b>📦 预估发布:</b> v{_next:03d}<br>{project}_{category}_{asset_name}_{stage}_{_t}_v{_next:03d}.ma"
-            except Exception:
-                preview_html = f"<b>📦 预估发布:</b> 将自动递增版本号发布到 ai_publish_root"
 
         elif skill_id == 'validate_publish':
             # 从上游推断所有参数
