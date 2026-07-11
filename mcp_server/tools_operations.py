@@ -35,6 +35,32 @@ from core.skill_registry import get_all_skills, get_skill_map
 SKILL_TIERS = {'read', 'write', 'destructive'}
 
 
+# ── AI 工具面白名单(单一真相源)──
+# 研究(Harness 130→11、IBM"只暴露业务级"、Anthropic 有效工具):工具越少 AI 选得越准。
+# 全部 skill 能力保留,但不各占 MCP 按钮——经 execute_skill(按名调)/工作流(按名编排)触达,
+# 不占 AI 注意力。maya_list_skills = 命令目录(API 手册)。
+# 收/放某按钮:改本集合 + reload 即生效,可回滚。startup(server.py)与 reload 共用本 prune。
+EXPOSED_TOOLS = {
+    "pipeline_execute_workflow", "list_workflows",     # 跑工作流(生产主入口)
+    "maya_list_skills", "execute_skill",               # 命令库:目录 + 按名调
+    "maya_exec_code", "blender_exec_code", "maya_list_foreground_sessions",  # 调试
+    "maya_start_worker", "pipeline_restart_worker", "pipeline_service_status",  # worker 控制
+    "maya_query_task", "maya_resolve_asset",           # 查询
+    "reload_server",                                    # 开发
+}
+
+
+async def prune_tools_to_whitelist(mcp):
+    """把 EXPOSED_TOOLS 之外的工具从 MCP 面移除(skill 能力仍在,只是不作按钮)。"""
+    for t in await mcp.list_tools():
+        name = getattr(t, "name", None)
+        if name and name not in EXPOSED_TOOLS:
+            try:
+                mcp.remove_tool(name)
+            except Exception:
+                pass
+
+
 # 端口扫描抽到共享叶子模块 mcp_server.ports（消除 tools_readonly/tools_operations/foreground_client 三处重复）
 from mcp_server.ports import discover_maya_ports
 
@@ -572,6 +598,8 @@ def register_operation_tools(mcp):
             import mcp_server.tools_operations as _top
             _tr.register_readonly_tools(mcp)
             _top.register_operation_tools(mcp)
+            # 重注册后同样按白名单剪枝,否则 reload 会让被收的按钮全回来
+            await _top.prune_tools_to_whitelist(mcp)
             tools_after = await mcp.list_tools()
             re_registered = len(tools_after)
         except Exception as e:
