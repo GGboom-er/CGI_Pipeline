@@ -54,6 +54,7 @@ category: "system"
 - Alembic archive 顶层 `ABC` 是文件容器根，不是业务 DAG。任何读取 ABC 并生成 mesh key 的逻辑必须在数据层剥离该前缀，Maya 拼装结果不得出现 `|ABC` 顶层。
 - 层级修复必须落在事实生产者或解析层，例如 `core.abc_reader.read_abc_as_info`；不要在下游 Maya skill 里用事后重命名掩盖错误数据。
 - Maya DAG 创建后必须立即规整为 long path/fullPath；后续 parent、group、rename、mesh create 等操作不得继续依赖短名。
+- 层级 fix 节点必须消费前置 check 节点输出的事实列表，不允许自行重新扫描全场景决定另一套修复目标；若 fix 过程中重命名了顶层节点，只能把 check 给出的旧 DAG 路径映射到新路径继续处理。
 
 ### 材质贴图语义
 

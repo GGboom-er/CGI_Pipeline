@@ -278,12 +278,12 @@ def _check_result(params):
     return result
 
 
-def _source_roots_from_check(check_result, required_root):
+def _source_roots_from_check(check_result, required_root, rename_map=None):
     roots = check_result.get("candidate_source_roots") or []
     out = []
     seen = set()
     for root in roots:
-        text = str(root).strip()
+        text = _remap_renamed_top(str(root).strip(), rename_map or {})
         if not text or _is_under(text, required_root):
             continue
         if not cmds.objExists(text):
@@ -296,6 +296,24 @@ def _source_roots_from_check(check_result, required_root):
     return out
 
 
+def _remap_renamed_top(path, rename_map):
+    text = str(path).strip()
+    top = _top_node(text)
+    if top and top in rename_map:
+        return rename_map[top] + text[len(top):]
+    return text
+
+
+def _path_set_after_rename(paths, rename_map):
+    result = set()
+    for path in paths or []:
+        text = str(path).strip()
+        if text:
+            result.add(text)
+            result.add(_remap_renamed_top(text, rename_map))
+    return result
+
+
 def _run_fix(params):
     check_result = _check_result(params)
     required_root = str(check_result.get("required_root") or "").strip()
@@ -305,23 +323,29 @@ def _run_fix(params):
     normalized_roots, normalized_created, renamed_tops, preserved_tops = _normalize_legacy_geo_roots(
         check_result.get("legacy_geo_roots") or []
     )
+    rename_map = {
+        str(item.get("from")): str(item.get("to"))
+        for item in renamed_tops
+        if isinstance(item, dict) and item.get("from") and item.get("to")
+    }
     required_root, created_groups = _ensure_transform_path(required_root)
     created_groups = list(normalized_created) + created_groups
     active_rig_root = normalized_roots[0] if normalized_roots else str(check_result.get("active_rig_root") or "")
 
-    legacy_set = set(check_result.get("legacy_geo_roots") or [])
+    legacy_set = _path_set_after_rename(check_result.get("legacy_geo_roots") or [], rename_map)
+    legacy_set.update(normalized_roots)
+    source_roots = _source_roots_from_check(check_result, required_root, rename_map)
     source_roots = [
-        root for root in _source_roots_from_check(check_result, required_root)
+        root for root in source_roots
         if root not in legacy_set and not any(_is_under(root, legacy) for legacy in legacy_set)
     ]
     moved = []
-    if not normalized_roots:
-        for source_root in source_roots:
-            if not cmds.objExists(source_root):
-                continue
-            moved.extend(_move_children_to_root(source_root, required_root))
-        if moved:
-            active_rig_root = required_root
+    for source_root in source_roots:
+        if not cmds.objExists(source_root):
+            continue
+        moved.extend(_move_children_to_root(source_root, required_root))
+    if moved and not normalized_roots:
+        active_rig_root = required_root
 
     removed_sources = []
     if _as_bool(params.get("remove_empty_source"), True):
@@ -409,7 +433,6 @@ def execute(payload):
             summary_action=action,
             summary_count=result["moved_child_count"] + result["deleted_top_node_count"],
             summary_label="项",
-            outputs={"result": result},
         )
     except Exception as exc:
         rollback_error = ""
@@ -425,8 +448,18 @@ def execute(payload):
             skill_id=SKILL_ID,
             status="ERROR",
             start_time=t0,
+            input={
+                "source_path": source_path,
+                "check_result": params.get("check_result"),
+                "remove_empty_source": _as_bool(params.get("remove_empty_source"), True),
+                "delete_extra_top_nodes": _as_bool(params.get("delete_extra_top_nodes"), False),
+            },
+            output={
+                "scene": "current_maya_scene",
+                "rolled_back": not rollback_error,
+                "result": {"required_root": "", "rolled_back": not rollback_error},
+            },
             summary_input=source_path,
             summary_action="资产层级修复失败，已尝试回滚",
-            outputs={"result": {"required_root": "", "rolled_back": not rollback_error}},
             error=f"资产层级修复失败: {exc}{rollback_error}\n{traceback.format_exc()}",
         )

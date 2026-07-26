@@ -127,6 +127,14 @@ def _legacy_geo_roots(required_root, fallback_patterns):
                 continue
             if _has_valid_mesh(long_name):
                 roots.append(long_name)
+    for node in cmds.ls(type="transform", long=True) or []:
+        long_name = _long_path(node)
+        if not _short_name(long_name).startswith("RIG_geo"):
+            continue
+        if _is_under(long_name, required_root) or _is_under(long_name, "|Group|Geometry|RIG_geo"):
+            continue
+        if _has_valid_mesh(long_name):
+            roots.append(long_name)
     return _drop_ancestor_roots(roots)
 
 
@@ -192,7 +200,7 @@ def _expected_rig_root(required_root, legacy_geo_roots, candidate_source_roots):
     if cmds.objExists("|Group|Geometry|RIG_geo"):
         return _long_path("|Group|Geometry|RIG_geo")
     if legacy_geo_roots:
-        return "|Group|Geometry|RIG_geo"
+        return legacy_geo_roots[0]
     if cmds.objExists(required_root):
         return _long_path(required_root)
     if candidate_source_roots:
@@ -376,8 +384,19 @@ def execute(payload):
             skill_id=SKILL_ID,
             status="ERROR",
             start_time=t0,
+            input={
+                "source_path": source_path,
+                "stage": stage,
+                "phase": phase,
+                "block_on_fail": block_on_fail,
+                "block_extra_top_nodes": block_extra_top_nodes,
+            },
+            output={
+                "passed": False,
+                "code": INVALID_CODE,
+                "result": {"passed": False, "code": INVALID_CODE},
+            },
             summary_input=source_path,
             summary_action="资产层级检查执行失败",
-            outputs={"result": {"passed": False, "code": INVALID_CODE}},
             error=f"资产层级检查执行失败: {exc}\n{traceback.format_exc()}",
         )

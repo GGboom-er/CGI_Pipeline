@@ -49,9 +49,9 @@ category: "inspect"
 - 用 `cmds.listRelatives(required_root, allDescendents=True, type="mesh", fullPath=True)` 统计标准根下非 intermediate mesh 数量。
 - 用 `cmds.ls(assemblies=True, long=True)` 检查顶层除默认相机外是否只有 `|Group`。
 - 顶层额外非空节点默认只作为风险事实输出；只有 `block_extra_top_nodes=true` 时才阻断。
-- 输出 `legacy_geo_roots`：例如 `|maYouB|geo`，供修复节点归一化为 `|Group|Geometry|RIG_geo`。
+- 输出 `legacy_geo_roots`：例如 `|maYouB|geo` 或非标准位置的 `|maYouB|RIG_geo`，供修复节点归一化为 `|Group|Geometry|RIG_geo`。
 - 输出 `candidate_source_roots`：可供 `maya_fix_asset_hierarchy` 迁移的非标准几何根，例如非标准位置的 `cache`。
-- 输出 `active_rig_root`：pre_sync 阶段后续 compare/sync 应读取的旧绑定几何根。
+- 输出 `active_rig_root`：pre_sync 阶段当前场景里实际存在、可读取的旧绑定几何根；fix 后由 `maya_fix_asset_hierarchy` 返回归一化后的根。
 
 ### 🔵 核心代码与扩展 (IMPLEMENTATION)
 - 入口：`skills.maya_check_asset_hierarchy.maya_check_asset_hierarchy.execute(payload)`。
@@ -82,8 +82,8 @@ category: "inspect"
 - `output.result.safe_delete_top_nodes`: 空 transform 顶层节点，可由修复节点按参数删除。
 - `output.result.manual_review_top_nodes`: 非空顶层节点，默认绝不自动删除。
 - `output.result.block_extra_top_nodes`: 非空额外顶层节点是否参与通过判定。
-- `output.result.legacy_geo_roots`: 旧绑定几何根，例如 `|maYouB|geo`。
+- `output.result.legacy_geo_roots`: 旧绑定几何根，例如 `|maYouB|geo` 或非标准位置的 `|maYouB|RIG_geo`。
 - `output.result.candidate_source_roots`: 层级修复节点可迁移的非标准源根。
-- `output.result.active_rig_root`: 后续 compare/sync 应读取的旧绑定几何根。
+- `output.result.active_rig_root`: 当前场景里实际存在、可读取的旧绑定几何根；fix 后以后置 fix 输出为准。
 - `output.result.active_rig_mesh_count`: `active_rig_root` 下有效 mesh 数量。
 - `output.extra_top_nodes` / `output.manual_review_top_nodes` / `output.legacy_geo_roots` / `output.candidate_source_roots` / `output.issues`: 报告 Details 使用的精简明细；与 `output.result` 中的同名事实保持一致。

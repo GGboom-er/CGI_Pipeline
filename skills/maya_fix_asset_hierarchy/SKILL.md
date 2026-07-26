@@ -40,10 +40,10 @@ category: "cleanup"
 - **锁节点处理**: 移动、重命名或删除前会尝试解锁相关节点；引用或系统原因导致失败时返回 `ERROR`。
 
 ### 🟢 核心功能 (CORE FUNCTION)
-- 从 `check_result.legacy_geo_roots` 得到旧 `|*|geo` 根。
+- 从 `check_result.legacy_geo_roots` 得到旧 `|*|geo` 或非标准位置的 `RIG_geo` 根。
 - 若场景没有 `|Group`，将旧顶层资产根重命名为 `|Group`，保留其下绑定系统。
 - 创建 `|Group|Geometry`，并把旧 `geo` 迁移/重命名为 `|Group|Geometry|RIG_geo`。
-- 无 legacy geo 时，才从 `check_result.candidate_source_roots` 迁移非标准 cache 的直接子节点到标准根。
+- 从 `check_result.candidate_source_roots` 迁移非标准 cache 的直接子节点到标准 cache；该步骤仍只消费 check 输出，不自行扫描。
 - 可选删除迁移后已经为空的源 cache 根。
 - 可选删除 `check_result.safe_delete_top_nodes` 中列出的空顶层节点。
 
