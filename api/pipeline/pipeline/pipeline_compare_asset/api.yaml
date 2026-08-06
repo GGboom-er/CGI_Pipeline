@@ -1,0 +1,71 @@
+api_id: pipeline.pipeline.pipeline_compare_asset
+version: 1.0.0
+name: 资产对比（统一入口）
+dcc: pipeline
+domain: pipeline
+action: pipeline_compare_asset
+tier: read
+execution_modes:
+- background
+operation_modes:
+- inspect
+inputs:
+  input_source:
+    type: string
+    default: ''
+    description: source 侧 _info.json 或 .abc 路径
+  input_target:
+    type: string
+    default: ''
+    description: target 侧 _info.json 或 .abc 路径
+  label_source:
+    type: string
+    default: ''
+    description: 'source 标签（自动推断: rig/tex/uv/model/anim 等）'
+  label_target:
+    type: string
+    default: ''
+    description: target 标签
+  output_path:
+    type: string
+    default: ''
+    description: compare_result.json 输出路径。workflow/单API调用必须传入任务沙盒 .info 路径或可推导 info_dir。
+preconditions:
+- 项目配置通过统一 config/{project}_config.json 接口加载。
+- 后台模式由 CGI Worker 打开或复用对应 DCC 场景。
+side_effects:
+  inspect: 只读取场景或标准数据，不改变资产。
+  apply: 按 API 实现对当前任务沙盒中的场景或数据执行操作。
+idempotent: true
+outputs:
+- name: compare_result
+  type: json_file
+  label: 对比结果 JSON
+- name: report
+  type: report
+  label: 对比报告 (.md)
+statuses:
+- SUCCESS
+- PARTIAL
+- ERROR
+- BLOCKED
+- NEEDS_ATTENTION
+- TIMEOUT
+- CANCELLED
+errors:
+  API_OPERATION_ERROR: 操作执行失败，详见报告。
+  API_IMPLEMENTATION_MISSING: 目录存在但没有本地实现。
+recovery:
+- 读取 api_help 获取参数、前置条件和输出。
+- 失败时检查任务报告中的错误与恢复建议。
+help:
+  summary: 纯 JSON/ABC 数据对比。三步漏斗（路径→等点数→空间）配对，输出 source 侧每个 mesh 相对 target 的 4 种事实归属
+    + 算法层 7 标签细分。
+  usage: execute_api(pipeline.pipeline.pipeline_compare_asset, params={...})
+  scenario: 纯 JSON/ABC 数据对比。三步漏斗（路径→等点数→空间）配对，输出 source 侧每个 mesh 相对 target 的 4 种事实归属
+    + 算法层 7 标签细分。
+  safety: read API 只读；write/destructive API 仅写入任务沙盒。
+tests:
+  contract: api.registry loads this manifest and api.runner validates its receipt.
+  smoke: 代表性 workflow 统一验收。
+handler: api.operations.pipeline_compare_asset.adapter:execute

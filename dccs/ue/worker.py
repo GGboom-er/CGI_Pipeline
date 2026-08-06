@@ -80,7 +80,7 @@ class UEWorker:
         self.assets_done = 0
         self.start()
 
-    def run_skill(self, payload: dict) -> dict:
+    def run_api(self, payload: dict) -> dict:
         if self._needs_recycle():
             self.recycle()
         task_id = payload['task_id']

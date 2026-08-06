@@ -1,0 +1,60 @@
+api_id: maya.rig.maya_fix_asset_hierarchy
+version: 1.0.0
+name: maya_fix_rig_geometry_layout
+dcc: maya
+domain: rig
+action: maya_fix_asset_hierarchy
+tier: destructive
+execution_modes:
+- background
+- foreground
+operation_modes:
+- apply
+inputs:
+  check_result:
+    type: object
+    description: 必填；maya_check_asset_hierarchy 的 output.result。fix 只消费其中 required_root、legacy_geo_roots、candidate_source_roots、safe_delete_top_nodes。workflow
+      模板中写 {{outputs.check_hierarchy_pre.result}}。
+    required: true
+  remove_empty_source:
+    type: boolean
+    default: true
+    description: 迁移后是否删除已经为空的源 cache 根。
+  delete_extra_top_nodes:
+    type: boolean
+    default: false
+    description: 是否删除检查结果标记为 safe_delete_top_nodes 的空顶层节点；非空业务根永不自动删除。
+preconditions:
+- 项目配置通过统一 config/{project}_config.json 接口加载。
+- 后台模式由 CGI Worker 打开或复用对应 DCC 场景。
+side_effects:
+  inspect: 只读取场景或标准数据，不改变资产。
+  apply: 按 API 实现对当前任务沙盒中的场景或数据执行操作。
+idempotent: false
+outputs:
+- name: result
+  type: json
+  label: 层级修复结果
+statuses:
+- SUCCESS
+- PARTIAL
+- ERROR
+- BLOCKED
+- NEEDS_ATTENTION
+- TIMEOUT
+- CANCELLED
+errors:
+  API_OPERATION_ERROR: 操作执行失败，详见报告。
+  API_IMPLEMENTATION_MISSING: 目录存在但没有本地实现。
+recovery:
+- 读取 api_help 获取参数、前置条件和输出。
+- 失败时检查任务报告中的错误与恢复建议。
+help:
+  summary: 消费 maya_check_asset_hierarchy 的检查结果，按检查结果把旧绑定几何根归一化为 |Group|Geometry|RIG_geo，并只删除安全空顶层节点。
+  usage: execute_api(maya.rig.maya_fix_asset_hierarchy, params={...})
+  scenario: 消费 maya_check_asset_hierarchy 的检查结果，按检查结果把旧绑定几何根归一化为 |Group|Geometry|RIG_geo，并只删除安全空顶层节点。
+  safety: read API 只读；write/destructive API 仅写入任务沙盒。
+tests:
+  contract: api.registry loads this manifest and api.runner validates its receipt.
+  smoke: 代表性 workflow 统一验收。
+handler: api.operations.maya_fix_asset_hierarchy.adapter:execute

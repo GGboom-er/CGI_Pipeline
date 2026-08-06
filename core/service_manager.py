@@ -18,28 +18,67 @@ PROJECT_ROOT = Path(_cfg.PROJECT_ROOT)
 RUNTIME_DIR = PROJECT_ROOT / 'runtime'
 LOGS_DIR = PROJECT_ROOT / 'logs'
 
-# DCC Worker 队列映射
-_DCC_QUEUE_MAP = {'maya': 'dcc_queue', 'blender': 'blender_queue', 'workflow': 'workflow_queue'}
-_WORKER_DCCS = ('maya', 'blender', 'workflow')
+# Celery 只有一个 CGI Worker。DCC 名称保留为调用兼容别名，不能再映射到
+# 不同的 Celery 进程或队列。
+_CANONICAL_WORKER = 'cgi'
+_WORKER_ALIASES = {
+    'cgi': _CANONICAL_WORKER,
+    'maya': _CANONICAL_WORKER,
+    'blender': _CANONICAL_WORKER,
+    'ue': _CANONICAL_WORKER,
+    'pipeline': _CANONICAL_WORKER,
+    'workflow': _CANONICAL_WORKER,
+}
+_DCC_QUEUE_MAP = {name: 'cgi_queue' for name in _WORKER_ALIASES}
+_WORKER_DCCS = (_CANONICAL_WORKER,)
 DEFAULT_HEARTBEAT_TIMEOUT_SEC = 5.0
 
 # ── 管理的子进程 ──
 _managed_procs = []
 
 
+def _managed_python_env(base: dict | None = None) -> dict:
+    """Return a child environment that can load the Notes Python base reliably.
+
+    The server is intentionally launched with the absolute interpreter path, not
+    ``conda activate``.  On Windows that leaves ``Library/bin`` out of ``PATH``;
+    NumPy/MKL (and other compiled packages) then fail with 0xc06d007f.  Keep the
+    fix at the single worker-launch boundary so every Notes tool sharing this
+    base inherits the same DLL search path without creating another environment.
+    """
+    env = dict(os.environ if base is None else base)
+    prefix = Path(sys.prefix)
+    managed_dirs = [
+        prefix,
+        prefix / 'Library' / 'mingw-w64' / 'bin',
+        prefix / 'Library' / 'usr' / 'bin',
+        prefix / 'Library' / 'bin',
+        prefix / 'Scripts',
+    ]
+    existing = [item for item in env.get('PATH', '').split(os.pathsep) if item]
+    prefix_items = [str(item) for item in managed_dirs if item.exists()]
+    seen: set[str] = set()
+    env['PATH'] = os.pathsep.join(
+        item for item in prefix_items + existing
+        if not (item.lower() in seen or seen.add(item.lower()))
+    )
+    env.setdefault('PYTHONNOUSERSITE', '1')
+    return env
+
+
 def _normalize_dcc(dcc: str) -> str:
-    """pipeline 类技能复用 Maya 队列，服务管理层统一映射到 maya worker。"""
-    dcc = str(dcc or 'maya').lower()
-    return 'maya' if dcc == 'pipeline' else dcc
+    """把 DCC/工作流别名统一到唯一的 CGI Worker key。"""
+    name = str(dcc or _CANONICAL_WORKER).lower()
+    return _WORKER_ALIASES.get(name, name)
 
 
 def _queue_for_dcc(dcc: str) -> str:
-    return _DCC_QUEUE_MAP.get(_normalize_dcc(dcc), 'dcc_queue')
+    return _DCC_QUEUE_MAP.get(_normalize_dcc(dcc), 'cgi_queue')
 
 
 def _worker_hostname(dcc: str) -> str:
-    """为不同队列 worker 固定唯一 Celery 节点名，避免 inspect 混淆。"""
-    return f'cgi_{_normalize_dcc(dcc)}@%h'
+    """唯一 CGI Worker 的稳定 Celery 节点名。"""
+    return 'cgi@%h'
 
 
 def _active_queues_include(active_queues: dict | None, queue: str) -> tuple[bool, list[str]]:
@@ -127,10 +166,11 @@ def _kill_process_tree(pid: int, timeout: float = 5.0) -> bool:
         return False
 
 
-def _kill_orphan_mayapy():
-    """兜底：扫描 CGI_WORKER_ID 标记的 mayapy 进程，凡父进程已死的都杀掉。
+def _kill_orphan_dcc_processes():
+    """清理 CGI worker 崩溃后遗留的 Maya/Blender 子进程。
 
-    用于 celery worker 异常退出（崩溃、硬杀）后清理残留 mayapy。
+    DCC 子进程都带有 CGI_WORKER_ID。仅清理父进程已不存在的、且确实由
+    CGI worker 启动的进程，避免误杀用户前台 DCC。
     """
     try:
         import psutil
@@ -140,7 +180,7 @@ def _kill_orphan_mayapy():
     for proc in psutil.process_iter(['pid', 'name', 'environ', 'ppid']):
         try:
             name = (proc.info.get('name') or '').lower()
-            if 'maya' not in name:
+            if not any(token in name for token in ('maya', 'blender')):
                 continue
             env = proc.info.get('environ') or {}
             if not env.get('CGI_WORKER_ID'):
@@ -153,10 +193,15 @@ def _kill_orphan_mayapy():
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
                     parent_alive = False
             if not parent_alive:
-                print(f'[ServiceManager] 清理孤儿 mayapy: PID={proc.pid}')
+                print(f'[ServiceManager] 清理孤儿 DCC 进程: PID={proc.pid} name={name}')
                 _kill_process_tree(proc.pid)
         except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
             continue
+
+
+def _kill_orphan_mayapy():
+    """向后兼容的旧入口；实际清理 Maya 与 Blender 两类 CGI 子进程。"""
+    _kill_orphan_dcc_processes()
 
 
 # ═══════════════════════════════════════════════════
@@ -178,14 +223,27 @@ def is_redis_alive(host='127.0.0.1', port=6379) -> bool:
 
 
 def start_redis() -> bool:
-    """启动内嵌 Redis 服务器（幂等，已运行则跳过）"""
+    """启动 Notes 受管 Redis 服务器（幂等，已运行则跳过）。"""
     if is_redis_alive():
         return True
 
-    redis_exe = PROJECT_ROOT / 'redis_server' / 'redis-server.exe'
-    if not redis_exe.exists():
-        print(f'[ServiceManager] Redis 可执行文件不存在: {redis_exe}')
+    configured = os.getenv('REDIS_SERVER_PATH', '').strip()
+    candidates = [
+        Path(configured) if configured else None,
+        PROJECT_ROOT.parent / 'redis' / 'redis-server.exe',
+        PROJECT_ROOT / 'redis_server' / 'redis-server.exe',
+    ]
+    redis_exe = next((path for path in candidates if path and path.exists()), None)
+    if redis_exe is None:
+        locations = ', '.join(str(path) for path in candidates if path)
+        print(f'[ServiceManager] Redis 可执行文件不存在，已检查: {locations}')
         return False
+
+    configured_config = os.getenv('REDIS_CONFIG_PATH', '').strip()
+    config_path = Path(configured_config) if configured_config else redis_exe.with_name('redis.windows.conf')
+    command = [str(redis_exe)]
+    if config_path.exists():
+        command.append(str(config_path))
 
     flags = 0
     if sys.platform == 'win32':
@@ -193,8 +251,8 @@ def start_redis() -> bool:
 
     try:
         proc = subprocess.Popen(
-            [str(redis_exe)],
-            cwd=str(PROJECT_ROOT / 'redis_server'),
+            command,
+            cwd=str(redis_exe.parent),
             creationflags=flags,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
@@ -355,6 +413,7 @@ def _await_worker_ready(dcc: str, timeout_sec: float = 30.0) -> bool:
 
 def _clear_stale_pidfile(dcc: str):
     """Popen 前清理残留 pidfile：文件在但进程已死则删，防 celery O_EXCL 撞死残留。"""
+    dcc = _normalize_dcc(dcc)
     pidfile = RUNTIME_DIR / f'worker_{dcc}.pid'
     if not pidfile.exists():
         return
@@ -374,6 +433,7 @@ def _acquire_start_lock(dcc: str, stale_after_sec: float) -> bool:
     视为上个 starter 崩溃残留，偷锁重来（不因单次崩溃永久堵死）。
     """
     import time
+    dcc = _normalize_dcc(dcc)
     lockpath = RUNTIME_DIR / f'worker_{dcc}.starting.lock'
     try:
         fd = os.open(str(lockpath), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
@@ -399,6 +459,7 @@ def _acquire_start_lock(dcc: str, stale_after_sec: float) -> bool:
 
 
 def _release_start_lock(dcc: str):
+    dcc = _normalize_dcc(dcc)
     (RUNTIME_DIR / f'worker_{dcc}.starting.lock').unlink(missing_ok=True)
 
 
@@ -442,7 +503,7 @@ def start_worker(dcc: str = 'maya', wait: bool = True, timeout_sec: float = 30.0
         flags = subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS
 
     # 加载 .env 环境变量
-    env = os.environ.copy()
+    env = _managed_python_env()
     env['PYTHONUNBUFFERED'] = '1'
     dotenv_path = PROJECT_ROOT / '.env'
     if dotenv_path.exists():
@@ -526,31 +587,31 @@ def stop_worker(dcc: str = 'maya', timeout: float = 8.0) -> bool:
 # ═══════════════════════════════════════════════════
 
 def get_service_status(include_heartbeat: bool = False) -> dict:
-    """返回所有服务的运行状态"""
+    """返回 Redis 与唯一 CGI Worker 的状态。
+
+    ``worker_maya``/``worker_blender``/``worker_workflow`` 保留为只读兼容别名，
+    三者内容始终指向同一个 ``worker_cgi``，不代表三套进程。
+    """
     redis_ok = is_redis_alive()
-    maya_alive, maya_pid = is_worker_alive('maya')
-    blender_alive, blender_pid = is_worker_alive('blender')
-    workflow_alive, workflow_pid = is_worker_alive('workflow')
+    worker_alive, worker_pid = is_worker_alive(_CANONICAL_WORKER)
 
     status = {
         'redis': {'alive': redis_ok, 'host': '127.0.0.1', 'port': 6379},
-        'worker_maya': {'alive': maya_alive, 'pid': maya_pid},
-        'worker_blender': {'alive': blender_alive, 'pid': blender_pid},
-        'worker_workflow': {'alive': workflow_alive, 'pid': workflow_pid},
+        'worker_cgi': {'alive': worker_alive, 'pid': worker_pid},
         'dashboard': {'alive': True},
     }
+    for alias in ('maya', 'blender', 'workflow'):
+        status[f'worker_{alias}'] = dict(status['worker_cgi'])
     if include_heartbeat:
-        for key, dcc in (
-            ('worker_maya', 'maya'),
-            ('worker_blender', 'blender'),
-            ('worker_workflow', 'workflow'),
-        ):
-            health = get_worker_health(dcc, DEFAULT_HEARTBEAT_TIMEOUT_SEC)
-            status[key].update({
-                'alive': health.get('state') == 'HEALTHY',
-                'pid': health.get('pid', status[key]['pid']),
-                'health': health,
-            })
+        health = get_worker_health(_CANONICAL_WORKER, DEFAULT_HEARTBEAT_TIMEOUT_SEC)
+        worker_state = {
+            'alive': health.get('state') == 'HEALTHY',
+            'pid': health.get('pid', status['worker_cgi']['pid']),
+            'health': health,
+        }
+        status['worker_cgi'].update(worker_state)
+        for alias in ('maya', 'blender', 'workflow'):
+            status[f'worker_{alias}'].update(worker_state)
     return status
 
 
@@ -658,12 +719,11 @@ def shutdown_all():
     _managed_procs.clear()
 
     # 3. 权威停 PID 文件记录的 worker（跨进程真相源；确认死才删 pidfile，杀失败保留待补刀）
-    for dcc in ('maya', 'blender', 'workflow'):
-        stop_worker(dcc)
+    stop_worker(_CANONICAL_WORKER)
 
-    # 4. 兜底：扫描孤儿 mayapy（celery worker 已死但 mayapy 还活）
+    # 4. 兜底：扫描孤儿 DCC（Celery worker 已死但 mayapy/Blender 还活）
     try:
-        _kill_orphan_mayapy()
+        _kill_orphan_dcc_processes()
     except Exception:
         pass
 

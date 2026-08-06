@@ -1,17 +1,20 @@
 {
     "_doc": "CGI Pipeline 系统宪法 — 所有模块的唯一真相源",
-    "_层级": "Layer 0: 此文件 → Layer 1: 项目配置 → Layer 2: 技能注册 → Layer 3: .env",
+    "_层级": "Layer 0: 此文件 → Layer 1: 项目配置 → API manifest/help → Layer 3: .env",
     "version": "2.1",
     "name": "CGI Pipeline",
-
     "principles": {
-        "readonly_drives": ["x:"],
-        "readonly_unc_prefixes": ["//server/", "\\\\server\\"],
+        "readonly_drives": [
+            "x:"
+        ],
+        "readonly_unc_prefixes": [
+            "//server/",
+            "\\\\server\\"
+        ],
         "all_writes_must_target": "task_sandbox（projects/{project}/{timestamp}_{asset}_{task_id} 或 runs/{task_id}）",
-        "post_skill_safety_check": true,
+        "post_api_safety_check": true,
         "backend_requires_manual_resume": false
     },
-
     "status_codes": {
         "SUCCESS": "完成",
         "ERROR": "失败",
@@ -26,34 +29,51 @@
         "WORKFLOW_STARTED": "工作流开始",
         "WORKFLOW_ERROR": "工作流错误"
     },
-
     "exec_code_safety": [
         "禁止写入文件到只读盘符或 UNC 路径（会被 path_guard 拦截）",
         "禁止调用 cmds.file(save=True) 或 cmds.file(rename=...) 保存到受保护路径",
         "禁止用 os.system/subprocess/shutil 等绕过 path_guard 写入受保护路径",
         "所有文件写入操作必须指向当前任务沙盒目录"
     ],
-
     "dcc_queues": {
-        "maya": "dcc_queue",
-        "blender": "blender_queue",
-        "ue": "ue_queue",
-        "pipeline": "dcc_queue"
+        "maya": "cgi_queue",
+        "blender": "cgi_queue",
+        "ue": "cgi_queue",
+        "pipeline": "cgi_queue"
     },
-
     "chain_rules": {
         "save_scene_must_be_last": true,
         "abort_on_step_failure": true,
         "hold_on_needs_attention": false
     },
-
     "payload_schema": {
-        "required": ["task_id", "skill_id", "project", "asset_name"],
-        "optional": ["source_path", "parameters", "submitted_at"]
+        "required": [
+            "task_id",
+            "api_id",
+            "project",
+            "asset_name"
+        ],
+        "optional": [
+            "source_path",
+            "parameters",
+            "submitted_at"
+        ]
     },
-
     "receipt_schema": {
-        "required_fields": ["status", "skill_id", "elapsed_min"],
-        "optional_fields": ["summary", "items", "outputs", "error", "recovery_hint"]
+        "required_fields": [
+            "api_id",
+            "api_version",
+            "status",
+            "input",
+            "output",
+            "elapsed_sec"
+        ],
+        "optional_fields": [
+            "summary",
+            "items",
+            "outputs",
+            "error",
+            "recovery_hint"
+        ]
     }
 }

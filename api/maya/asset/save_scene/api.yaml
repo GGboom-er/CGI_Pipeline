@@ -1,0 +1,51 @@
+api_id: maya.asset.save_scene
+version: 1.0.0
+name: maya_save_scene_as_next_version
+dcc: maya
+domain: asset
+action: save_scene
+tier: write
+execution_modes:
+- background
+- foreground
+operation_modes:
+- apply
+inputs:
+  save_path:
+    type: string
+    default: ''
+    description: 可选。为空时保存当前已打开的沙盒场景；若填写，只允许任务沙盒内路径。
+preconditions:
+- 项目配置通过统一 config/{project}_config.json 接口加载。
+- 后台模式由 CGI Worker 打开或复用对应 DCC 场景。
+side_effects:
+  inspect: 只读取场景或标准数据，不改变资产。
+  apply: 按 API 实现对当前任务沙盒中的场景或数据执行操作。
+idempotent: false
+outputs:
+- name: scene
+  type: scene_file
+  label: 保存后场景
+statuses:
+- SUCCESS
+- PARTIAL
+- ERROR
+- BLOCKED
+- NEEDS_ATTENTION
+- TIMEOUT
+- CANCELLED
+errors:
+  API_OPERATION_ERROR: 操作执行失败，详见报告。
+  API_IMPLEMENTATION_MISSING: 目录存在但没有本地实现。
+recovery:
+- 读取 api_help 获取参数、前置条件和输出。
+- 失败时检查任务报告中的错误与恢复建议。
+help:
+  summary: 保存当前任务沙盒中的 Maya 场景。后台 pipeline 默认保存当前已打开的沙盒副本，禁止写入沙盒外路径。
+  usage: execute_api(maya.asset.save_scene, params={...})
+  scenario: 保存当前任务沙盒中的 Maya 场景。后台 pipeline 默认保存当前已打开的沙盒副本，禁止写入沙盒外路径。
+  safety: read API 只读；write/destructive API 仅写入任务沙盒。
+tests:
+  contract: api.registry loads this manifest and api.runner validates its receipt.
+  smoke: 代表性 workflow 统一验收。
+handler: api.operations.save_scene.adapter:execute

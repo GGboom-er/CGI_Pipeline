@@ -159,7 +159,7 @@
             margin-bottom: 6px;
         }
 
-        .skill-item {
+        .api-item {
             padding: 6px 8px;
             border-radius: 4px;
             font-size: 11px;
@@ -171,15 +171,15 @@
             transition: background 0.12s;
         }
 
-        .skill-item:hover {
+        .api-item:hover {
             background: rgba(255, 255, 255, 0.06);
         }
 
-        .skill-item .icon {
+        .api-item .icon {
             font-size: 12px;
         }
 
-        .skill-item .dcc {
+        .api-item .dcc {
             margin-left: auto;
             font-size: 8px;
             padding: 1px 5px;
@@ -335,32 +335,32 @@
         <div class="sidebar" id="sidebar">
             <div class="sidebar-section">
                 <div class="title">📋 资产定位</div>
-                <div class="skill-item" data-type="pipeline/resolve_stage">
+                <div class="api-item" data-type="pipeline/resolve_stage">
                     <span class="icon">📥</span><span>资产输入</span>
                     <span class="dcc dcc-none">CORE</span>
                 </div>
-                <div class="skill-item" data-type="pipeline/resolve_asset">
+                <div class="api-item" data-type="pipeline/resolve_asset">
                     <span class="icon">📂</span><span>资产定位</span>
                     <span class="dcc dcc-none">CORE</span>
                 </div>
             </div>
-            <div class="sidebar-section" id="skill-section">
-                <div class="title">🔧 已注册技能</div>
+            <div class="sidebar-section" id="api-section">
+                <div class="title">🔧 已注册API</div>
             </div>
             <div class="sidebar-section">
                 <div class="title">🧪 动态执行</div>
-                <div class="skill-item" data-type="pipeline/exec_code">
+                <div class="api-item" data-type="pipeline/exec_code">
                     <span class="icon">⚡</span><span>代码执行</span>
                     <span class="dcc dcc-maya">MAYA</span>
                 </div>
             </div>
             <div class="sidebar-section">
                 <div class="title">📤 输出</div>
-                <div class="skill-item" data-type="pipeline/save_result">
+                <div class="api-item" data-type="pipeline/save_result">
                     <span class="icon">💾</span><span>保存结果</span>
                     <span class="dcc dcc-none">CORE</span>
                 </div>
-                <div class="skill-item" data-type="pipeline/publish">
+                <div class="api-item" data-type="pipeline/publish">
                     <span class="icon">🚀</span><span>发布</span>
                     <span class="dcc dcc-none">CORE</span>
                 </div>
@@ -401,7 +401,7 @@
             failed: '#f85149',
         };
 
-        const HIDDEN_SKILLS = ['ping', 'save_scene', 'exec_code'];
+        const HIDDEN_APIS = ['system.runtime.ping', 'maya.asset.save_scene', 'maya.system.exec_code'];
 
         // ═══════════════════════════════════════════════════════
         // ── 级联下拉辅助：扫描指定路径的子文件夹 ──
@@ -894,7 +894,7 @@
         LiteGraph.registerNodeType('pipeline/save_result', SaveResultNode);
 
         // ─────────────────────────────────────────────
-        // ExecCodeNode — 动态代码执行（Ⅳ 级技能）
+        // ExecCodeNode — 动态代码执行（Ⅳ 级API）
         // ─────────────────────────────────────────────
         function ExecCodeNode() {
             this.addInput('source_path', 'string');
@@ -903,7 +903,7 @@
             this._code = '# 在此编写 Python 代码\n# 将结果赋值给 result 变量\nimport maya.cmds as cmds\nresult = {"nodes": cmds.ls(type="transform")}';
             this._desc = '';
             this.addWidget('text', 'description', '', (v) => { this._desc = v; });
-            this.properties = { skill_id: 'exec_code', status: 'idle' };
+            this.properties = { api_id: 'exec_code', status: 'idle' };
             this.size = [320, 180];
             this.color = '#2a3a2a';
             this.bgcolor = '#1a2a1a';
@@ -968,7 +968,7 @@
 
             const hint = document.createElement('div');
             hint.style.cssText = 'color:#7b8794;font-size:10px;';
-            hint.textContent = '提示: 将结果赋值给 result 变量（dict），该变量将作为技能返回值。';
+            hint.textContent = '提示: 将结果赋值给 result 变量（dict），该变量将作为API返回值。';
 
             const btnRow = document.createElement('div');
             btnRow.style.cssText = 'display:flex;gap:8px;justify-content:flex-end;';
@@ -1028,22 +1028,22 @@
         };
         LiteGraph.registerNodeType('pipeline/publish', PublishNode);
 
-        // ── 动态 Skill 节点工厂 ──
-        function createSkillNodeClass(skill) {
+        // ── 动态 API 节点工厂 ──
+        function createApiNodeClass(api) {
             const dccColors = {
                 maya: { color: '#234', bgcolor: '#1a2530' },
                 blender: { color: '#342', bgcolor: '#2a2518' },
                 ue: { color: '#324', bgcolor: '#251a2a' },
             };
-            const colors = dccColors[skill.dcc] || dccColors.maya;
+            const colors = dccColors[api.dcc] || dccColors.maya;
 
-            function SkillNode() {
+            function ApiNode() {
                 this.addInput('source_path', 'string');
                 this.addOutput('result_path', 'string');
                 this.addOutput('status', 'string');
                 let wc = 0;
-                if (skill.parameters_schema) {
-                    for (const [key, schema] of Object.entries(skill.parameters_schema)) {
+                if (api.inputs) {
+                    for (const [key, schema] of Object.entries(api.inputs)) {
                         if (schema.type === 'boolean') {
                             this.addWidget('toggle', key, schema.default || false);
                         } else if (schema.enum) {
@@ -1054,17 +1054,17 @@
                         wc++;
                     }
                 }
-                this.properties = { skill_id: skill.skill_id, dcc: skill.dcc, status: 'idle' };
+                this.properties = { api_id: api.api_id, dcc: api.dcc, status: 'idle' };
                 this.size = [300, 120 + wc * 32];
                 this.color = colors.color;
                 this.bgcolor = colors.bgcolor;
             }
-            SkillNode.title = skill.name;
-            SkillNode.desc = skill.description;
-            SkillNode.prototype.onExecute = function () {
+            ApiNode.title = api.api_id;
+            ApiNode.desc = api.help?.summary || '';
+            ApiNode.prototype.onExecute = function () {
                 this.boxcolor = STATUS_COLORS[this.properties.status] || STATUS_COLORS.idle;
             };
-            return SkillNode;
+            return ApiNode;
         }
 
         // ═══════════════════════════════════════════════════════
@@ -1233,35 +1233,35 @@
         graph.start();
 
         // ═══════════════════════════════════════════════════════
-        // 从后端加载技能
+        // 从后端加载API
         // ═══════════════════════════════════════════════════════
 
-        let loadedSkills = [];
+        let loadedApis = [];
 
-        async function loadSkills() {
+        async function loadApis() {
             try {
-                const r = await fetch('/api/skills');
+                const r = await fetch('/api/apis');
                 const data = await r.json();
-                const allSkills = data.skills || [];
-                loadedSkills = allSkills.filter(s => !HIDDEN_SKILLS.includes(s.skill_id));
+                const allApis = data.apis || [];
+                loadedApis = allApis.filter(s => !HIDDEN_APIS.includes(s.api_id));
 
-                const section = document.getElementById('skill-section');
-                for (const skill of loadedSkills) {
-                    const nodeType = `skill/${skill.skill_id}`;
-                    const NodeClass = createSkillNodeClass(skill);
+                const section = document.getElementById('api-section');
+                for (const api of loadedApis) {
+                    const nodeType = `api/${api.api_id}`;
+                    const NodeClass = createApiNodeClass(api);
                     LiteGraph.registerNodeType(nodeType, NodeClass);
 
-                    const dcc = skill.dcc || 'maya';
+                    const dcc = api.dcc || 'maya';
                     const el = document.createElement('div');
-                    el.className = 'skill-item';
+                    el.className = 'api-item';
                     el.dataset.type = nodeType;
-                    el.innerHTML = `<span class="icon">⚙️</span><span>${skill.name}</span><span class="dcc dcc-${dcc}">${dcc.toUpperCase()}</span>`;
+                    el.innerHTML = `<span class="icon">⚙️</span><span>${api.api_id}</span><span class="dcc dcc-${dcc}">${dcc.toUpperCase()}</span>`;
                     section.appendChild(el);
                 }
                 setupDragDrop();
-                log('info', `已加载 ${loadedSkills.length} 个技能节点`);
+                log('info', `已加载 ${loadedApis.length} 个 API 节点`);
             } catch (e) {
-                log('error', `技能加载失败: ${e.message}`);
+                log('error', `API 加载失败: ${e.message}`);
             }
         }
 
@@ -1270,7 +1270,7 @@
         // ═══════════════════════════════════════════════════════
 
         function setupDragDrop() {
-            document.querySelectorAll('.skill-item').forEach(item => {
+            document.querySelectorAll('.api-item').forEach(item => {
                 item.draggable = true;
                 item.addEventListener('dragstart', e => {
                     e.dataTransfer.setData('node-type', item.dataset.type);
@@ -1388,7 +1388,7 @@
             const sorted = topologicalSort(graph);
             log('info', `▶ 提交执行图 (${sorted.length} 节点): ${sorted.map(n => n.title).join(' → ')}`);
 
-            // ── 阶段1：解析节点图 → 提取技能链 ──
+            // ── 阶段1：解析节点图 → 提取API链 ──
             // 找到 ResolveStageNode（资产输入）获取全局参数
             const resolveNode = sorted.find(n => n.type === 'pipeline/resolve_stage');
             const upstream = resolveNode ? getUpstreamParams(resolveNode) : {};
@@ -1396,42 +1396,42 @@
             const project = upstream.project || 'default';
             const assetName = upstream.asset_name || 'untitled';
 
-            // 收集技能链（按拓扑序，跳过 pipeline 辅助节点）
-            const skillChain = [];
-            const skillNodeMap = [];  // 技能链 index → node 的映射
+            // 收集API链（按拓扑序，跳过 pipeline 辅助节点）
+            const apiChain = [];
+            const apiNodeMap = [];  // API 链 index → node 的映射
 
             for (const node of sorted) {
                 node.properties.status = 'running';
                 node.boxcolor = STATUS_COLORS.running;
 
-                if (node.properties.skill_id && node.type.startsWith('skill/')) {
-                    // 注册技能节点
+                if (node.properties.api_id && node.type.startsWith('api/')) {
+                    // 注册 API 节点
                     const params = {};
                     if (node.widgets) node.widgets.forEach(w => {
                         if (w.name && w.value !== undefined) params[w.name] = w.value;
                     });
-                    skillChain.push({ skill_id: node.properties.skill_id, parameters: params });
-                    skillNodeMap.push(node);
-                    log('info', `  📦 ${node.title} → 加入技能链`);
+                    apiChain.push({ api_id: node.properties.api_id, parameters: params });
+                    apiNodeMap.push(node);
+                    log('info', `  📦 ${node.title} → 加入 API 链`);
 
                 } else if (node.type === 'pipeline/exec_code') {
                     // 动态代码执行节点
-                    skillChain.push({
-                        skill_id: 'exec_code',
+                    apiChain.push({
+                        api_id: 'exec_code',
                         parameters: { code: node._code, description: node._desc || '(节点执行)' },
                     });
-                    skillNodeMap.push(node);
-                    log('info', `  ⚡ ${node.title} → 加入技能链`);
+                    apiNodeMap.push(node);
+                    log('info', `  ⚡ ${node.title} → 加入API链`);
 
                 } else if (node.type === 'pipeline/save_result') {
                     // 保存结果节点
                     const savePath = node.getOutputData(0);
                     if (savePath) {
-                        skillChain.push({
-                            skill_id: 'save_scene',
+                        apiChain.push({
+                            api_id: 'save_scene',
                             parameters: { save_path: savePath },
                         });
-                        skillNodeMap.push(node);
+                        apiNodeMap.push(node);
                         log('info', `  💾 ${node.title} → 保存至: ${savePath}`);
                     } else {
                         node.properties.status = 'failed';
@@ -1448,14 +1448,14 @@
                 graphCanvas.setDirty(true, true);
             }
 
-            if (skillChain.length === 0) {
-                log('warning', '图中没有可执行的技能节点');
+            if (apiChain.length === 0) {
+                log('warning', '图中没有可执行的 API 节点');
                 log('info', '▶ 图执行完成');
                 return;
             }
 
             // ── 阶段2：一次性提交整张图到后端 ──
-            log('info', `🚀 提交技能链: ${skillChain.length} 个技能 → /api/execute_graph`);
+            log('info', `🚀 提交 API 链: ${apiChain.length} 个 API → /api/execute_graph`);
 
             let chainTaskId = null;
             try {
@@ -1466,13 +1466,13 @@
                         source_path: sourcePath,
                         project: project,
                         asset_name: assetName,
-                        skill_chain: skillChain,
+                        api_chain: apiChain,
                     }),
                 });
 
                 if (!resp.ok) {
                     log('error', `✗ 图提交失败: HTTP ${resp.status}`);
-                    skillNodeMap.forEach(n => { n.properties.status = 'failed'; n.boxcolor = STATUS_COLORS.failed; });
+                    apiNodeMap.forEach(n => { n.properties.status = 'failed'; n.boxcolor = STATUS_COLORS.failed; });
                     graphCanvas.setDirty(true, true);
                     return;
                 }
@@ -1482,16 +1482,16 @@
 
                 if (!data.dispatched) {
                     log('warning', `⚠ 降级模式 (Redis/Celery 未就绪)`);
-                    skillNodeMap.forEach(n => { n.properties.status = 'failed'; n.boxcolor = STATUS_COLORS.failed; });
+                    apiNodeMap.forEach(n => { n.properties.status = 'failed'; n.boxcolor = STATUS_COLORS.failed; });
                     graphCanvas.setDirty(true, true);
                     return;
                 }
 
-                log('info', `⏳ 技能链已派发 (${chainTaskId})，等待 Maya 执行...`);
+                log('info', `⏳ API链已派发 (${chainTaskId})，等待 Maya 执行...`);
 
             } catch (err) {
                 log('error', `✗ 网络错误: ${err.message}`);
-                skillNodeMap.forEach(n => { n.properties.status = 'failed'; n.boxcolor = STATUS_COLORS.failed; });
+                apiNodeMap.forEach(n => { n.properties.status = 'failed'; n.boxcolor = STATUS_COLORS.failed; });
                 graphCanvas.setDirty(true, true);
                 return;
             }
@@ -1503,24 +1503,24 @@
             const chainResults = result.chain_results || [];
             for (let i = 0; i < chainResults.length; i++) {
                 const stepResult = chainResults[i];
-                const node = skillNodeMap[i];
+                const node = apiNodeMap[i];
                 if (!node) continue;
 
                 if (stepResult.status === 'SUCCESS') {
                     node.properties.status = 'success';
                     node.boxcolor = STATUS_COLORS.success;
-                    log('success', `✓ [${i + 1}/${skillChain.length}] ${node.title} → 完成`);
+                    log('success', `✓ [${i + 1}/${apiChain.length}] ${node.title} → 完成`);
                 } else {
                     node.properties.status = 'failed';
                     node.boxcolor = STATUS_COLORS.failed;
-                    log('error', `✗ [${i + 1}/${skillChain.length}] ${node.title} → ${stepResult.status}: ${(stepResult.detail || '').substring(0, 120)}`);
+                    log('error', `✗ [${i + 1}/${apiChain.length}] ${node.title} → ${stepResult.status}: ${(stepResult.detail || '').substring(0, 120)}`);
                 }
             }
 
             // 未执行到的节点标记为 idle
-            for (let i = chainResults.length; i < skillNodeMap.length; i++) {
-                skillNodeMap[i].properties.status = 'idle';
-                skillNodeMap[i].boxcolor = STATUS_COLORS.idle;
+            for (let i = chainResults.length; i < apiNodeMap.length; i++) {
+                apiNodeMap[i].properties.status = 'idle';
+                apiNodeMap[i].boxcolor = STATUS_COLORS.idle;
             }
 
             graphCanvas.setDirty(true, true);
@@ -1555,7 +1555,7 @@
 
             const allSuccess = chainResults.every(r => r.status === 'SUCCESS');
             log(allSuccess ? 'success' : 'warning',
-                `▶ 图执行完成 — ${chainResults.filter(r => r.status === 'SUCCESS').length}/${skillChain.length} 成功`);
+                `▶ 图执行完成 — ${chainResults.filter(r => r.status === 'SUCCESS').length}/${apiChain.length} 成功`);
         }
 
 
@@ -1572,14 +1572,14 @@
             resolve.pos = [60, 120];
             graph.add(resolve);
 
-            // 优先使用 ping，最安全的只读技能
-            const checkSkill = loadedSkills.find(s => s.skill_id === 'ping');
-            const skillType = checkSkill ? `skill/${checkSkill.skill_id}` : (loadedSkills.length > 0 ? `skill/${loadedSkills[0].skill_id}` : null);
-            if (skillType) {
-                const skill = LiteGraph.createNode(skillType);
-                skill.pos = [500, 100];
-                graph.add(skill);
-                resolve.connect(0, skill, 0);
+            // 优先使用 ping，最安全的只读API
+            const checkApi = loadedApis.find(s => s.api_id === 'system.runtime.ping');
+            const apiType = checkApi ? `api/${checkApi.api_id}` : (loadedApis.length > 0 ? `api/${loadedApis[0].api_id}` : null);
+            if (apiType) {
+                const apiNode = LiteGraph.createNode(apiType);
+                apiNode.pos = [500, 100];
+                graph.add(apiNode);
+                resolve.connect(0, apiNode, 0);
 
                 // 保存结果节点 — 连接资产输入的 source_path
                 const save = LiteGraph.createNode('pipeline/save_result');
@@ -1638,18 +1638,18 @@
                 try {
                     const data = JSON.parse(e.data);
                     const lv = data.status === 'SUCCESS' ? 'success' : data.status === 'FAILED' ? 'error' : 'info';
-                    log(lv, `[SSE] ${data.skill_id} → ${data.status} (${data.task_id})`);
+                    log(lv, `[SSE] ${data.api_id} → ${data.status} (${data.task_id})`);
                 } catch (err) { }
             };
         }
 
         // ── Init ──
-        loadSkills();
+        loadApis();
         loadStatus();
         startSSE();
         setInterval(loadStatus, 10000);
         log('info', 'CGI Pipeline Node Graph 已初始化');
-        log('info', '从左侧拖拽技能到画布，或点击 [📦 加载示例]');
+        log('info', '从左侧拖拽API到画布，或点击 [📦 加载示例]');
     </script>
 </body>
 

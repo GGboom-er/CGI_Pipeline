@@ -126,7 +126,7 @@
             margin-bottom: 8px;
         }
 
-        .skill-item {
+        .api-item {
             padding: 10px;
             margin: 0 10px 8px;
             border: 1px solid #ecf0f1;
@@ -137,25 +137,25 @@
             border-left: 4px solid var(--c-scene);
         }
 
-        .skill-item:hover {
+        .api-item:hover {
             background: #f4f6f7;
             border-color: #d5dbdb;
         }
 
-        .skill-item[data-dcc="blender"] {
+        .api-item[data-dcc="blender"] {
             border-left-color: var(--c-blend);
         }
 
-        .skill-item[data-dcc="pipeline"] {
+        .api-item[data-dcc="pipeline"] {
             border-left-color: var(--c-json);
         }
 
-        .skill-item .sname {
+        .api-item .sname {
             font-weight: 600;
             color: #2c3e50;
         }
 
-        .skill-item .sdesc {
+        .api-item .sdesc {
             font-size: 11px;
             color: #7f8c8d;
             margin-top: 4px;
@@ -164,7 +164,7 @@
             text-overflow: ellipsis;
         }
 
-        #skill-list {
+        #api-list {
             flex: 1;
             overflow-y: auto;
         }
@@ -1169,11 +1169,11 @@
             border: 1px solid #bdc3c7; font-size: 12px;
         }
 
-        /* ── 技能列表 tooltip ── */
-        .skill-item {
+        /* ── API列表 tooltip ── */
+        .api-item {
             position: relative;
         }
-        .skill-item .skill-tooltip {
+        .api-item .api-tooltip {
             display: none;
             position: absolute;
             left: 100%;
@@ -1190,11 +1190,11 @@
             box-shadow: 0 4px 12px rgba(0,0,0,0.3);
             pointer-events: none;
         }
-        .skill-item:hover .skill-tooltip {
+        .api-item:hover .api-tooltip {
             display: block;
         }
-        .skill-tooltip .tt-title { font-weight: 600; margin-bottom: 4px; color: #3498db; }
-        .skill-tooltip .tt-io { font-size: 11px; color: #95a5a6; margin-top: 4px; }
+        .api-tooltip .tt-title { font-weight: 600; margin-bottom: 4px; color: #3498db; }
+        .api-tooltip .tt-io { font-size: 11px; color: #95a5a6; margin-top: 4px; }
 
         /* ── 执行状态徽章 ── */
         #exec-badge {
@@ -1240,7 +1240,7 @@
 
     <div id="main">
         <div id="sidebar">
-            <div id="skill-list"></div>
+            <div id="api-list"></div>
             <div id="type-legend">
                 <div style="font-weight:600;margin-bottom:2px">端口类型</div>
                 <span class="leg-item"><span class="leg-dot" style="background:var(--c-scene)"></span>Maya (.ma)</span>
@@ -1260,7 +1260,7 @@
                     <div class="guide-title">开始构建你的工作流</div>
                     <div class="guide-text">
                         ① 从左侧拖拽 <kbd>📥 资产解析</kbd> 到画布<br>
-                        ② 拖拽技能节点并连线<br>
+                        ② 拖拽 API 节点并连线<br>
                         ③ 配置参数后点击 <kbd>▶ 执行</kbd><br><br>
                         或选择顶栏的 <kbd>📌 预设工作流</kbd> 快速开始
                     </div>
@@ -1271,7 +1271,7 @@
                     <div id="progress-fill"></div>
                 </div>
                 <div id="log-panel">
-                    <div class="log-line"><span class="log-time">就绪</span><span class="log-info">从左侧拖拽技能到画布，连线后点击 ▶
+                    <div class="log-line"><span class="log-time">就绪</span><span class="log-info">从左侧拖拽API到画布，连线后点击 ▶
                             执行</span></div>
                 </div>
             </div>
@@ -1300,7 +1300,7 @@
                 </div>
                 <div id="task-cards"></div>
                 <div class="empty-state" id="tasks-empty">
-                    <div class="icon">📭</div>暂无任务记录<br><small>执行技能后，任务将在此显示</small>
+                    <div class="icon">📭</div>暂无任务记录<br><small>执行API后，任务将在此显示</small>
                 </div>
             </div>
         </div>
@@ -1360,7 +1360,28 @@
             any_file: '任意文件路径，连接后自动识别类型',
         };
 
-        let editor, skills = [];
+        let editor, apis = [];
+
+        function normalizeApi(spec) {
+            const inputs = spec.inputs || {};
+            const parameters = Object.fromEntries(Object.entries(inputs).map(([name, schema]) => [name, schema || {}]));
+            const typeOf = (name, schema) => {
+                const raw = String(schema?.type || '').toLowerCase();
+                if (raw.includes('path') || /_path$|_file$|path/i.test(name)) return 'any_file';
+                if (raw === 'number' || raw === 'integer' || raw === 'float' || raw === 'boolean') return raw;
+                return 'any_file';
+            };
+            const ioInputs = Object.entries(inputs).map(([name, schema]) => ({ name, label: name, type: typeOf(name, schema) }));
+            const ioOutputs = (spec.outputs || []).map(out => ({ name: out.name || 'output', label: out.label || out.name || 'output', type: out.type === 'json_file' ? 'json_file' : 'any_file' }));
+            return {
+                ...spec,
+                name: spec.name || spec.api_id,
+                description: spec.help?.summary || spec.help?.scenario || '',
+                category: spec.domain || 'process',
+                parameters,
+                io: { inputs: ioInputs, outputs: ioOutputs },
+            };
+        }
 
         function log(l, m) { const p = document.getElementById('log-panel'); const d = document.createElement('div'); d.className = 'log-line'; d.innerHTML = `<span class="log-time">${new Date().toLocaleTimeString()}</span><span class="log-${l}">${m.replace(/\n/g, '<br>')}</span>`; p.appendChild(d); p.scrollTop = p.scrollHeight }
 
@@ -1425,7 +1446,7 @@
                     fetch('/api/preview_node_action', {
                         method: 'POST', headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
-                            skill_id: inNode.name,
+                            api_id: inNode.name,
                             source_path: outSrcPath,
                             project: outNode.data.project || '',
                             category: outNode.data.category || '',
@@ -1564,15 +1585,15 @@
             });
         }
 
-        // ════════════ 技能加载 ════════════
-        async function loadSkills() {
+        // ════════════ API 加载 ════════════
+        async function loadApis() {
             try {
-                const r = await fetch('/api/skills');
+                const r = await fetch('/api/apis');
                 const d = await r.json();
-                skills = d.skills || d || [];
-                renderSkillList();
-                log('success', `已加载 ${skills.length} 个技能`);
-            } catch (e) { log('error', '技能加载失败: ' + e.message) }
+                apis = (d.apis || []).map(normalizeApi);
+                renderApiList();
+                log('success', `已加载 ${apis.length} 个 API`);
+            } catch (e) { log('error', 'API 加载失败: ' + e.message) }
         }
 
         const CAT_LABELS = {
@@ -1581,11 +1602,11 @@
             sync: '🔗 同步', script: '🐍 脚本', system: '🔧 系统'
         };
         const CAT_ORDER = ['input', 'output', 'process', 'convert', 'inspect', 'material', 'sync', 'script', 'system'];
-        const HIDE_SKILLS = ['ping'];
+        const HIDE_APIS = ['system.runtime.ping'];
 
-        function renderSkillList() {
-            const box = document.getElementById('skill-list'); box.innerHTML = '';
-            const visible = skills.filter(s => !HIDE_SKILLS.includes(s.skill_id));
+        function renderApiList() {
+            const box = document.getElementById('api-list'); box.innerHTML = '';
+            const visible = apis.filter(s => !HIDE_APIS.includes(s.api_id));
             const groups = {};
             visible.forEach(s => {
                 const cat = s.category || 'process';
@@ -1601,33 +1622,32 @@
                 const wrap = document.createElement('div');
                 wrap.style.padding = '0 8px 4px';
                 groups[cat].forEach(s => {
-                    const d = document.createElement('div'); d.className = 'skill-item'; d.draggable = true;
-                    d.dataset.type = 'skill'; d.dataset.skillId = s.skill_id; d.dataset.dcc = s.dcc || 'maya';
+                    const d = document.createElement('div'); d.className = 'api-item'; d.draggable = true;
+                    d.dataset.type = 'api'; d.dataset.apiId = s.api_id; d.dataset.dcc = s.dcc || 'maya';
                     const ioSummary = s.io ? `输入: ${(s.io.inputs||[]).map(p=>p.label||p.type).join(', ')||'无'} → 输出: ${(s.io.outputs||[]).map(p=>p.label||p.type).join(', ')||'无'}` : '';
                     d.innerHTML = `<div class="sname">${s.name}</div><div class="sdesc">${(s.description || '').slice(0, 40)}…</div>
-                        <div class="skill-tooltip">
-                            <div class="tt-title">${s.name} <span style="color:#7f8c8d;font-weight:normal">[${s.dcc||'maya'}]</span></div>
+                        <div class="api-tooltip">
+                            <div class="tt-title">${s.api_id} <span style="color:#7f8c8d;font-weight:normal">[${s.dcc||'maya'}]</span></div>
                             ${s.description || '无描述'}
                             ${ioSummary ? `<div class="tt-io">${ioSummary}</div>` : ''}
                         </div>`;
-                    d.ondragstart = dragSkill; wrap.appendChild(d);
+                    d.ondragstart = dragApi; wrap.appendChild(d);
                 });
                 box.appendChild(wrap);
             });
         }
 
         // ════════════ 拖拽 ════════════
-        function dragSkill(ev) { ev.dataTransfer.setData('application/json', JSON.stringify({ type: ev.currentTarget.dataset.type, skillId: ev.currentTarget.dataset.skillId || '' })) }
+        function dragApi(ev) { ev.dataTransfer.setData('application/json', JSON.stringify({ type: ev.currentTarget.dataset.type, apiId: ev.currentTarget.dataset.apiId || '' })) }
 
         function onDrop(ev) {
             ev.preventDefault();
             const raw = ev.dataTransfer.getData('application/json'); if (!raw) return;
-            const { type, skillId } = JSON.parse(raw);
+            const { type, apiId } = JSON.parse(raw);
             const rect = document.getElementById('drawflow').getBoundingClientRect();
             const x = ev.clientX - rect.left, y = ev.clientY - rect.top;
-            // 统一路由：所有节点都通过 addSkillNode 创建
-            const sid = skillId || type;
-            addSkillNode(sid, x, y);
+            const apiIdValue = apiId || type;
+            addApiNode(apiIdValue, x, y);
         }
 
         // ════════════ 节点构建 ════════════
@@ -1758,16 +1778,16 @@
         }
 
         // ════════════ 统一节点创建 ════════════
-        const SKILL_ICONS = { input: '📥', output: '📤', process: '⚙', convert: '🔄', inspect: '📊', material: '🎨', sync: '🔗', script: '🐍', system: '🔧' };
+        const API_ICONS = { input: '📥', output: '📤', process: '⚙', convert: '🔄', inspect: '📊', material: '🎨', sync: '🔗', script: '🐍', system: '🔧' };
 
-        async function addSkillNode(skillId, x, y) {
-            const sk = skills.find(s => s.skill_id === skillId);
-            if (!sk) { log('error', '技能未找到: ' + skillId); return }
+        async function addApiNode(apiId, x, y) {
+            const sk = apis.find(s => s.api_id === apiId);
+            if (!sk) { log('error', 'API 未找到: ' + apiId); return }
 
             // ── 特殊节点：资产解析 ──
-            if (skillId === 'resolve_asset') return addResolveAssetNode(sk, x, y);
+            if (apiId === 'pipeline.asset.resolve') return addResolveAssetNode(sk, x, y);
             // ── 特殊节点：自定义路径 ──
-            if (skillId === 'file_path') return addFilePathNode(sk, x, y);
+            if (apiId === 'pipeline.io.file_path') return addFilePathNode(sk, x, y);
 
             const io = sk.io || { inputs: [{ name: 'scene', type: 'scene_file' }], outputs: [{ name: 'scene', type: 'scene_file' }] };
             const numIn = (io.inputs || []).length;
@@ -1795,12 +1815,12 @@
             }
             if (!fields) fields = '<span style="font-size:11px;color:#999;font-style:italic;">无参数</span>';
 
-            const icon = SKILL_ICONS[sk.category] || '⚙';
+            const icon = API_ICONS[sk.category] || '⚙';
             const html = `
             <div class="title-box cat-${sk.category || 'process'}">${icon} ${sk.name}<span class="dcc-tag">${sk.dcc}</span></div>
             ${portRows(io)}
             <div class="box node-body">${fields}</div>`;
-            editor.addNode(skillId, numIn, numOut, x, y, skillId, data, html);
+            editor.addNode(apiId, numIn, numOut, x, y, apiId, data, html);
             log('info', '创建: ' + sk.name);
         }
 
@@ -1951,21 +1971,21 @@
                     // 输出节点：附加保存路径
                 } else if (name === 'save_result') {
                     if (chain.length > 0 && d.save_path) chain[chain.length - 1].parameters.save_path = d.save_path;
-                    // 技能节点：加入执行链
+                    // API节点：加入执行链
                 } else {
                     const params = {};
-                    const sk = skills.find(s => s.skill_id === name);
+            const sk = apis.find(s => s.api_id === name);
                     if (sk) { for (const k of Object.keys(sk.parameters || {})) { if (d[k] !== undefined && d[k] !== '') params[k] = d[k] } }
                     if (name === 'exec_code') { params.code = d.code || ''; params.description = d.description || '' }
-                    chain.push({ skill_id: name, parameters: params, _dfId: id });
+                    chain.push({ api_id: name, parameters: params, _dfId: id });
                 }
             }
 
             if (!sourcePath) { log('error', '未设置输入路径（需要资产解析或自定义路径节点）'); showToast('warning', '未设置输入路径 — 需要添加资产解析或路径节点'); return }
-            if (!chain.length) { log('error', '无技能节点'); showToast('warning', '画布中没有技能节点'); return }
+            if (!chain.length) { log('error', '无API节点'); showToast('warning', '画布中没有API节点'); return }
 
             log('info', `源: ${sourcePath}`);
-            log('info', `链: ${chain.map(s => s.skill_id).join(' → ')}`);
+            log('info', `链: ${chain.map(s => s.api_id).join(' → ')}`);
             chain.forEach(s => setStatus(s._dfId, 'running'));
 
             try {
@@ -1973,16 +1993,16 @@
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         source_path: sourcePath, project, asset_name: assetName, category,
-                        skill_chain: chain.map(s => ({ skill_id: s.skill_id, parameters: s.parameters }))
+                        api_chain: chain.map(s => ({ api_id: s.api_id, parameters: s.parameters }))
                     })
                 });
                 const result = await resp.json();
                 if (result.error) { log('error', '提交失败: ' + result.error); showExecState(false); return }
-                log('success', `✅ 已提交任务 ${result.task_id}（共 ${result.skill_count} 步）`);
+                log('success', `✅ 已提交任务 ${result.task_id}（共 ${result.api_count} 个 API）`);
                 // Reset states
                 document.querySelectorAll('.drawflow-node').forEach(n => n.classList.remove('running', 'success', 'failed'));
                 setProgress(0);
-                totalSteps = result.skill_count || chain.length;
+                totalSteps = result.api_count || chain.length;
                 showExecState(true, result.task_id);
                 pollTask(result.task_id, chain, sourcePath, assetName);
             } catch (e) { log('error', '提交异常: ' + e.message) }
@@ -2043,7 +2063,7 @@
         // 状态码 → 人类可读中文
         function humanStatus(d) {
             const s = d.status || '';
-            const sk = d.skill_id || '';
+            const sk = d.api_id || '';
             const step = d.step ?? -1;
             const total = d.total_steps ?? 0;
             const stepLabel = total > 0 ? `(${step + 1}/${total})` : '';
@@ -2062,13 +2082,13 @@
                 case 'CHAIN_SUCCESS': return `🎉 全部完成！共 ${total} 步`;
                 case 'CHAIN_ERROR': return `❌ 链执行失败: ${(d.detail || '').slice(0, 100)}`;
                 case 'CHAIN_ABORTED': {
-                    const sk = d.skill_id || '';
+                    const sk = d.api_id || '';
                     const step = d.step >= 0 ? `步骤 ${d.step + 1}` : '';
                     const reason = (d.detail || '').slice(0, 80);
                     return `⚠️ 链中止于 ${step}${sk ? ' (' + sk + ')' : ''}${reason ? ': ' + reason : ''}`;
                 }
-                case 'CHAIN_HELD': return `⏸ 链暂停于步骤 ${(d.step ?? 0) + 1} (${d.skill_id || '?'})，需要用户决策`;
-                case 'NEEDS_ATTENTION': return `⚠️ ${d.skill_id || '?'} 需要注意 — ${(d.detail || '').slice(0, 100)}`;
+                case 'CHAIN_HELD': return `⏸ 链暂停于步骤 ${(d.step ?? 0) + 1} (${d.api_id || '?'})，需要用户决策`;
+                case 'NEEDS_ATTENTION': return `⚠️ ${d.api_id || '?'} 需要注意 — ${(d.detail || '').slice(0, 100)}`;
                 case 'CANCELLED': return `⏹ 任务已取消`;
                 default: return `[${s}] ${sk} ${d.detail || ''}`;
             }
@@ -2146,9 +2166,9 @@
                                 });
                                 setProgress(-1);
                                 // Toast 错误通知
-                                const failSkill = failedStep >= 0 && failedStep < chain.length ? chain[failedStep].skill_id : '';
+                                const failApi = failedStep >= 0 && failedStep < chain.length ? chain[failedStep].api_id : '';
                                 const reason = (entry.detail || '').slice(0, 120);
-                                showToast('error', `⛔ 链在步骤 ${failedStep + 1} 中止${failSkill ? ` (${failSkill})` : ''}${reason ? '\n' + reason : ''}`);
+                                showToast('error', `⛔ 链在步骤 ${failedStep + 1} 中止${failApi ? ` (${failApi})` : ''}${reason ? '\n' + reason : ''}`);
                             }
                             showExecState(false);
                             return;
@@ -2259,28 +2279,28 @@
             log('info', `📌 加载预设: ${name}`);
             log('info', `   ${wf.description || ''}`);
 
-            // 1. 创建输入节点（resolve_asset）
+            // 1. 创建输入节点（API: resolve_asset_files）
             const startX = 80, startY = 120, gapX = 300;
             const inputId = editor.addNode('resolve_asset', 0, 1, startX, startY,
                 'resolve_asset', { project: '', category: '', asset_name: '' },
                 'resolve_asset', 'vue');
 
-            // 2. 为每个 step 创建技能节点
+            // 2. 为每个 step 创建API节点
             const nodeIds = [];
             wf.steps.forEach((step, i) => {
-                const sk = skills.find(s => s.skill_id === step.skill_id);
-                if (!sk) { log('warning', `跳过未注册技能: ${step.skill_id}`); return; }
+                const sk = apis.find(s => s.api_id === step.api_id);
+                if (!sk) { log('warning', `跳过未登记 API: ${step.api_id}`); return; }
                 const inCount = (sk.io?.inputs || []).length || 1;
                 const outCount = (sk.io?.outputs || []).length || 1;
                 const x = startX + (i + 1) * gapX;
                 const y = startY;
                 const data = { ...step.parameters };
-                const nid = editor.addNode(step.skill_id, inCount, outCount, x, y,
-                    step.skill_id, data, step.skill_id, 'vue');
+                const nid = editor.addNode(step.api_id, inCount, outCount, x, y,
+                    step.api_id, data, step.api_id, 'vue');
                 nodeIds.push(nid);
             });
 
-            // 3. 连线：input → first skill → ... → last skill
+            // 3. 连线：input → first API → ... → last API
             if (nodeIds.length > 0) {
                 try { editor.addConnection(inputId, nodeIds[0], 'output_1', 'input_1'); } catch (_) {}
                 for (let i = 1; i < nodeIds.length; i++) {
@@ -2288,7 +2308,7 @@
                 }
             }
 
-            log('success', `✅ 预设已加载: ${nodeIds.length} 个技能节点`);
+            log('success', `✅ 预设已加载: ${nodeIds.length} 个API节点`);
             showToast('success', `已加载预设 "${name}"，请配置输入参数后执行`);
         }
 
@@ -2368,20 +2388,20 @@
                                 const si = s.status === 'SUCCESS' ? 'ok' : s.status === 'STARTED' ? 'run' : s.status === 'ERROR' ? 'fail' : 'wait';
                                 const sIcon = si === 'ok' ? '✓' : si === 'run' ? '▶' : si === 'fail' ? '✗' : (i + 1);
                                 const elapsed = s.elapsed ? `${s.elapsed}` : '';
-                                return `<div class="task-step"><span class="step-icon ${si}">${sIcon}</span><span class="step-name">${s.skill_id || s.name || '步骤 ' + (i + 1)}</span><span class="step-time">${elapsed}</span></div>`;
+                                return `<div class="task-step"><span class="step-icon ${si}">${sIcon}</span><span class="step-name">${s.api_id || s.name || '步骤 ' + (i + 1)}</span><span class="step-time">${elapsed}</span></div>`;
                             }).join('');
                         } else if (det.summary) {
-                            stepsHtml = `<div class="task-step"><span class="step-icon ok">✓</span><span class="step-name">${det.summary.action || t.skill_id}</span><span class="step-time">${det.elapsed_min || ''}</span></div>`;
+                            stepsHtml = `<div class="task-step"><span class="step-icon ok">✓</span><span class="step-name">${det.summary.action || t.api_id}</span><span class="step-time">${det.elapsed_min || ''}</span></div>`;
                         }
                     } catch (_) { }
                     if (!stepsHtml) {
-                        stepsHtml = `<div class="task-step"><span class="step-icon ${t.status === 'SUCCESS' ? 'ok' : isFail ? 'fail' : isRunning ? 'run' : 'wait'}">${t.status === 'SUCCESS' ? '✓' : isFail ? '✗' : '▶'}</span><span class="step-name">${t.skill_id || '—'}</span><span class="step-time">${time}</span></div>`;
+                        stepsHtml = `<div class="task-step"><span class="step-icon ${t.status === 'SUCCESS' ? 'ok' : isFail ? 'fail' : isRunning ? 'run' : 'wait'}">${t.status === 'SUCCESS' ? '✓' : isFail ? '✗' : '▶'}</span><span class="step-name">${t.api_id || '—'}</span><span class="step-time">${time}</span></div>`;
                     }
 
                     return `<div class="task-card ${cardCls}" onclick="this.classList.toggle('open')">
                         <div class="task-card-header">
                             <div>
-                                <div class="tc-title">${icon} ${isChain ? '链式执行' : t.skill_id} <span class="badge ${t.status}" style="margin-left:6px">${t.status}</span></div>
+                                <div class="tc-title">${icon} ${isChain ? '链式执行' : t.api_id} <span class="badge ${t.status}" style="margin-left:6px">${t.status}</span></div>
                                 <div class="tc-meta">${t.task_id} · ${time}</div>
                             </div>
                         </div>
@@ -2449,15 +2469,15 @@
         // ════════════ 启动 ════════════
         document.addEventListener('DOMContentLoaded', async () => {
             initEditor();
-            await loadSkills();
+            await loadApis();
             loadPresets();
 
-            // 动态技能列表拖拽绑定
+            // 动态API列表拖拽绑定
             new MutationObserver(() => {
-                document.querySelectorAll('.skill-item[draggable]').forEach(i => {
-                    if (!i._db) { i._db = true; i.addEventListener('dragstart', dragSkill) }
+                document.querySelectorAll('.api-item[draggable]').forEach(i => {
+                    if (!i._db) { i._db = true; i.addEventListener('dragstart', dragApi) }
                 });
-            }).observe(document.getElementById('skill-list'), { childList: true });
+            }).observe(document.getElementById('api-list'), { childList: true });
 
             // 画布引导：有节点时隐藏
             editor.on('nodeCreated', () => {

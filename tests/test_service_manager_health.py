@@ -21,12 +21,11 @@ def _check(name, condition, detail=""):
 def test_active_queues_include():
     print("\n=== Test: Celery active_queues 队列匹配 ===")
     active = {
-        "cgi_maya@host": [{"name": "dcc_queue"}, {"name": "celery"}],
-        "cgi_blender@host": [{"name": "blender_queue"}],
+        "cgi@host": [{"name": "cgi_queue"}, {"name": "celery"}],
     }
-    ok, nodes = sm._active_queues_include(active, "dcc_queue")
-    _check("找到 dcc_queue", ok)
-    _check("返回消费节点", nodes == ["cgi_maya@host"], nodes)
+    ok, nodes = sm._active_queues_include(active, "cgi_queue")
+    _check("找到 cgi_queue", ok)
+    _check("返回消费节点", nodes == ["cgi@host"], nodes)
 
     ok, nodes = sm._active_queues_include(active, "missing_queue")
     _check("缺失队列返回 false", not ok and nodes == [])
@@ -44,7 +43,7 @@ def test_dead_pidfile_cleanup():
     with tempfile.TemporaryDirectory() as tmp:
         try:
             sm.RUNTIME_DIR = Path(tmp)
-            pidfile = sm.RUNTIME_DIR / "worker_maya.pid"
+            pidfile = sm.RUNTIME_DIR / "worker_cgi.pid"
             pidfile.write_text("12345", encoding="utf-8")
             sm._is_pid_alive = lambda pid, expected_name="python": False
 
@@ -123,22 +122,22 @@ def test_service_status_alive_uses_heartbeat():
     }
     try:
         sm.is_redis_alive = lambda: True
-        sm.is_worker_alive = lambda dcc: (True, {"maya": 1, "blender": 2, "workflow": 3}[dcc])
+        sm.is_worker_alive = lambda dcc: (True, 1)
 
         def fake_health(dcc, heartbeat_timeout_sec=sm.DEFAULT_HEARTBEAT_TIMEOUT_SEC):
-            state = "HEALTHY" if dcc == "blender" else "NO_HEARTBEAT"
+            state = "NO_HEARTBEAT"
             return {
                 "state": state,
                 "pid_alive": True,
-                "pid": {"maya": 1, "blender": 2, "workflow": 3}[dcc],
-                "celery_alive": state == "HEALTHY",
+                "pid": 1,
+                "celery_alive": False,
             }
 
         sm.get_worker_health = fake_health
 
         status = sm.get_service_status(include_heartbeat=True)
-        _check("Maya PID 存活但无心跳时不算 alive", status["worker_maya"]["alive"] is False, status)
-        _check("Blender 心跳健康时 alive", status["worker_blender"]["alive"] is True, status)
+        _check("唯一 CGI Worker 无心跳时不算 alive", status["worker_cgi"]["alive"] is False, status)
+        _check("兼容别名与 canonical 状态一致", status["worker_maya"]["alive"] is False and status["worker_blender"]["alive"] is False, status)
     finally:
         sm.is_redis_alive = originals["is_redis_alive"]
         sm.is_worker_alive = originals["is_worker_alive"]
@@ -157,7 +156,7 @@ def test_start_lock_acquire_release():
             _check("释放后可再抢", sm._acquire_start_lock("maya", stale_after_sec=60.0))
 
             # 残留锁：把 mtime 退回，验证偷锁
-            lock = sm.RUNTIME_DIR / "worker_maya.starting.lock"
+            lock = sm.RUNTIME_DIR / "worker_cgi.starting.lock"
             old = os.stat(lock).st_mtime - 999
             os.utime(lock, (old, old))
             _check("残留锁被偷", sm._acquire_start_lock("maya", stale_after_sec=60.0))
@@ -173,16 +172,16 @@ def test_clear_stale_pidfile():
     with tempfile.TemporaryDirectory() as tmp:
         try:
             sm.RUNTIME_DIR = Path(tmp)
-            pidfile = sm.RUNTIME_DIR / "worker_maya.pid"
+            pidfile = sm.RUNTIME_DIR / "worker_cgi.pid"
 
             pidfile.write_text("12345", encoding="utf-8")
             sm._is_pid_alive = lambda pid, expected_name="python": False
-            sm._clear_stale_pidfile("maya")
+            sm._clear_stale_pidfile("cgi")
             _check("死 PID 的 pidfile 被清", not pidfile.exists())
 
             pidfile.write_text("999", encoding="utf-8")
             sm._is_pid_alive = lambda pid, expected_name="python": True
-            sm._clear_stale_pidfile("maya")
+            sm._clear_stale_pidfile("cgi")
             _check("活 PID 的 pidfile 保留", pidfile.exists())
         finally:
             sm.RUNTIME_DIR = original_runtime
@@ -208,7 +207,7 @@ def test_start_worker_loser_awaits_not_popen():
             sm._await_worker_ready = lambda dcc, t=30.0: True
             _subp.Popen = lambda *a, **k: popen_calls.append(a) or None
 
-            ok = sm.start_worker("maya", wait=True, timeout_sec=1.0)
+            ok = sm.start_worker("cgi", wait=True, timeout_sec=1.0)
             _check("输家返回就绪成功", ok)
             _check("输家未 Popen 竞争", popen_calls == [], popen_calls)
             sm._release_start_lock("maya")
@@ -241,10 +240,10 @@ def test_start_worker_winner_popens_and_releases():
             sm._await_worker_ready = lambda dcc, t=30.0: True
             _subp.Popen = lambda *a, **k: popen_calls.append(a) or _FakeProc()
 
-            ok = sm.start_worker("maya", wait=True, timeout_sec=1.0)
+            ok = sm.start_worker("cgi", wait=True, timeout_sec=1.0)
             _check("赢家启动成功", ok)
             _check("恰好 Popen 一次", len(popen_calls) == 1, popen_calls)
-            lock = sm.RUNTIME_DIR / "worker_maya.starting.lock"
+            lock = sm.RUNTIME_DIR / "worker_cgi.starting.lock"
             _check("启动锁已释放", not lock.exists())
         finally:
             sm.RUNTIME_DIR = original["RUNTIME_DIR"]

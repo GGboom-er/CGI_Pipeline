@@ -10,30 +10,29 @@ from pydantic import BaseModel, Field, ConfigDict, create_model
 # 基类
 # ══════════════════════════════════════════════════
 
-class _SkillInput(BaseModel):
-    """通用技能提交参数"""
+class _ApiInput(BaseModel):
+    """通用 API 提交参数。"""
     model_config = ConfigDict(str_strip_whitespace=True)
     project: str = Field(..., description="项目代号，如 'ysj'。用于加载项目配置和路径规则", min_length=1, max_length=50)
     asset_name: str = Field(..., description="资产名称，如 'xiaotianquan'。与 category 组合定位资产目录", min_length=1, max_length=100)
     source_path: str = Field(default="", description="Maya 场景文件路径（.ma/.mb）。建议先用 maya_resolve_asset 获取。为空则操作当前已打开的场景")
     execution_mode: str = Field(default="background", description="执行模式：background(后台无头) 或 foreground(当前界面)")
-    foreground_port: Optional[int] = Field(default=None, description="Foreground port. REQUIRED when execution_mode='foreground'. Get it from maya_list_foreground_sessions first. Do NOT hardcode. Ignored in background mode. 前台端口，foreground 模式必须显式从 maya_list_foreground_sessions 获取后传入。")
+    foreground_port: Optional[int] = Field(default=None, description="Foreground port. REQUIRED when execution_mode='foreground'. Discover it with the matching Maya or Blender session-list tool. Do not hardcode. Ignored in background mode.")
 
 
 # ══════════════════════════════════════════════════
-# 动态技能参数生成
+# 动态 API 参数生成
 # ══════════════════════════════════════════════════
 
-def create_skill_model(skill_info: dict) -> type[BaseModel]:
-    """根据技能字典（注册表）动态生成 Pydantic Input Model"""
+def create_api_model(api_info: dict) -> type[BaseModel]:
+    """根据 API manifest 动态生成输入模型。"""
     fields = {}
-    skill_id = skill_info.get('skill_id', 'unknown_skill')
+    api_id = api_info.get('api_id', 'unknown_api')
     
-    # 基础字段 project/asset_name/source_path/execution_mode/foreground_port 从 _SkillInput 继承
-    # （见下方 create_model 的 __base__）；此处 fields 只收 skill 专属动态参数，单一真相源
+    # 基础字段由 _ApiInput 继承；此处只收 API manifest 声明的专属参数。
     
     # 动态参数
-    parameters = skill_info.get('parameters', {})
+    parameters = api_info.get('inputs', {})
     for p_name, p_def in parameters.items():
         p_type_str = p_def.get('type', 'string')
         if p_type_str in ('float', 'number'):
@@ -55,11 +54,11 @@ def create_skill_model(skill_info: dict) -> type[BaseModel]:
         else:
             fields[p_name] = (p_type, Field(..., description=desc))
             
-    # 类名构造: 'maya_clean_skinweights' -> 'MayaCleanSkinweightsInput'
-    model_name = ''.join(word.capitalize() for word in skill_id.split('_')) + 'Input'
+    # 类名构造: 'maya.rig.clean_skinweights' -> 'MayaRigCleanSkinweightsInput'
+    model_name = ''.join(word.capitalize() for word in api_id.split('_')) + 'Input'
     
-    # 基础字段继承自 _SkillInput（单一真相源，含 foreground_port 等框架字段）
-    return create_model(model_name, __base__=_SkillInput, **fields)
+    # 基础字段继承自 _ApiInput（单一真相源，含 foreground_port 等框架字段）
+    return create_model(model_name, __base__=_ApiInput, **fields)
 
 
 # ══════════════════════════════════════════════════
@@ -75,8 +74,26 @@ class ExecCodeInput(BaseModel):
     asset_name: str = Field(default="untitled", description="资产名称")
     source_path: str = Field(default="", description="执行前先打开此场景文件（可选）")
     execution_mode: str = Field(default="background", description="执行模式：background(后台无头) 或 foreground(当前界面)")
-    foreground_port: Optional[int] = Field(default=None, description="Foreground port. REQUIRED when execution_mode='foreground'. Get it from maya_list_foreground_sessions first. Do NOT hardcode. Ignored in background mode. 前台端口，foreground 模式必须显式从 maya_list_foreground_sessions 获取后传入。")
+    foreground_port: Optional[int] = Field(default=None, description="Foreground port. REQUIRED when execution_mode='foreground'. Discover it with maya_list_foreground_sessions or blender_list_foreground_sessions. Do not hardcode. Ignored in background mode.")
     sync: bool = Field(default=True, description="仅 foreground 有效：True（默认）直接同步等 RPyC 返回并在响应里带 receipt，省掉 query_task 轮询（亚秒级响应）。传 False 恢复异步行为。")
+
+
+class UEExecCodeInput(BaseModel):
+    """在当前 Unreal Editor 中通过已发现的 legacy 或 native 桥执行 Python。"""
+    model_config = ConfigDict(str_strip_whitespace=True)
+    code: str = Field(..., description="要在 Unreal Editor 中执行的 Python 代码。将结果赋值给 result 变量。", min_length=1)
+    description: str = Field(default="", description="代码用途描述，用于可读的执行文件名。")
+    foreground_port: int = Field(..., ge=1, le=65535, description="必须来自 ue_list_foreground_sessions；客户端按该会话的 bridge_protocol 自动选择传输。")
+    timeout_seconds: float = Field(default=120.0, gt=0, le=3600, description="等待 UE 返回最终回执的秒数。超时只停止等待，不强杀 Unreal Editor。")
+
+
+class UEActionInput(BaseModel):
+    """在当前 Unreal Editor 执行一个 UE_MCP_Bridge 原生 method（单层 WebSocket 直连）。"""
+    model_config = ConfigDict(str_strip_whitespace=True)
+    action: str = Field(..., min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_]+$", description="UE_MCP_Bridge 的原生 method 名，如 create_blueprint、add_component、connect_pins。")
+    payload: dict = Field(default_factory=dict, description="该 method 的参数，作为 params 原样传递（用插件侧的原生参数名）。")
+    foreground_port: int = Field(..., ge=1, le=65535, description="必须来自 ue_list_foreground_sessions；客户端按该会话的 bridge_protocol 自动选择传输。")
+    timeout_seconds: float = Field(default=120.0, gt=0, le=3600, description="等待 UE 返回最终回执的秒数。")
 
 
 # ══════════════════════════════════════════════════
@@ -84,10 +101,10 @@ class ExecCodeInput(BaseModel):
 # ══════════════════════════════════════════════════
 
 class ChainStep(BaseModel):
-    """链式执行的单个步骤"""
+    """API 链中的单个步骤。"""
     model_config = ConfigDict()
-    skill_id: str = Field(..., description="技能 ID，如 'clean_skinweights'")
-    parameters: dict = Field(default_factory=dict, description="技能专属参数")
+    api_id: str = Field(..., description="API ID，如 'maya.rig.clean_skinweights'")
+    parameters: dict = Field(default_factory=dict, description="API 专属参数")
 
 class ExecuteChainInput(BaseModel):
     """链式执行参数"""
@@ -95,9 +112,9 @@ class ExecuteChainInput(BaseModel):
     source_path: str = Field(..., description="要处理的 Maya 场景文件路径。链引擎会自动打开此文件，步骤中不需要再传 source_path", min_length=1)
     project: str = Field(default="default", description="项目代号")
     asset_name: str = Field(default="untitled", description="资产名称")
-    skill_chain: list[ChainStep] = Field(..., description="按顺序执行的技能步骤列表。save_scene 必须放最后一步", min_length=1)
+    api_chain: list[ChainStep] = Field(..., description="按顺序执行的 API 步骤列表。save_scene 必须放最后一步", min_length=1)
     execution_mode: str = Field(default="background", description="执行模式：background(后台无头) 或 foreground(当前界面)")
-    foreground_port: Optional[int] = Field(default=None, description="Foreground port. REQUIRED when execution_mode='foreground'. Get it from maya_list_foreground_sessions first. Do NOT hardcode. Ignored in background mode. 前台端口，foreground 模式必须显式从 maya_list_foreground_sessions 获取后传入。")
+    foreground_port: Optional[int] = Field(default=None, description="Foreground port. REQUIRED when execution_mode='foreground'. Discover it with the matching Maya or Blender session-list tool. Do not hardcode. Ignored in background mode.")
 
 
 # ══════════════════════════════════════════════════
@@ -133,21 +150,22 @@ class ResolveShotInput(BaseModel):
 # 通用 / 平台级
 # ══════════════════════════════════════════════════
 
-class ExecuteSkillInput(BaseModel):
-    """通用技能执行参数（兜底接口，优先使用具名 Tool）"""
+class ExecuteApiInput(BaseModel):
+    """Execute one deterministic API from the catalog."""
     model_config = ConfigDict(str_strip_whitespace=True)
-    skill_id: str = Field(..., description="技能 ID，用 maya_list_skills 查看可用值。有具名 Tool 的技能请直接用具名 Tool", min_length=1)
-    project: str = Field(..., description="项目代号", min_length=1)
-    asset_name: str = Field(..., description="资产名称", min_length=1)
-    source_path: str = Field(default="", description="源文件路径，建议先用 maya_resolve_asset 获取")
-    parameters: Optional[dict] = Field(default=None, description="技能专属参数，用 maya_list_skills 查看每个技能的参数 Schema")
-    execution_mode: str = Field(default="background", description="执行模式：background(后台无头) 或 foreground(当前界面)")
-    foreground_port: Optional[int] = Field(default=None, description="Foreground port. REQUIRED when execution_mode='foreground'. Get it from maya_list_foreground_sessions first. Do NOT hardcode. Ignored in background mode. 前台端口，foreground 模式必须显式从 maya_list_foreground_sessions 获取后传入。")
+    api_id: str = Field(..., description="Catalog API id, e.g. maya.rig.reference.update", min_length=1)
+    params: dict = Field(default_factory=dict, description="API-specific atomic parameters; see api_help(api_id).")
+    project: str = Field(default="default", description="项目代号")
+    asset_name: str = Field(default="untitled", description="资产名称")
+    source_path: str = Field(default="", description="已打开或待打开的 DCC 场景路径")
+    execution_mode: str = Field(default="background", description="执行模式：background 或 foreground")
+    foreground_port: Optional[int] = Field(default=None, description="前台端口；foreground 模式必须显式提供")
+    sync: bool = Field(default=True, description="前台模式是否同步等待并直接返回 receipt")
 
 class StartWorkerInput(BaseModel):
     """启动 DCC Worker 参数"""
     model_config = ConfigDict()
-    dcc: str = Field(default="maya", description="要启动或重启的 Worker 类型：maya / blender / workflow / pipeline")
+    dcc: str = Field(default="cgi", description="唯一后台 Worker：cgi（maya / blender / ue / workflow / pipeline 为兼容别名）")
 
 class CopyFilesInput(BaseModel):
     """文件拷贝参数"""
@@ -160,7 +178,7 @@ class CompareAssetInput(BaseModel):
     """资产对比（独立数据入口）
 
     任意两份 _info.json / .abc 全量几何对比。DCC 源文件必须先通过
-    采集或导出技能转换为标准数据文件。
+    采集或导出 API 转换为标准数据文件。
     """
     model_config = ConfigDict(str_strip_whitespace=True)
     project: str = Field(default="default", description="项目代号，用于创建任务沙盒")
@@ -175,7 +193,7 @@ class SyncRigAssetInput(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
     project: str = Field(default="default", description="项目代号")
     asset_name: str = Field(default="untitled", description="资产名称")
-    source_path: str = Field(..., description="target 侧 rig 场景路径（Celery 框架约定键名，本 skill 里是被修改的目标场景）")
+    source_path: str = Field(..., description="target 侧 rig 场景路径（Celery 框架约定键名，本 API 中是被修改的目标场景）")
     compare_result: Any = Field(default="", description="前置对比生成的 compare_result.json 路径，或 workflow 上游传入的 output.compare_result 字典。拼装必须依据该结果执行")
     source_abc: str = Field(default="", description="source 侧 ABC 路径，推荐。能重建 NEW mesh")
     source_info: str = Field(default="", description="source 侧 _info.json 路径（无 ABC 时的降级路径）")

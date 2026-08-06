@@ -2,7 +2,7 @@
 """运行时任务报告写入器。
 
 调度层在任务生命周期中调用本模块，把每个 step 的运行事实 upsert 到
-同一个 REPORT.md。业务 skill 只返回 receipt，不直接决定报告文件形态。
+同一个 REPORT.md。业务 API 只返回 receipt，不直接决定报告文件形态。
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ REPORT_FILENAME = "REPORT.md"
 _LOCK_TIMEOUT_SEC = 30.0
 
 
-_REPORT_SKILL_NAME_BY_ID = {
+_REPORT_API_NAME_BY_ID = {
     "copy_files": "pipeline_stage_file_to_sandbox",
     "resolve_asset_files": "pipeline_resolve_tex_rig_paths",
     "pipeline_compare_asset": "pipeline_compare_geometry_sources",
@@ -120,8 +120,9 @@ def _looks_like_path(value: Any) -> bool:
     )
 
 
-def _display_skill_name(skill_id: str) -> str:
-    return _REPORT_SKILL_NAME_BY_ID.get(skill_id, skill_id or "unknown_skill")
+def _display_api_name(api_id: str) -> str:
+    short_id = (api_id or '').rsplit('.', 1)[-1]
+    return _REPORT_API_NAME_BY_ID.get(api_id, _REPORT_API_NAME_BY_ID.get(short_id, api_id or "unknown_api"))
 
 
 def _is_hidden_key(key: str, section: str) -> bool:
@@ -310,8 +311,8 @@ def _report_safe_value(value: Any) -> Any:
     return value
 
 
-def _skill_label(skill_id: str) -> str:
-    return _display_skill_name(skill_id)
+def _api_label(api_id: str) -> str:
+    return _display_api_name(api_id)
 
 
 @contextlib.contextmanager
@@ -481,15 +482,15 @@ def _step_block_id(step_context: Dict[str, Any]) -> str:
     segment = step_context.get("segment")
     prefix = f"seg{segment}" if segment is not None and segment != "" and segment != -1 else "main"
     idx = step_context.get("step_index", 0)
-    skill_id = step_context.get("skill_id", "unknown")
-    return f"step:{prefix}:{idx}:{skill_id}"
+    api_id = step_context.get("api_id", "unknown")
+    return f"step:{prefix}:{idx}:{api_id}"
 
 
 def render_step_started(step_context: Dict[str, Any]) -> str:
     idx = int(step_context.get("step_index", 0)) + 1
     total = step_context.get("step_total") or "-"
-    skill_id = step_context.get("skill_id", "unknown")
-    label = _skill_label(skill_id)
+    api_id = step_context.get("api_id", "unknown")
+    label = _api_label(api_id)
     summary_line = f"Step {idx}/{total} | {label} | RUNNING | -"
     return _wrap_summary_body(summary_line, [])
 
@@ -503,9 +504,9 @@ def render_step_finished(step_context: Dict[str, Any], receipt: Dict[str, Any],
                          raw_detail: str = "") -> str:
     idx = int(step_context.get("step_index", 0)) + 1
     total = step_context.get("step_total") or "-"
-    skill_id = receipt.get("skill_id") or step_context.get("skill_id", "unknown")
+    api_id = receipt.get("api_id") or step_context.get("api_id", "unknown")
     status = receipt.get("status") or worker_status or "UNKNOWN"
-    label = _skill_label(skill_id)
+    label = _api_label(api_id)
     elapsed_sec = receipt.get("elapsed_sec")
     if not isinstance(elapsed_sec, (int, float)):
         elapsed_min = receipt.get("elapsed_min")
@@ -558,12 +559,17 @@ def upsert_step_finished(report_path: str | Path, step_context: Dict[str, Any],
     )
 
 
-def extract_receipt(detail: Any, skill_id: str = "", status: str = "") -> Dict[str, Any]:
+def extract_receipt(detail: Any, api_id: str = "", status: str = "") -> Dict[str, Any]:
     """把 worker wrapper detail 或直接 receipt 统一转成 receipt-like dict。"""
     def _normalize(rc: Dict[str, Any]) -> Dict[str, Any]:
         rc = dict(rc)
-        rc.setdefault("skill_id", skill_id or rc.get("skill_id") or rc.get("skill") or "unknown")
-        rc.setdefault("skill", rc.get("skill_id", "unknown"))
+        rc.setdefault("api_id", api_id or rc.get("api_id") or "unknown")
+        if not rc.get("api_version"):
+            try:
+                from api.registry import get_api
+                rc["api_version"] = str(get_api(rc["api_id"]).get("version", "1.0.0"))
+            except Exception:
+                rc["api_version"] = "1.0.0"
         rc.setdefault("status", status or rc.get("status", "UNKNOWN"))
         if not isinstance(rc.get("output"), dict):
             rc["output"] = rc.get("outputs", {}) if isinstance(rc.get("outputs"), dict) else {}
@@ -579,7 +585,7 @@ def extract_receipt(detail: Any, skill_id: str = "", status: str = "") -> Dict[s
 
     raw = detail
     if isinstance(detail, dict):
-        if any(k in detail for k in ("summary", "outputs", "output", "skill_id", "skill")):
+        if any(k in detail for k in ("summary", "outputs", "output", "api_id")):
             return _normalize(detail)
         raw = json.dumps(detail, ensure_ascii=False, default=str)
 
@@ -595,7 +601,7 @@ def extract_receipt(detail: Any, skill_id: str = "", status: str = "") -> Dict[s
             pass
 
     rc = {
-        "skill_id": skill_id or "unknown",
+        "api_id": api_id or "unknown",
         "status": status or "UNKNOWN",
         "elapsed_min": 0,
         "summary": {"action": "非标准返回"},
@@ -613,11 +619,11 @@ def extract_receipt(detail: Any, skill_id: str = "", status: str = "") -> Dict[s
     return rc
 
 
-def receipt_from_exception(skill_id: str, exc: BaseException,
+def receipt_from_exception(api_id: str, exc: BaseException,
                            status: str = "ERROR") -> Dict[str, Any]:
     return {
-        "skill": skill_id,
-        "skill_id": skill_id,
+        "api_version": "1.0.0",
+        "api_id": api_id,
         "status": status,
         "elapsed_sec": 0,
         "elapsed_min": 0,

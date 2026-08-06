@@ -4,7 +4,7 @@
 # 金字塔配置层级：
 #   Layer 0: pipeline_manifest.json → core/manifest.py
 #   Layer 1: {project}_config.json → 此文件
-#   Layer 2: skills/*/SKILL.md → core/skill_registry.py
+#   Layer 2: api/**/api.yaml + api/operations/*/api_help.md
 #   Layer 3: .env → 环境变量
 
 import json
@@ -24,6 +24,43 @@ def get_config_path(project: str) -> Path:
 _cache: dict[str, dict] = {}
 
 
+class ProjectConfigError(ValueError):
+    """Raised when a project configuration cannot satisfy the shared interface."""
+
+
+def validate_project_config(data: dict, project: str, cfg_path: Path) -> dict:
+    """Validate the small project interface consumed by every API.
+
+    Adding a project therefore means adding one config file; API implementations
+    do not need project-specific branches.
+    """
+    errors: list[str] = []
+    if not isinstance(data, dict):
+        raise ProjectConfigError(f"PROJECT_CONFIG_ERROR: {cfg_path} must contain a JSON object")
+    if data.get('project_name') != project:
+        errors.append(f"project_name must be '{project}'")
+    if not isinstance(data.get('server_root'), str) or not data.get('server_root', '').strip():
+        errors.append('server_root must be a non-empty string')
+    path_roots = data.get('path_roots')
+    if not isinstance(path_roots, dict) or not path_roots:
+        errors.append('path_roots must be a non-empty object')
+    elif not isinstance(path_roots.get('assets'), str) or not path_roots.get('assets', '').strip():
+        errors.append("path_roots.assets must be a non-empty string")
+    protected_roots = data.get('protected_roots')
+    if not isinstance(protected_roots, list) or not all(isinstance(item, str) and item.strip() for item in protected_roots):
+        errors.append('protected_roots must be a list of non-empty strings')
+    stages = data.get('stages')
+    if not isinstance(stages, dict) or not stages:
+        errors.append('stages must be a non-empty object')
+    categories = data.get('categories')
+    if not isinstance(categories, dict) or not categories:
+        errors.append('categories must be a non-empty object')
+    if errors:
+        detail = '; '.join(errors)
+        raise ProjectConfigError(f"PROJECT_CONFIG_ERROR: {cfg_path}: {detail}")
+    return data
+
+
 def load_project_config(project: str) -> dict:
     cfg_path = get_config_path(project)
     cache_key = str(cfg_path)
@@ -31,7 +68,11 @@ def load_project_config(project: str) -> dict:
         return _cache[cache_key]
     if not cfg_path.exists():
         raise FileNotFoundError(f'项目配置不存在: {cfg_path}')
-    data = json.loads(cfg_path.read_text(encoding='utf-8'))
+    try:
+        data = json.loads(cfg_path.read_text(encoding='utf-8'))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ProjectConfigError(f"PROJECT_CONFIG_ERROR: 无法读取 {cfg_path}: {exc}") from exc
+    data = validate_project_config(data, project, cfg_path)
     _cache[cache_key] = data
     return data
 

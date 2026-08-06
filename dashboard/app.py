@@ -1,11 +1,11 @@
 # dashboard/app.py
 # ── CGI Pipeline v2.0 — Web Dashboard ──
 #
-# 实时展示任务执行状态、审计账本和技能注册表。
+# 实时展示任务执行状态、审计账本和API注册表。
 # 使用 FastAPI + SSE（Server-Sent Events）推送实时更新。
 #
 # 服务自举：Dashboard 启动时自动拉起 Redis + Worker。
-# 启动：conda activate cgi_pipeline && python -m dashboard.app
+# 启动：Y:\GGbommer\scripts\Notes\Tools\_managed\conda_envs\cgi_pipeline\python.exe -m dashboard.app
 
 import json
 import os
@@ -37,7 +37,7 @@ async def lifespan(app):
     """Dashboard 启动时自动拉起 Redis + Worker，关闭时回收"""
     print('[Dashboard] 正在启动服务...')
     start_redis()
-    start_worker('maya')
+    start_worker('cgi')
     print('[Dashboard] 服务就绪')
     yield
     print('[Dashboard] 正在关闭...')
@@ -73,7 +73,7 @@ async def get_tasks():
                 latest = entries[-1]
                 tasks.append({
                     'task_id': latest.get('task_id', f.stem),
-                    'skill_id': latest.get('skill_id', ''),
+                    'api_id': latest.get('api_id', ''),
                     'status': latest.get('status', 'UNKNOWN'),
                     'detail': str(latest.get('detail', ''))[:200],
                     'attempt': latest.get('attempt', 0),
@@ -100,12 +100,12 @@ async def get_task_detail(task_id: str):
     return {'task_id': task_id, 'entries': entries}
 
 
-# ── API：获取技能列表 ──
-@app.get('/api/skills')
-async def get_skills():
-    from core.skill_registry import get_all_skills
-    skills = get_all_skills()
-    return {'skills': skills, 'total': len(skills)}
+# ── API：获取 API 列表 ──
+@app.get('/api/apis')
+async def get_apis():
+    from core.api_registry import get_all_apis
+    apis = get_all_apis()
+    return {'apis': apis, 'total': len(apis)}
 
 
 # ── API：项目列表（扫描 config/ 目录） ──
@@ -125,11 +125,11 @@ async def list_projects():
 @app.get('/api/worker_status')
 async def worker_status_api():
     """前端执行前检查 Worker 是否就绪。不就绪时尝试自动拉起。"""
-    ok, err = ensure_ready('maya')
+    ok, err = ensure_ready('cgi')
     if not ok:
         return {'online': False, 'error': err, 'count': 0}
     from core.service_manager import get_worker_health
-    health = get_worker_health('maya')
+    health = get_worker_health('cgi')
     return {
         'online': health.get('state') == 'HEALTHY',
         'count': 1 if health.get('pid_alive') else 0,
@@ -146,7 +146,7 @@ async def service_status_api():
     # 兼容前端 svc-redis / svc-worker 字段
     return {
         'redis': status['redis'],
-        'worker': status['worker_maya'],
+        'worker': status['worker_cgi'],
         'dashboard': status['dashboard'],
     }
 
@@ -255,7 +255,7 @@ async def list_assets(request: Request):
 @app.post('/api/preview_node_action')
 async def preview_node_action(request: Request):
     data = await request.json()
-    skill_id = data.get('skill_id', '')
+    api_id = data.get('api_id', '')
     source_path = data.get('source_path', '')
     project = data.get('project', '')
     category = data.get('category', '')
@@ -281,20 +281,20 @@ async def preview_node_action(request: Request):
                     # 倾向于推荐带 cache 或 geo 的
                     cache_idx = next((i for i, v in enumerate(geom_roots) if 'cache' in v.lower()), 0)
                     
-                    if skill_id in ['export_abc', 'blender_export_abc']:
+                    if api_id in ['export_abc', 'blender_export_abc']:
                         suggested_params['root_nodes'] = geom_roots[cache_idx]
                         
-                    if skill_id in ['blender_export_abc', 'blender_build_asset_info', 'maya_build_asset_info']:
+                    if api_id in ['blender_export_abc', 'blender_build_asset_info', 'maya_build_asset_info']:
                         suggested_params['cache_group'] = geom_roots[cache_idx].split('|')[-1]
             except Exception:
                 pass
 
-        if skill_id == 'assign_udim_materials':
+        if api_id == 'assign_udim_materials':
             if category: suggested_params['category'] = category
             if stage: suggested_params['stage'] = stage
 
         # === 2. 预测操作输出 ===
-        if skill_id in ['maya_export_abc', 'blender_export_abc', 'export_abc']:
+        if api_id in ['maya_export_abc', 'blender_export_abc', 'export_abc']:
             from core.path_guard import is_protected_path
             src_dir = os.path.dirname(source_path)
             src_stem = os.path.splitext(os.path.basename(source_path))[0]
@@ -306,17 +306,17 @@ async def preview_node_action(request: Request):
                 abc_path = candidate
                 
             display_path = abc_path.replace('\\', '/')
-            preview_html = f"<b>🗂️ 预估输出 ({skill_id}):</b><br>{display_path}"
+            preview_html = f"<b>🗂️ 预估输出 ({api_id}):</b><br>{display_path}"
             
-        elif skill_id in ['master_cleanup', 'maya_master_cleanup']:
+        elif api_id in ['master_cleanup', 'maya_master_cleanup']:
             mode = node_data.get('mode', 'check')
             preview_html = f"<b>🧹 预估动作:</b> {mode} 模式安全扫描诊断"
             
-        elif skill_id == 'save_scene':
+        elif api_id == 'save_scene':
             preview_html = f"<b>💾 预估动作:</b> 根据规则创建新场景版本"
 
 
-        elif skill_id == 'validate_publish':
+        elif api_id == 'validate_publish':
             # 从上游推断所有参数
             if project: suggested_params['project'] = project
             if category: suggested_params['category'] = category
@@ -325,7 +325,7 @@ async def preview_node_action(request: Request):
             if asset_name: suggested_params['asset_name'] = asset_name
             preview_html = f"<b>🔍 预估 QC:</b> 场景完整性 + Cache组 + Mesh数量 + 未知节点 + 空组 + 命名规范"
 
-        elif skill_id == 'rename_asset':
+        elif api_id == 'rename_asset':
             if project: suggested_params['project'] = project
             if category: suggested_params['category'] = category
             if stage: suggested_params['stage'] = stage
@@ -405,7 +405,7 @@ async def event_stream(request: Request):
                                     entry = json.loads(line_str)
                                     event_data = json.dumps({
                                         'task_id': entry.get('task_id', ''),
-                                        'skill_id': entry.get('skill_id', ''),
+                                        'api_id': entry.get('api_id', ''),
                                         'status': entry.get('status', ''),
                                         'timestamp': entry.get('ts', 0),
                                         'detail': str(entry.get('detail', ''))[:200],
@@ -498,17 +498,17 @@ async def node_editor():
     return HTMLResponse(html_path.read_text(encoding='utf-8'))
 
 
-# ── API：从节点编辑器执行技能 ──
-@app.post('/api/execute_skill')
-async def execute_skill(request: Request):
+# ── API：从节点编辑器执行 API ──
+@app.post('/api/execute_api')
+async def execute_api(request: Request):
     """
-    接收节点编辑器的技能执行请求。
+    接收节点编辑器的 API 执行请求。
     优先通过 Celery 派发到 DCC Worker，Redis 不可用时降级为仅写审计账本。
     """
     import uuid
     body = await request.json()
     task_id = str(uuid.uuid4())[:8]
-    skill_id = body.get('skill_id', 'unknown')
+    api_id = body.get('api_id', 'unknown')
     project = body.get('project', 'default')
     asset_name = body.get('asset_name', 'unknown')
     source_path = body.get('source_path', '')
@@ -516,7 +516,7 @@ async def execute_skill(request: Request):
 
     payload = {
         'task_id': task_id,
-        'skill_id': skill_id,
+        'api_id': api_id,
         'project': project,
         'asset_name': asset_name,
         'source_path': source_path,
@@ -530,7 +530,7 @@ async def execute_skill(request: Request):
     try:
         _app = get_celery_app()
         result = _app.send_task(
-            'core.tasks.execute_dcc_skill',
+            'core.tasks.execute_api_operation',
             args=[payload],
             task_id=task_id,
         )
@@ -544,7 +544,7 @@ async def execute_skill(request: Request):
         audit_file = AUDIT_DIR / f'{task_id}.json'
         entry = {
             'task_id': task_id,
-            'skill_id': skill_id,
+            'api_id': api_id,
             'status': 'DEGRADED',
             'detail': detail,
             'attempt': 1,
@@ -556,7 +556,7 @@ async def execute_skill(request: Request):
     return {
         'task_id': celery_task_id or task_id,
         'status': 'DISPATCHED' if dispatched else 'DEGRADED',
-        'skill_id': skill_id,
+        'api_id': api_id,
         'dispatched': dispatched,
     }
 
@@ -565,8 +565,8 @@ async def execute_skill(request: Request):
 @app.post('/api/execute_graph')
 async def execute_graph(request: Request):
     """
-    接收前端提交的完整节点图，提取技能链后一次性派发到 Celery。
-    与 /api/execute_skill（逐技能）相比：
+    接收前端提交的完整节点图，提取API链后一次性派发到 Celery。
+    与 /api/execute_api（单 API）相比：
     - 1 次 API 调用 vs N 次
     - 1 次 Celery 任务 vs N 次
     - Maya 只打开文件 1 次
@@ -575,9 +575,9 @@ async def execute_graph(request: Request):
     body = await request.json()
     chain_task_id = f'chain-{str(uuid.uuid4())[:8]}'
 
-    skill_chain = body.get('skill_chain', [])
-    if not skill_chain:
-        return {'error': '技能链为空', 'dispatched': False}
+    api_chain = body.get('api_chain', [])
+    if not api_chain:
+        return {'error': 'API 链为空', 'dispatched': False}
 
     payload = {
         'task_id': chain_task_id,
@@ -585,14 +585,14 @@ async def execute_graph(request: Request):
         'project': body.get('project', 'default'),
         'asset_name': body.get('asset_name', 'untitled'),
         'category': body.get('category', ''),
-        'skill_chain': skill_chain,
+        'api_chain': api_chain,
     }
 
     dispatched = False
     try:
         _app = get_celery_app()
         _app.send_task(
-            'core.tasks.execute_skill_chain',
+            'core.tasks.execute_api_chain',
             args=[payload],
             task_id=chain_task_id,
         )
@@ -603,7 +603,7 @@ async def execute_graph(request: Request):
         audit_file = AUDIT_DIR / f'{chain_task_id}.json'
         entry = {
             'task_id': chain_task_id,
-            'skill_id': 'chain',
+            'api_id': 'chain',
             'status': 'DEGRADED',
             'detail': f'Celery 派发失败: {e}',
             'ts': time.time(),
@@ -614,7 +614,7 @@ async def execute_graph(request: Request):
     return {
         'task_id': chain_task_id,
         'dispatched': dispatched,
-        'skill_count': len(skill_chain),
+        'api_count': len(api_chain),
     }
 
 # ── API：轮询任务状态（SSE 流）──
@@ -645,7 +645,7 @@ async def poll_task(task_id: str, request: Request):
                         event_data = json.dumps({
                             'task_id': task_id,
                             'status': entry.get('status', 'STARTED'),
-                            'skill_id': entry.get('skill_id', ''),
+                            'api_id': entry.get('api_id', ''),
                             'detail': str(entry.get('detail', ''))[:500],
                             'timestamp': entry.get('ts', 0),
                             'step': entry.get('step', -1),
@@ -778,4 +778,3 @@ if __name__ == '__main__':
     print(f'[Dashboard] 节点编辑器:             http://localhost:{port}/nodes')
     print(f'[Dashboard] 报告查看器:             http://localhost:{port}/report')
     uvicorn.run(app, host='0.0.0.0', port=port)
-

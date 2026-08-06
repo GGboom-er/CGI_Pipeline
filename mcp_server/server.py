@@ -19,6 +19,7 @@ import sys
 from pathlib import Path
 from dotenv import load_dotenv
 from fastmcp import FastMCP
+from fastmcp.server.lifespan import lifespan
 
 load_dotenv()
 
@@ -28,7 +29,7 @@ PROJECT_ROOT = Path(os.getenv('PROJECT_ROOT', '.'))
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from core.skill_registry import get_all_skills
+from core.api_registry import get_all_apis
 from core.manifest import get_manifest
 
 
@@ -36,7 +37,7 @@ from core.manifest import get_manifest
 # Instructions 动态生成（英文路由决策树优先）
 # ══════════════════════════════════════════════════
 
-_SKILLS = get_all_skills()
+_APIS = get_all_apis()
 
 
 def _build_instructions() -> str:
@@ -57,13 +58,11 @@ def _build_instructions() -> str:
     unc_prefixes = ', '.join(principles.get('readonly_unc_prefixes', []))
     status_str = ' | '.join(f'{k}={v}' for k, v in status_codes.items())
     safety_str = '\n'.join(f'  - {r}' for r in safety_rules)
-    skill_ids = ', '.join(s['skill_id'] for s in _SKILLS)
-
     save_rule = 'mandatory' if chain_rules.get('save_scene_must_be_last') else 'recommended'
     abort_rule = 'mandatory' if chain_rules.get('abort_on_step_failure') else 'optional'
 
     return (
-        "CGI/VFX Pipeline Automation Server — controls Maya/Blender for asset processing.\n"
+        "CGI/VFX Pipeline Automation Server — controls Maya, Blender, and Unreal Editor.\n"
         "\n"
         "## TOOL ROUTING — READ THIS FIRST\n"
         "\n"
@@ -73,30 +72,21 @@ def _build_instructions() -> str:
         "thread-safe and session-persistent; rely on that sanctioned path instead of rolling your own\n"
         "(a hand-rolled commandPort only sends strings one-way and cannot return structured data reliably).\n"
         "\n"
-        "### Interactive Maya (user has Maya open)\n"
-        "1. FIRST call maya_list_foreground_sessions -> get active port list\n"
-        "2. THEN call maya_exec_code with execution_mode='foreground' and foreground_port=<port>\n"
-        "   - sync=True (default): instant response, no polling needed\n"
-        "   - NEVER guess or hardcode port numbers\n"
-        "3. For named operations, also pass execution_mode='foreground' and foreground_port\n"
+        "### DCC execution\n"
+        "Use list_apis and api_help to select a canonical API.\n"
+        "For foreground execution, first discover the matching DCC session through the API catalog, then pass the explicit foreground_port in execute_api.\n"
+        "For background execution, execute_api submits to the single CGI queue and returns a task receipt.\n"
         "\n"
-        "### Batch Processing (no user Maya open)\n"
-        "- Single operation: use named tools (maya_clean_skinweights, maya_build_asset_info, etc.)\n"
-        "- Multi-step same DCC: maya_execute_chain (shared session, one submission)\n"
-        "- Cross-DCC pipeline: pipeline_execute_workflow\n"
+        "### Workflow execution\n"
+        "Use list_workflows to select a registered workflow, then pipeline_execute_workflow for multi-step or cross-DCC work.\n"
         "\n"
-        "### Asset Discovery\n"
-        "maya_resolve_asset -> returns source_path -> pass directly to operation tools\n"
-        "System auto-creates sandbox copies; always pass original paths as-is.\n"
+        "### Deterministic API Layer\n"
+        "- list_apis -> enumerate atomic APIs; api_help(api_id) -> read its manifest contract\n"
+        "- execute_api(api_id, params, execution_mode, foreground_port) -> run one atomic action\n"
+        "- API is the only atomic execution contract; workflow composes API steps and reuses the same Worker/receipt path\n"
         "\n"
-        "### Task Monitoring\n"
-        "All operations are async: return task_id -> poll with maya_query_task(task_id)\n"
-        "Poll interval: 3-5s. NOT_FOUND = task not yet picked up, retry.\n"
-        "Exception: maya_exec_code(sync=True) returns result directly, no polling needed.\n"
-        "\n"
-        "## TOOL PRIORITY\n"
-        "named_tool > maya_exec_code > execute_skill (fallback for unlisted skills)\n"
-        "Low-frequency tools can be invoked via execute_skill(skill_id=...).\n"
+        "### Results\n"
+        "execute_api returns a receipt or task_id. Workflows return the final step checklist and report path when wait=True.\n"
         "\n"
         "## SANDBOX RULES\n"
         f"- {readonly_drives} = production server, strictly read-only\n"
@@ -119,7 +109,7 @@ def _build_instructions() -> str:
         "## STATUS CODES\n"
         f"{status_str}\n"
         "\n"
-        f"Registered skills: {skill_ids}. Call maya_list_skills for full parameter schemas."
+        "The active MCP surface is intentionally small: list_apis, api_help, execute_api, list_workflows, and pipeline_execute_workflow."
     )
 
 
@@ -127,9 +117,14 @@ def _build_instructions() -> str:
 # 初始化 MCP Server
 # ══════════════════════════════════════════════════
 
+@lifespan
+async def _server_lifespan(_server):
+    yield {}
+
 mcp = FastMCP(
     name="cgi_pipeline_mcp",
     instructions=_build_instructions(),
+    lifespan=_server_lifespan,
 )
 
 
@@ -196,18 +191,19 @@ async def read_maya_selection(port: str) -> str:
 # ══════════════════════════════════════════════════
 
 if __name__ == '__main__':
-    # 长驻进程：装退出钩子，MCP 退出时 reap 它拉起的 worker，堵最大孤儿源
-    # （MCP 懒起 worker 却从不 reap → MCP 一死 worker 成孤儿）。install_exit_hooks 幂等。
-    try:
-        from core.service_manager import install_exit_hooks
-        install_exit_hooks()
-    except Exception as _e:
-        print(f'[cgi_pipeline_mcp] install_exit_hooks 失败(非致命): {_e}')
     if '--http' in sys.argv:
-        host = os.getenv('MCP_HOST', '0.0.0.0')
+        # HTTP 是长驻服务，退出时清理它拉起的 worker，避免留下孤儿进程。
+        try:
+            from core.service_manager import install_exit_hooks
+            install_exit_hooks()
+        except Exception as _e:
+            print(f'[cgi_pipeline_mcp] install_exit_hooks 失败(非致命): {_e}')
+        host = os.getenv('MCP_HOST', '127.0.0.1')
         port = int(os.getenv('MCP_PORT', '8000'))
         print(f'[cgi_pipeline_mcp] Streamable HTTP on http://{host}:{port}/mcp')
-        print(f'[cgi_pipeline_mcp] {len(_SKILLS)} skills registered')
+        print(f'[cgi_pipeline_mcp] {len(_APIS)} APIs registered')
         mcp.run(transport='streamable-http', host=host, port=port)
     else:
+        # stdio 可能由 mcporter 以“一次调用、一个短进程”启动；后台 worker
+        # 是跨 MCP 调用复用的独立服务，不能在本次 MCP 进程退出时被误杀。
         mcp.run(transport='stdio')

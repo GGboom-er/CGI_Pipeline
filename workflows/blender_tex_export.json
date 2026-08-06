@@ -5,33 +5,35 @@
   "description": "从 Blender 导出 ABC + 采集材质信息 + 采集几何 info JSON",
   "source_resolution": {
     "pipeline": "model",
-    "ext_filter": [".blend"],
+    "ext_filter": [
+      ".blend"
+    ],
     "required": true
   },
   "steps": [
     {
       "step_id": "export_abc",
-      "skill_id": "blender_export_abc",
       "parameters": {
         "abc_path": "{{input.info_dir}}/{{input.source_path | stem}}.abc",
         "cache_group": "{{config.stages.tex.geom_roots.0}}"
-      }
+      },
+      "api_id": "blender.asset.blender_export_abc"
     },
     {
       "step_id": "extract_materials",
-      "skill_id": "blender_extract_materials",
       "parameters": {
         "output_path": "{{input.info_dir}}/{{input.source_path | stem}}_materials.json",
         "cache_group": "{{config.stages.tex.geom_roots.0}}"
-      }
+      },
+      "api_id": "blender.asset.blender_extract_materials"
     },
     {
       "step_id": "build_info",
-      "skill_id": "blender_build_asset_info",
       "parameters": {
         "info_path": "{{input.info_dir}}/{{input.source_path | stem}}_info.json",
         "cache_group": "{{config.stages.tex.geom_roots.0}}"
-      }
+      },
+      "api_id": "blender.asset.blender_build_asset_info"
     }
   ]
 }

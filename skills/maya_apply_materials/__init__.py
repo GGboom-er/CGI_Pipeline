@@ -1,1 +1,0 @@
-from skills.maya_apply_materials.maya_apply_materials import execute

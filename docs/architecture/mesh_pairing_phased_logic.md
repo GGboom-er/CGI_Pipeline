@@ -2,7 +2,7 @@
 
 更新时间: 2026-05-14
 
-本文只说明 mesh 如何配对和分类。运行时 workflow 看 `compare_and_assembly_pipeline_plan.md`；skill 输出契约看 `skills/build_pipeline_skill/SKILL.md`。
+本文只说明 mesh 如何配对和分类。运行时 Workflow 看 `compare_and_assembly_pipeline_plan.md`；输出契约看对应 API 的 `api_help.md` 和 `core.receipt`。
 
 ## 1. 核心原则
 

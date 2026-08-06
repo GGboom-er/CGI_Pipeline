@@ -11,7 +11,7 @@
 #   "segment": 3,
 #   "step": 1,
 #   "step_total": 4,
-#   "skill_id": "maya_fix_shape_names",
+#   "api_id": "maya_fix_shape_names",
 #   "progress": 0.25,               // 0.0 ~ 1.0
 #   "message": "正在规范化 Shape 命名...",
 #   "timestamp": 1777723900.123

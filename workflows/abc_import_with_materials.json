@@ -6,17 +6,17 @@
   "steps": [
     {
       "step_id": "build_mesh",
-      "skill_id": "maya_build_mesh_from_abc",
       "parameters": {
         "abc_path": "{{input.abc_path}}"
-      }
+      },
+      "api_id": "maya.asset.maya_build_mesh_from_abc"
     },
     {
       "step_id": "assign_materials",
-      "skill_id": "maya_apply_materials",
       "parameters": {
         "materials_path": "{{input.materials_path}}"
-      }
+      },
+      "api_id": "maya.asset.maya_apply_materials"
     }
   ]
 }

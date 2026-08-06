@@ -68,3 +68,12 @@ build/
 Thumbs.db
 Desktop.ini
 .DS_Store
+
+# ── 工具生成产物 ──
+# graphify 代码图分析输出，可由工具重跑重建，不进版本树。
+graphify-out/
+
+# ── 第三方独立仓（只统一位置，不并入本仓版本树）──
+# 上游与用途见 dccs/ue/extensions/UPSTREAM.md；照常 git pull 更新。
+# 不用 submodule：db-lyon 要跟随上游而非 pin commit，且避免每次 --recurse-submodules。
+dccs/ue/extensions/ue-mcp/

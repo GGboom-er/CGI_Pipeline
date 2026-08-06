@@ -6,106 +6,106 @@
   "steps": [
     {
       "step_id": "resolve_files",
-      "skill_id": "resolve_asset_files",
-      "parameters": {}
+      "parameters": {},
+      "api_id": "pipeline.pipeline.resolve_asset_files"
     },
     {
       "step_id": "export_abc",
-      "skill_id": "blender_export_abc",
       "source_path": "{{outputs.resolve_files.result.source_path}}",
       "parameters": {
         "abc_path": "{{input.info_dir}}/{{outputs.resolve_files.result.source_stem}}.abc",
         "cache_group": "{{config.stages.tex.geom_roots.0}}"
-      }
+      },
+      "api_id": "blender.asset.blender_export_abc"
     },
     {
       "step_id": "extract_materials",
-      "skill_id": "blender_extract_materials",
       "parameters": {
         "output_path": "{{input.info_dir}}/{{outputs.resolve_files.result.source_stem}}_materials.json",
         "cache_group": "{{config.stages.tex.geom_roots.0}}"
-      }
+      },
+      "api_id": "blender.asset.blender_extract_materials"
     },
     {
       "step_id": "check_hierarchy_pre",
-      "skill_id": "maya_check_asset_hierarchy",
       "source_path": "{{outputs.resolve_files.result.rig_path}}",
       "parameters": {
         "stage": "rig",
         "phase": "pre_sync",
         "block_on_fail": false,
         "block_extra_top_nodes": false
-      }
+      },
+      "api_id": "maya.rig.maya_check_asset_hierarchy"
     },
     {
       "step_id": "fix_hierarchy_pre",
-      "skill_id": "maya_fix_asset_hierarchy",
       "parameters": {
         "check_result": "{{outputs.check_hierarchy_pre.result}}",
         "delete_extra_top_nodes": true
-      }
+      },
+      "api_id": "maya.rig.maya_fix_asset_hierarchy"
     },
     {
       "step_id": "compare_pre",
-      "skill_id": "maya_compare_asset_in_scene",
       "parameters": {
         "input_source": "{{outputs.export_abc.output_path}}",
         "output_path": "{{input.info_dir}}/{{outputs.resolve_files.result.rig_stem}}_pre_compare_result.json",
         "cache_group": "{{outputs.fix_hierarchy_pre.result.active_rig_root}};{{config.stages.rig.geom_roots.0}}",
         "label_source": "tex",
         "label_target": "rig"
-      }
+      },
+      "api_id": "maya.asset.maya_compare_asset_in_scene"
     },
     {
       "step_id": "sync",
-      "skill_id": "maya_sync_rig_incremental",
       "source_path": "{{outputs.resolve_files.result.rig_path}}",
       "parameters": {
         "source_abc": "{{outputs.export_abc.output_path}}",
         "compare_result": "{{outputs.compare_pre.compare_result}}",
         "cache_group": "{{outputs.fix_hierarchy_pre.result.active_rig_root}};{{config.stages.rig.geom_roots.0}}"
-      }
+      },
+      "api_id": "maya.rig.maya_sync_rig_incremental"
     },
     {
       "step_id": "check_hierarchy_post",
-      "skill_id": "maya_check_asset_hierarchy",
       "parameters": {
         "stage": "rig",
         "phase": "post_sync",
         "block_on_fail": true,
         "block_extra_top_nodes": false
-      }
+      },
+      "api_id": "maya.rig.maya_check_asset_hierarchy"
     },
     {
       "step_id": "fix_shapes",
-      "skill_id": "maya_fix_shape_names",
       "parameters": {
         "target_group": "{{config.stages.rig.geom_roots.0}}"
-      }
+      },
+      "api_id": "maya.rig.maya_fix_shape_names"
     },
     {
       "step_id": "assign_materials",
-      "skill_id": "maya_apply_materials",
       "parameters": {
         "materials_path": "{{outputs.extract_materials.output_path}}",
         "target_group": "{{config.stages.rig.geom_roots.0}}"
-      }
+      },
+      "api_id": "maya.asset.maya_apply_materials"
     },
     {
       "step_id": "verify",
-      "skill_id": "maya_compare_asset_in_scene",
       "parameters": {
         "input_source": "{{outputs.export_abc.output_path}}",
         "output_path": "{{input.info_dir}}/{{outputs.resolve_files.result.rig_stem}}_post_compare_result.json",
         "cache_group": "{{config.stages.rig.geom_roots.0}}",
         "label_source": "tex",
         "label_target": "rig_post"
-      }
+      },
+      "api_id": "maya.asset.maya_compare_asset_in_scene"
     },
     {
       "step_id": "save",
-      "skill_id": "save_scene",
-      "parameters": {}
+      "parameters": {},
+      "api_id": "maya.asset.save_scene"
     }
   ]
 }

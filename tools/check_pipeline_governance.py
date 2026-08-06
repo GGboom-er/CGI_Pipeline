@@ -1,51 +1,50 @@
 # tools/check_pipeline_governance.py
 # ── CGI_Pipeline 治理一致性检查 ──
-# 锁定 MCP 注册 / skill / workflow 不漂移的目标态（P1 MCP 归一的防回弹闸）。
+# 锁定 MCP 注册 / API / workflow 不漂移的目标态。
 # 用法: python tools/check_pipeline_governance.py   (exit 0=PASS, 1=FAIL)
 
 import sys
-import re
 import json
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from core.skill_registry import get_all_skills
+from core.api_registry import get_all_apis
 
 TOOL_COUNT_LIMIT = 40
 
 issues = []
 warns = []
 
-skills = get_all_skills()
-skill_ids = {s['skill_id'] for s in skills if s.get('skill_id')}
-exposed = [s['skill_id'] for s in skills if s.get('mcp_expose')]
+apis = get_all_apis()
+api_ids = {item['api_id'] for item in apis if item.get('api_id')}
 
 
-def _manual_tool_names(rel):
-    """提取 @mcp.tool(name="...") 手动注册的工具名。"""
-    src = (ROOT / rel).read_text(encoding='utf-8')
-    return set(re.findall(r'@mcp\.tool\(.*?name="([^"]+)"', src, re.S))
+from mcp_server.tools_operations import EXPOSED_TOOLS
 
+# 1. API manifest 必须有对应 api_help.md；API help 只作为渐进式阅读入口。
+for spec in apis:
+    api_id = spec['api_id']
+    handler_module = str(spec.get('handler', '')).split(':', 1)[0]
+    parts = handler_module.split('.')
+    try:
+        operation_dir = parts[parts.index('operations') + 1]
+    except (ValueError, IndexError):
+        operation_dir = parts[-1] if parts else ''
+    help_path = ROOT / 'api' / 'operations' / operation_dir / 'api_help.md'
+    if not help_path.exists():
+        issues.append(f"API 缺少 api_help.md: {api_id}")
 
-manual = _manual_tool_names('mcp_server/tools_operations.py') | _manual_tool_names('mcp_server/tools_readonly.py')
+# 2. MCP 只保留 API 目录、API 执行和 workflow 入口。
+allowed = {'list_apis', 'api_help', 'execute_api', 'list_workflows', 'pipeline_execute_workflow'}
+unexpected = EXPOSED_TOOLS - allowed
+missing = allowed - EXPOSED_TOOLS
+if unexpected:
+    issues.append(f"MCP 暴露了非 API/workflow 入口: {sorted(unexpected)}")
+if missing:
+    issues.append(f"MCP 缺少固定入口: {sorted(missing)}")
 
-# 1. mcp_expose 的 skill 必须有 SKILL.md 目录
-for sid in exposed:
-    if not (ROOT / 'skills' / sid / 'SKILL.md').exists():
-        issues.append(f"mcp_expose skill 无 SKILL.md: {sid}")
-
-# 2. 不得双轨注册：mcp_expose 的 skill_id 不能同时是手动工具名
-for sid in exposed:
-    if sid in manual:
-        issues.append(f"双轨注册: '{sid}' 既 mcp_expose 又有同名手动 Tool")
-
-# 3. 黑名单不得复活（P1.3 已删，改白名单 mcp_expose）
-ops_src = (ROOT / 'mcp_server' / 'tools_operations.py').read_text(encoding='utf-8')
-if 'EXCLUDED_DYNAMIC_SKILLS' in ops_src:
-    issues.append("EXCLUDED_DYNAMIC_SKILLS 黑名单复活（应为白名单 mcp_expose）")
-
-# 4. workflow 的 skill_id 必须都解析得到
+# 4. workflow 的 api_id 必须都解析得到
 for wf in sorted((ROOT / 'workflows').glob('*.json')):
     try:
         data = json.loads(wf.read_text(encoding='utf-8'))
@@ -53,17 +52,17 @@ for wf in sorted((ROOT / 'workflows').glob('*.json')):
         issues.append(f"workflow {wf.name} JSON 非法: {e}")
         continue
     for step in data.get('steps', []):
-        sid = step.get('skill_id')
-        if sid and sid not in skill_ids:
-            issues.append(f"workflow {wf.name} 引用不存在 skill_id: {sid}")
+        sid = step.get('api_id')
+        if sid and sid not in api_ids:
+            issues.append(f"workflow {wf.name} 引用不存在 api_id: {sid}")
 
 # 5. 工具数 sane（<40 警告）
-total = len(exposed) + len(manual)
+total = len(EXPOSED_TOOLS)
 if total >= TOOL_COUNT_LIMIT:
     warns.append(f"MCP 工具数 {total} >= {TOOL_COUNT_LIMIT}，考虑精简")
 
-print(f"skills={len(skills)} mcp_expose={len(exposed)} manual_tools={len(manual)} total={total}")
-print("manual:", sorted(manual))
+print(f"apis={len(apis)} exposed_tools={len(EXPOSED_TOOLS)} total={total}")
+print("exposed:", sorted(EXPOSED_TOOLS))
 for w in warns:
     print("WARN:", w)
 for i in issues:

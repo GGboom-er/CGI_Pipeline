@@ -145,27 +145,27 @@
         .badge.DEGRADED { background: #ffa72620; color: var(--warning); }
         .badge.UNKNOWN { background: #8888a020; color: var(--text-dim); }
 
-        /* ── Skill Cards ── */
-        .skill-grid {
+        /* ── API Cards ── */
+        .api-grid {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
             gap: 16px;
         }
-        .skill-card {
+        .api-card {
             background: var(--surface);
             border: 1px solid var(--border);
             border-radius: 12px;
             padding: 20px;
             transition: all 0.3s;
         }
-        .skill-card:hover {
+        .api-card:hover {
             border-color: var(--accent);
             box-shadow: 0 4px 24px var(--accent-glow);
             transform: translateY(-2px);
         }
-        .skill-card .name { font-weight: 600; font-size: 15px; margin-bottom: 6px; }
-        .skill-card .desc { font-size: 12px; color: var(--text-dim); line-height: 1.5; }
-        .skill-card .dcc-tag {
+        .api-card .name { font-weight: 600; font-size: 15px; margin-bottom: 6px; }
+        .api-card .desc { font-size: 12px; color: var(--text-dim); line-height: 1.5; }
+        .api-card .dcc-tag {
             display: inline-block;
             padding: 2px 8px;
             border-radius: 4px;
@@ -232,7 +232,7 @@
 
 <div class="tabs">
     <div class="tab active" onclick="switchTab('tasks')">📋 任务列表</div>
-    <div class="tab" onclick="switchTab('skills')">🔧 技能注册表</div>
+    <div class="tab" onclick="switchTab('apis')">🔧 API 目录</div>
     <div class="tab" onclick="switchTab('feed')">📡 实时事件流</div>
 </div>
 
@@ -241,16 +241,16 @@
     <div class="panel active" id="panel-tasks">
         <table class="task-table">
             <thead><tr>
-                <th>Task ID</th><th>技能</th><th>状态</th><th>重试</th><th>时间</th><th>详情</th>
+                <th>Task ID</th><th>API</th><th>状态</th><th>重试</th><th>时间</th><th>详情</th>
             </tr></thead>
             <tbody id="task-tbody"></tbody>
         </table>
-        <div class="empty" id="tasks-empty"><div class="empty-icon">📭</div>暂无任务记录<br><small>执行技能后，任务将在此显示</small></div>
+        <div class="empty" id="tasks-empty"><div class="empty-icon">📭</div>暂无任务记录<br><small>执行API后，任务将在此显示</small></div>
     </div>
 
-    <!-- Skills Panel -->
-    <div class="panel" id="panel-skills">
-        <div class="skill-grid" id="skill-grid"></div>
+    <!-- API Panel -->
+    <div class="panel" id="panel-apis">
+        <div class="api-grid" id="api-grid"></div>
     </div>
 
     <!-- Feed Panel -->
@@ -299,7 +299,7 @@
                 else if (t.status === 'STARTED') runningCount++;
                 return `<tr>
                     <td><code>${t.task_id}</code></td>
-                    <td>${t.skill_id}</td>
+                    <td>${t.api_id}</td>
                     <td><span class="badge ${t.status}">${t.status}</span></td>
                     <td>${t.attempt}</td>
                     <td>${fmtTime(t.timestamp)}</td>
@@ -315,23 +315,23 @@
         } catch (e) { console.error('loadTasks error:', e); }
     }
 
-    // ── Load skills ──
-    async function loadSkills() {
+    // ── Load APIs ──
+    async function loadApis() {
         try {
-            const r = await fetch('/api/skills');
+            const r = await fetch('/api/apis');
             const data = await r.json();
-            const grid = document.getElementById('skill-grid');
-            if (!data.skills) return;
+            const grid = document.getElementById('api-grid');
+            if (!data.apis) return;
 
-            grid.innerHTML = data.skills.map(s => {
+            grid.innerHTML = data.apis.map(s => {
                 const dcc = s.dcc || 'maya';
-                return `<div class="skill-card">
-                    <div class="name">${s.name}</div>
-                    <div class="desc">${s.description || ''}</div>
+                return `<div class="api-card">
+                    <div class="name"><code>${s.api_id}</code></div>
+                    <div class="desc">${s.help?.summary || s.help?.scenario || ''}</div>
                     <span class="dcc-tag dcc-${dcc}">${dcc}</span>
                 </div>`;
             }).join('');
-        } catch (e) { console.error('loadSkills error:', e); }
+        } catch (e) { console.error('loadApis error:', e); }
     }
 
     // ── Load system status ──
@@ -356,7 +356,7 @@
 
                 const item = document.createElement('div');
                 item.className = `feed-item ${data.status}`;
-                item.innerHTML = `<strong>[${fmtTime(data.timestamp)}]</strong> ${data.skill_id} → <span class="badge ${data.status}">${data.status}</span> <span style="color:var(--text-dim)">${data.task_id}</span>`;
+                item.innerHTML = `<strong>[${fmtTime(data.timestamp)}]</strong> ${data.api_id} → <span class="badge ${data.status}">${data.status}</span> <span style="color:var(--text-dim)">${data.task_id}</span>`;
                 container.insertBefore(item, container.firstChild);
 
                 // 刷新任务列表
@@ -367,7 +367,7 @@
 
     // ── Init ──
     loadTasks();
-    loadSkills();
+    loadApis();
     loadStatus();
     startSSE();
     setInterval(loadTasks, 5000);

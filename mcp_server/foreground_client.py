@@ -8,11 +8,11 @@ from dccs.maya.worker import MayaCommandPortWorker
 PROJECT_ROOT = Path(__file__).parent.parent
 AUDIT_DIR = PROJECT_ROOT / 'audit'
 
-def _write_audit(task_id: str, status: str, skill_id: str, detail: str = ''):
+def _write_audit(task_id: str, status: str, api_id: str, detail: str = ''):
     """同步写入审计日志，模拟 Celery 任务的状态流转"""
     entry = {
         'task_id': task_id,
-        'skill_id': skill_id,
+        'api_id': api_id,
         'status': status,
         'ts': time.time(),
         'detail': detail,
@@ -44,7 +44,7 @@ def submit_foreground_task(payload: dict, sync: bool = False) -> dict:
                免去额外一次 query_task 往返。专用于 exec_code 交互式提速，亚秒级响应。
     """
     task_id = payload.get('task_id')
-    skill_id = payload.get('skill_id', 'unknown')
+    api_id = payload.get('api_id', 'unknown')
     parameters = payload.get('parameters', {})
 
     port = parameters.get('foreground_port')
@@ -53,7 +53,7 @@ def submit_foreground_task(payload: dict, sync: bool = False) -> dict:
         if not active_ports:
             ports = maya_port_range()
             err_msg = f"无感连接失败：未能在 {ports.start}-{ports.stop - 1} 范围内发现活跃的 Maya 实例，请确保 Maya 已开启并执行了 userSetup.py"
-            _write_audit(task_id, 'ERROR', skill_id, err_msg)
+            _write_audit(task_id, 'ERROR', api_id, err_msg)
             return {
                 'task_id': task_id,
                 'status': 'SUBMIT_FAILED',
@@ -61,7 +61,7 @@ def submit_foreground_task(payload: dict, sync: bool = False) -> dict:
             }
         if len(active_ports) > 1:
             err_msg = "发现多个 Maya commandPort 会话，foreground 模式必须显式传 foreground_port，避免误连。"
-            _write_audit(task_id, 'ERROR', skill_id, err_msg)
+            _write_audit(task_id, 'ERROR', api_id, err_msg)
             return {
                 'task_id': task_id,
                 'status': 'NEEDS_ATTENTION',
@@ -73,7 +73,7 @@ def submit_foreground_task(payload: dict, sync: bool = False) -> dict:
     port = int(port)
 
     # 立即写入 STARTED，让查询接口有数据
-    _write_audit(task_id, 'STARTED', skill_id, 'Foreground execution initiated via commandPort')
+    _write_audit(task_id, 'STARTED', api_id, 'Foreground execution initiated via commandPort')
 
     worker = MayaCommandPortWorker(host='127.0.0.1', port=port)
 
@@ -81,7 +81,7 @@ def submit_foreground_task(payload: dict, sync: bool = False) -> dict:
         worker.start()  # 检查端口存活 + bootstrap RPyC
     except Exception as e:
         err_msg = str(e)
-        _write_audit(task_id, 'ERROR', skill_id, err_msg)
+        _write_audit(task_id, 'ERROR', api_id, err_msg)
         return {
             'task_id': task_id,
             'status': 'SUBMIT_FAILED',
@@ -101,11 +101,11 @@ def submit_foreground_task(payload: dict, sync: bool = False) -> dict:
             p.pop('sync', None)
             payload_copy['parameters'] = p
 
-        result = worker.run_skill(payload_copy)
+        result = worker.run_api(payload_copy)
 
-        # worker.run_skill 返回 skill receipt 本身；对齐 celery PipelineWorker 的
+        # worker.run_api 返回 API receipt 本身；对齐 celery PipelineWorker 的
         # {status, detail=json.dumps(receipt)} 外壳写入 audit，query_task 才能读到 outputs/items。
-        if isinstance(result, dict) and 'skill_id' in result and 'status' in result:
+        if isinstance(result, dict) and 'api_id' in result and 'status' in result:
             status = result.get('status', 'ERROR')
             detail = json.dumps(result, ensure_ascii=False, default=str)
             receipt = result
@@ -114,11 +114,11 @@ def submit_foreground_task(payload: dict, sync: bool = False) -> dict:
             detail = result.get('detail', '') if isinstance(result, dict) else str(result)
             receipt = result if isinstance(result, dict) else None
 
-        _write_audit(task_id, status, skill_id, detail)
+        _write_audit(task_id, status, api_id, detail)
 
     except Exception as e:
         exec_error = str(e)
-        _write_audit(task_id, 'ERROR', skill_id, exec_error)
+        _write_audit(task_id, 'ERROR', api_id, exec_error)
 
     # ── 同步模式：直接返回 receipt，免 query_task ──
     if sync:
@@ -126,7 +126,7 @@ def submit_foreground_task(payload: dict, sync: bool = False) -> dict:
             return {
                 'task_id': task_id,
                 'status': 'ERROR',
-                'skill_id': skill_id,
+                'api_id': api_id,
                 'detail': exec_error,
                 'execution_mode': 'foreground',
                 'sync': True,
@@ -134,7 +134,7 @@ def submit_foreground_task(payload: dict, sync: bool = False) -> dict:
         return {
             'task_id': task_id,
             'status': receipt.get('status', 'ERROR') if isinstance(receipt, dict) else 'ERROR',
-            'skill_id': skill_id,
+            'api_id': api_id,
             'detail': receipt,
             'execution_mode': 'foreground',
             'sync': True,
@@ -144,7 +144,7 @@ def submit_foreground_task(payload: dict, sync: bool = False) -> dict:
     return {
         'task_id': task_id,
         'status': 'SUBMITTED',
-        'skill_id': skill_id,
+        'api_id': api_id,
         'message': f'任务已通过前台模式派发到 Maya 端口 {port} 并执行完毕',
         'execution_mode': 'foreground'
     }

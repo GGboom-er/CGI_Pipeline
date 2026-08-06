@@ -19,13 +19,16 @@ if errorlevel 1 (
 )
 echo [PASS] conda 已安装
 
-REM ── 使用 environment.yml 创建/更新环境 ──
+REM ── 使用 Notes 受管 prefix 创建/更新通用 Python 基座（CGI 兼容）──
+for %%I in ("%~dp0..\..\conda_envs\cgi_pipeline") do set "CGI_ENV=%%~fI"
+set "PATH=%CGI_ENV%;%CGI_ENV%\Library\mingw-w64\bin;%CGI_ENV%\Library\usr\bin;%CGI_ENV%\Library\bin;%CGI_ENV%\Scripts;%PATH%"
+set "PYTHONNOUSERSITE=1"
 echo.
-echo [STEP 1] 创建 conda 环境 cgi_pipeline (Python 3.11)...
-conda env create -f environment.yml -y 2>nul
+echo [STEP 1] 创建/更新 Notes 通用 Python 3.11 基座...
+conda env create --prefix "%CGI_ENV%" -f environment.yml -y 2>nul
 if errorlevel 1 (
     echo [INFO] 环境已存在，执行更新...
-    conda env update -f environment.yml --prune -y
+    conda env update --prefix "%CGI_ENV%" -f environment.yml --prune -y
     if errorlevel 1 (
         echo [FAIL] 环境更新失败！
         popd
@@ -57,8 +60,8 @@ if not exist ".env" (
 REM ── 验证环境 ──
 echo.
 echo [STEP 4] 验证环境...
-call conda run -n cgi_pipeline --no-banner python --version
-call conda run -n cgi_pipeline --no-banner pip check
+call "%CGI_ENV%\python.exe" -s --version
+call "%CGI_ENV%\python.exe" -s -m pip check
 if errorlevel 1 (
     echo [WARN] 存在依赖冲突，请检查！
 )
@@ -72,8 +75,7 @@ echo   2. 安装并启动 Memurai (Redis)
 echo   3. 确认 Maya 2025 已安装
 echo.
 echo   启动命令：
-echo   conda activate cgi_pipeline
-echo   python -m mcp_server.server
+echo   "%CGI_ENV%\python.exe" -m mcp_server.server --http
 echo ============================================
 popd
 pause

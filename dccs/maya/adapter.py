@@ -30,32 +30,31 @@ def _write_result(task_id: str, status: str, detail: str = ''):
     tmp.write_text(json.dumps(result))
     os.replace(tmp, final)  # 原子操作，防止宿主进程读到半写文件
 
-def _dispatch_skill(payload: dict):
-    '''在 Maya 主线程内执行技能，由 evalDeferred 调用'''
+def _dispatch_api(payload: dict):
+    '''在 Maya 主线程内执行 API，由 evalDeferred 调用'''
     task_id = payload.get('task_id', 'unknown')
-    skill_id = payload.get('skill_id', '')
+    api_id = payload.get('api_id', '')
     try:
-        # 动态导入 skills 下的对应模块
-        import importlib
-        try:
-            skill_module = importlib.import_module(f'skills.{skill_id}.{skill_id}')
-        except ImportError:
-            _write_result(task_id, 'ERROR', f'Skill "{skill_id}" not found. Must exist in skills/{skill_id}/{skill_id}.py')
+        if not api_id:
+            _write_result(task_id, 'ERROR', '缺少 api_id；Maya 适配器只接受 API 调用。')
             return
-            
-        import maya.api.OpenMaya as om
-        import maya.api.OpenMayaAnim as oma
-        
-        # 强制重新加载以支持热更新
-        importlib.reload(skill_module)
-        
-        # 执行技能
-        skill_result = skill_module.execute(payload)
+        # API 是确定性原子能力；适配器只提供 Maya 上下文，执行仍由
+        # api.runner 统一做 manifest/receipt 校验。
+        from api.runner import execute_api
+        api_context = dict(payload.get('api_context') or {})
+        api_context.setdefault('execution_mode', 'background')
+        api_context.setdefault('source_path', payload.get('source_path', ''))
+        api_context.setdefault('project', payload.get('project', ''))
+        api_context.setdefault('asset_name', payload.get('asset_name', ''))
+        api_context['cmds_module'] = cmds
+        api_result = execute_api(
+            api_id,
+            payload.get('api_params') or payload.get('params') or {},
+            api_context,
+        )
 
-        # 🛑 第一性原则：技能执行后安全检查
-        _skill_status = ''
-        if isinstance(skill_result, dict):
-            _skill_status = skill_result.get('status', '')
+        # 🛑 第一性原则：API执行后安全检查
+        api_status = api_result.get('status', '') if isinstance(api_result, dict) else 'ERROR'
 
         try:
             from core.path_guard import is_protected_path
@@ -63,17 +62,17 @@ def _dispatch_skill(payload: dict):
             current_scene = _original_file_cmd(query=True, sceneName=True) or ''
             if current_scene and is_protected_path(current_scene):
                 _original_file_cmd(rename='')
-                if isinstance(skill_result, dict):
-                    skill_result['_guard_warning'] = (
+                if isinstance(api_result, dict):
+                    api_result['_guard_warning'] = (
                         f'安全守卫：已断开受保护路径 "{current_scene}" 的关联，场景数据保留。'
                     )
         except Exception:
             pass
 
         result_status = 'SUCCESS'
-        if isinstance(skill_result, dict) and skill_result.get('status') in ('ERROR', 'BLOCKED', 'AUDIT_FAILED', 'NEEDS_ATTENTION'):
-            result_status = skill_result['status']
-        _write_result(task_id, result_status, json.dumps(skill_result, ensure_ascii=False, default=str))
+        if api_status in ('ERROR', 'BLOCKED', 'NEEDS_ATTENTION', 'TIMEOUT', 'CANCELLED'):
+            result_status = api_status
+        _write_result(task_id, result_status, json.dumps(api_result, ensure_ascii=False, default=str))
     except Exception as e:
         _write_result(task_id, 'ERROR', traceback.format_exc())
 
@@ -92,10 +91,10 @@ def _poll_loop():
                 raw = processing_file.read_text()
                 processing_file.unlink()
                 payload = json.loads(raw)
-                if payload.get('skill_id') == '__DIE__':
+                if payload.get('api_id') == '__DIE__':
                     import os as _os
                     _os._exit(0)
-                _dispatch_skill(payload)
+                _dispatch_api(payload)
         except Exception as e:
             sys.stderr.write(f'[Adapter Poll Error] {traceback.format_exc()}\n')
         time.sleep(POLL_INTERVAL)

@@ -46,7 +46,7 @@ resolve_asset_files
 关键规则：
 
 - `resolve_asset_files` 是唯一入口门：只传资产名时查服务器最新 tex/rig，显式传 `source_path` / `rig_path` 时校验后透传。
-- 缺 tex/rig 时，`resolve_asset_files` 返回 `ERROR`、`missing_inputs` 和搜索路径，workflow 立即中断，后续 DCC skill 不运行。
+- 缺 tex/rig 时，`resolve_asset_files` API 返回 `ERROR`、`missing_inputs` 和搜索路径，Workflow 立即中断，后续 DCC API 不运行。
 - 拼装前 check 一次，fix 一次；拼装后再 check 一次。拼装后 check 仍失败时，要么是 fix 没修干净，要么是 sync 重新破坏了层级。
 - `maya_fix_asset_hierarchy` 消费前置 check 的 `output.result`，不重新发现另一套目标。
 - `maya_sync_rig_incremental` 消费前置 `compare_result` 和 `source_abc`，同步阶段不能独立重算另一份对比。
@@ -115,9 +115,9 @@ Alembic archive 自带的顶层 `ABC` 只属于文件容器，不属于业务 DA
 `compare_result` 是机器契约，不是报告正文。它可以保留完整 DAG、配对关系、算法标签和审计字段；报告只渲染 receipt `output` 中的统计和短明细。
 报告 Details 明细不得再走旧 `report_sections`；compare/sync/hierarchy/resolve 的短明细统一放在 `output.*_items` 或语义化 `output` 列表字段。
 
-## 5. 技能职责边界
+## 5. API职责边界
 
-| 技能 | 职责 |
+| API | 职责 |
 |---|---|
 | `resolve_asset_files` | 解析或校验 tex/rig 输入路径，缺失时阻断 workflow |
 | `blender_export_abc` | 只导出 ABC + FaceSet |
@@ -133,7 +133,7 @@ Alembic archive 自带的顶层 `ABC` 只属于文件容器，不属于业务 DA
 
 ## 6. 对比与配对输出
 
-对比类 skill 的标准 `output` 使用四类用户视角事实：
+对比类 API 的标准 `output` 使用四类用户视角事实：
 
 | 字段 | 含义 |
 |---|---|

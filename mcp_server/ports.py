@@ -5,6 +5,7 @@
 
 import os
 import socket
+from concurrent.futures import ThreadPoolExecutor
 
 
 def maya_port_range() -> range:
@@ -16,15 +17,27 @@ def maya_port_range() -> range:
     return range(start, end + 1)
 
 
-def discover_maya_ports() -> list[int]:
-    """扫描本机活跃的 Maya commandPort，返回端口列表。"""
-    active = []
-    for p in maya_port_range():
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.settimeout(0.2)
-                if s.connect_ex(('127.0.0.1', p)) == 0:
-                    active.append(p)
-        except OSError:
-            pass
-    return active
+def _probe_maya_port(port: int, timeout: float) -> bool:
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as connection:
+            connection.settimeout(timeout)
+            return connection.connect_ex(('127.0.0.1', port)) == 0
+    except OSError:
+        return False
+
+
+def discover_maya_ports(timeout: float = 0.2, max_workers: int = 20) -> list[int]:
+    """并行扫描本机 Maya commandPort，并按端口号稳定返回结果。"""
+    if timeout <= 0:
+        raise ValueError('timeout must be greater than zero')
+    if max_workers <= 0:
+        raise ValueError('max_workers must be greater than zero')
+
+    ports = list(maya_port_range())
+    if not ports:
+        return []
+
+    worker_count = min(len(ports), max_workers)
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        results = executor.map(lambda port: _probe_maya_port(port, timeout), ports)
+        return [port for port, is_open in zip(ports, results) if is_open]

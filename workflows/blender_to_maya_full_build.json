@@ -5,46 +5,48 @@
   "description": "从 Blender 导出 ABC + 材质 JSON，在 Maya 中用 PyAlembic 纯数据构建 mesh 并赋予材质，保存文件",
   "source_resolution": {
     "pipeline": "model",
-    "ext_filter": [".blend"],
+    "ext_filter": [
+      ".blend"
+    ],
     "required": true
   },
   "steps": [
     {
       "step_id": "export_abc",
-      "skill_id": "blender_export_abc",
       "parameters": {
         "abc_path": "{{input.info_dir}}/{{input.source_path | stem}}.abc",
         "cache_group": "{{config.stages.tex.geom_roots.0}}"
-      }
+      },
+      "api_id": "blender.asset.blender_export_abc"
     },
     {
       "step_id": "extract_materials",
-      "skill_id": "blender_extract_materials",
       "parameters": {
         "output_path": "{{input.info_dir}}/{{input.source_path | stem}}_materials.json",
         "cache_group": "{{config.stages.tex.geom_roots.0}}"
-      }
+      },
+      "api_id": "blender.asset.blender_extract_materials"
     },
     {
       "step_id": "build_mesh",
-      "skill_id": "maya_build_mesh_from_abc",
       "parameters": {
         "abc_path": "{{outputs.export_abc.output_path}}"
-      }
+      },
+      "api_id": "maya.asset.maya_build_mesh_from_abc"
     },
     {
       "step_id": "apply_materials",
-      "skill_id": "maya_apply_materials",
       "parameters": {
         "materials_path": "{{outputs.extract_materials.output_path}}"
-      }
+      },
+      "api_id": "maya.asset.maya_apply_materials"
     },
     {
       "step_id": "save",
-      "skill_id": "save_scene",
       "parameters": {
         "save_path": "{{input.run_dir}}/{{input.source_path | stem}}.ma"
-      }
+      },
+      "api_id": "maya.asset.save_scene"
     }
   ]
 }

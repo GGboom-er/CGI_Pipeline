@@ -1,13 +1,13 @@
 # cli.py
-# CGI Pipeline CLI — 脱离 AI 直接在命令行运行技能/工作流
+# CGI Pipeline CLI — 脱离 AI 直接在命令行运行 API/工作流
 #
 # 用法：
-#   python cli.py list-skills
+#   python cli.py list-apis
 #   python cli.py list-workflows
 #   python cli.py resolve-asset --project ysj --asset xiaotianquan
-#   python cli.py run-skill clean_skinweights --project ysj --asset xiaotianquan --source-path xxx.ma
-#   python cli.py run-skill master_cleanup --project ysj --asset xiaotianquan --source-path xxx.ma --param mode=check
-#   python cli.py run-chain --project ysj --asset xiaotianquan --source-path xxx.ma --steps clean_skinweights,fix_shape_names,save_scene --param save_path=yyy.ma
+#   python cli.py run-api maya.rig.maya_clean_skinweights --project ysj --asset xiaotianquan --source-path xxx.ma
+#   python cli.py run-api maya.asset.maya_master_cleanup --project ysj --asset xiaotianquan --source-path xxx.ma --param mode=check
+#   python cli.py run-chain --project ysj --asset xiaotianquan --source-path xxx.ma --steps maya.rig.maya_clean_skinweights,maya.asset.save_scene --param save_path=yyy.ma
 #   python cli.py run-workflow tex_to_rig_verify_and_sync --project ysj --asset ciweiguai
 
 import argparse
@@ -30,7 +30,6 @@ if str(PROJECT_ROOT) not in sys.path:
 _WORKFLOW_WAIT_TERMINAL_STATUSES = {
     'SUCCESS',
     'ERROR',
-    'SKILL_ERROR',
     'TIMEOUT',
     'BLOCKED',
     'AUDIT_FAILED',
@@ -50,40 +49,36 @@ def _is_workflow_wait_terminal(status: str) -> bool:
     return str(status or '').upper() in _WORKFLOW_WAIT_TERMINAL_STATUSES
 
 
-def cmd_list_skills(args):
-    from core.skill_registry import get_all_skills
-    skills = get_all_skills()
+def cmd_list_apis(args):
+    from api.registry import list_apis
+
+    apis = list_apis(
+        dcc=args.dcc or None,
+        domain=args.domain or None,
+        tier=args.tier or None,
+    )
     if args.json:
-        payload = {
-            'total': len(skills),
-            'skills': [
-                {
-                    'skill_id': s.get('skill_id'),
-                    'name': s.get('name', ''),
-                    'dcc': s.get('dcc', ''),
-                    'category': s.get('category', ''),
-                    'tier': s.get('tier', ''),
-                    'pairs_with': s.get('pairs_with', []) or [],
-                    'description': s.get('description', ''),
-                    'parameters': s.get('parameters', {}),
-                    'skip_audit': bool(s.get('skip_audit')),
-                }
-                for s in skills
-            ],
-        }
-        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        print(json.dumps(apis, ensure_ascii=False, indent=2))
         return
 
-    print(f'已注册 {len(skills)} 个技能:\n')
-    for s in skills:
-        audit = '  [skip_audit]' if s.get('skip_audit') else ''
-        print(f"  {s['skill_id']:30s} [{s.get('dcc','?'):8s}] [{s.get('tier','?'):11s}] {s['name']}{audit}")
-        pairs_with = s.get('pairs_with') or []
-        if args.verbose and pairs_with:
-            print(f"    pairs_with: {', '.join(pairs_with)}")
+    print(f'已注册 {len(apis)} 个 API:\n')
+    for api in apis:
+        modes = ','.join(api.get('execution_modes', []))
+        print(
+            f"  {api['api_id']:36s} "
+            f"[{api.get('dcc', '?'):8s}] "
+            f"[{api.get('domain', '?'):10s}] "
+            f"[{api.get('tier', '?'):11s}] "
+            f"[{modes}]"
+        )
         if args.verbose:
-            for k, v in s.get('parameters', {}).items():
-                print(f"    --param {k}={v.get('default','')}  ({v.get('description','')})")
+            print(f"    {api.get('help', {}).get('summary', '')}")
+
+
+def cmd_api_help(args):
+    from api.registry import api_help
+
+    print(json.dumps(api_help(args.api_id), ensure_ascii=False, indent=2))
 
 
 def cmd_list_workflows(args):
@@ -134,18 +129,18 @@ def _parse_params(param_list: list[str]) -> dict:
     return params
 
 
-def cmd_run_skill(args):
+def cmd_run_api(args):
     from core.dcc_factory import create_worker, open_source_file
-    from core.skill_registry import get_skill_dcc
+    from core.api_registry import get_api_dcc, resolve_api_id
 
-    skill_id = args.skill_id
-    dcc_type = get_skill_dcc(skill_id)
+    api_id = resolve_api_id(args.api_id)
+    dcc_type = get_api_dcc(api_id)
     task_id = f"cli-{uuid.uuid4().hex[:8]}"
     params = _parse_params(args.param)
 
     payload = {
         'task_id': task_id,
-        'skill_id': skill_id,
+        'api_id': api_id,
         'project': args.project,
         'asset_name': args.asset,
         'source_path': args.source_path or '',
@@ -164,9 +159,9 @@ def cmd_run_skill(args):
                 print(f'[{task_id}] 打开失败: {err}')
                 return
 
-        print(f'[{task_id}] 执行技能: {skill_id}')
+        print(f'[{task_id}] 执行 API: {api_id}')
         t0 = time.time()
-        result = worker.run_skill(payload)
+        result = worker.run_api(payload)
         elapsed = round(time.time() - t0, 2)
 
         status = result.get('status', 'UNKNOWN')
@@ -186,14 +181,14 @@ def cmd_run_skill(args):
 
 def cmd_run_chain(args):
     from core.dcc_factory import create_worker, open_source_file
-    from core.skill_registry import get_skill_dcc
+    from core.api_registry import get_api_dcc, resolve_api_id
 
-    steps = [s.strip() for s in args.steps.split(',') if s.strip()]
+    steps = [resolve_api_id(s.strip()) for s in args.steps.split(',') if s.strip()]
     if not steps:
         print('错误: --steps 不能为空')
         return
 
-    dcc_type = get_skill_dcc(steps[0])
+    dcc_type = get_api_dcc(steps[0])
     task_id = f"cli-chain-{uuid.uuid4().hex[:8]}"
     params = _parse_params(args.param)
 
@@ -209,19 +204,19 @@ def cmd_run_chain(args):
                 print(f'[{task_id}] 打开失败: {err}')
                 return
 
-        for i, skill_id in enumerate(steps):
-            step_params = dict(params) if skill_id == steps[-1] else {}
+        for i, api_id in enumerate(steps):
+            step_params = dict(params) if api_id == steps[-1] else {}
             payload = {
                 'task_id': f'{task_id}-step{i}',
-                'skill_id': skill_id,
+                'api_id': api_id,
                 'project': args.project,
                 'asset_name': args.asset,
                 'source_path': '',
                 'parameters': step_params,
             }
-            print(f'[{task_id}] Step {i+1}/{len(steps)}: {skill_id}')
+            print(f'[{task_id}] Step {i+1}/{len(steps)}: {api_id}')
             t0 = time.time()
-            result = worker.run_skill(payload)
+            result = worker.run_api(payload)
             elapsed = round(time.time() - t0, 2)
             status = result.get('status', 'UNKNOWN')
             print(f'  → {status} ({elapsed}s)')
@@ -275,15 +270,22 @@ def cmd_run_workflow(args):
 
 def main():
     parser = argparse.ArgumentParser(
-        description='CGI Pipeline CLI — 脱离 AI 直接运行技能和工作流',
+        description='CGI Pipeline CLI — 脱离 AI 直接运行 API 和工作流',
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     sub = parser.add_subparsers(dest='command', help='可用命令')
 
-    # list-skills
-    p_ls = sub.add_parser('list-skills', help='列出所有已注册技能')
-    p_ls.add_argument('-v', '--verbose', action='store_true', help='显示参数详情')
-    p_ls.add_argument('--json', action='store_true', help='输出机器可读 JSON')
+    # list-apis
+    p_la = sub.add_parser('list-apis', help='列出已注册 API')
+    p_la.add_argument('--dcc', default='', choices=['', 'maya', 'blender', 'ue', 'pipeline'])
+    p_la.add_argument('--domain', default='', choices=['', 'asset', 'rig', 'animation', 'pipeline'])
+    p_la.add_argument('--tier', default='', choices=['', 'read', 'write', 'destructive'])
+    p_la.add_argument('-v', '--verbose', action='store_true', help='显示 API 用途')
+    p_la.add_argument('--json', action='store_true', help='输出机器可读 JSON')
+
+    # api-help
+    p_ah = sub.add_parser('api-help', help='查看 API 的 Catalog 契约')
+    p_ah.add_argument('api_id', help='API ID')
 
     # list-workflows
     sub.add_parser('list-workflows', help='列出所有已注册工作流')
@@ -295,17 +297,17 @@ def main():
     p_ra.add_argument('--category', default='chr')
     p_ra.add_argument('--stage', default='')
 
-    # run-skill
-    p_rs = sub.add_parser('run-skill', help='执行单个技能')
-    p_rs.add_argument('skill_id', help='技能 ID')
-    p_rs.add_argument('--project', default='default')
-    p_rs.add_argument('--asset', default='untitled')
-    p_rs.add_argument('--source-path', default='')
-    p_rs.add_argument('--param', action='append', help='技能参数 key=value，可多次使用')
+    # run-api
+    p_ra = sub.add_parser('run-api', help='执行单个 API')
+    p_ra.add_argument('api_id', help='API ID，可先用 api-help 查看参数')
+    p_ra.add_argument('--project', default='default')
+    p_ra.add_argument('--asset', default='untitled')
+    p_ra.add_argument('--source-path', default='')
+    p_ra.add_argument('--param', action='append', help='API 参数 key=value，可多次使用')
 
     # run-chain
-    p_rc = sub.add_parser('run-chain', help='链式执行多个技能')
-    p_rc.add_argument('--steps', required=True, help='逗号分隔的技能 ID 列表')
+    p_rc = sub.add_parser('run-chain', help='链式执行多个 API')
+    p_rc.add_argument('--steps', required=True, help='逗号分隔的 API ID 列表')
     p_rc.add_argument('--project', default='default')
     p_rc.add_argument('--asset', default='untitled')
     p_rc.add_argument('--source-path', default='')
@@ -325,14 +327,16 @@ def main():
 
     args = parser.parse_args()
 
-    if args.command == 'list-skills':
-        cmd_list_skills(args)
+    if args.command == 'list-apis':
+        cmd_list_apis(args)
+    elif args.command == 'api-help':
+        cmd_api_help(args)
     elif args.command == 'list-workflows':
         cmd_list_workflows(args)
     elif args.command == 'resolve-asset':
         cmd_resolve_asset(args)
-    elif args.command == 'run-skill':
-        cmd_run_skill(args)
+    elif args.command == 'run-api':
+        cmd_run_api(args)
     elif args.command == 'run-chain':
         cmd_run_chain(args)
     elif args.command == 'run-workflow':

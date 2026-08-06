@@ -16,7 +16,7 @@ New-Item -ItemType Directory -Path $ReleaseDir | Out-Null
 
 # 定义需要拷贝的核心目录（剔除垃圾和本地数据）
 $IncludePaths = @(
-    "bin", "config", "core", "dccs", "docs", "mcp_server", "redis_server", "skills", "tests", "dashboard",
+    "api", "bin", "config", "core", "dccs", "docs", "mcp_server", "tests", "dashboard",
     ".env.example", ".gitignore", "README.md", "environment.yml"
 )
 

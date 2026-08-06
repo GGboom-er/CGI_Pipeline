@@ -7,54 +7,70 @@ from mcp_server.models import (
     ResolveAssetInput,
     ResolveShotInput,
 )
-from mcp_server.internals import _read_audit, _SKILLS
+from mcp_server.internals import _read_audit
 
 
 def register_readonly_tools(mcp):
     """将所有只读 Tools 注册到 MCP Server 实例"""
 
     @mcp.tool(
-        name="maya_list_skills",
+        name="list_apis",
         annotations={
-            "title": "List available skills",
+            "title": "List available APIs",
             "readOnlyHint": True,
             "destructiveHint": False,
             "idempotentHint": True,
             "openWorldHint": False,
         }
     )
-    async def maya_list_skills() -> dict:
-        """命令目录 / API 手册：列出所有可调用的 skill(命令),按分类分组。
-
-        用法:要在 Maya/Blender 里做某件事,先查本目录有没有现成命令——
-          有 → execute_skill(skill_id=..., project=..., asset_name=..., parameters={...}) 按名调;
-          没有 → 才用 maya_exec_code 手写。生产整链优先用 pipeline_execute_workflow(工作流)。
-        这些 skill 大多是工作流的积木(工作流按名字自动调),不各占 MCP 按钮。
-
-        Read-only, no DCC started. 返回按 category 分组的命令 + 功能/参数摘要。
-        """
-        by_cat = {}
-        for s in _SKILLS:
-            cat = s.get('category', 'other') or 'other'
-            params = list((s.get('parameters', {}) or {}).keys())
-            by_cat.setdefault(cat, []).append({
-                'skill_id': s.get('skill_id', ''),
-                'name': s.get('name', ''),
-                'dcc': s.get('dcc', ''),
-                'tier': s.get('tier', ''),
-                'desc': (s.get('description', '') or '')[:80],
-                'params': params,
-                'pairs_with': s.get('pairs_with', []) or [],
-            })
-        for cat in by_cat:
-            by_cat[cat].sort(key=lambda x: x['skill_id'])
+    async def list_apis_tool() -> dict:
+        """Return the one-line API catalog without starting a DCC."""
+        from api.registry import list_apis
+        rows = list_apis()
         return {
-            'total': len(_SKILLS),
-            'usage': '命令目录:要做某事先查有没有对应命令→execute_skill(skill_id,...)调;'
-                     '没有再 maya_exec_code;生产整链用 pipeline_execute_workflow。',
-            'categories': sorted(by_cat.keys()),
-            'by_category': by_cat,
+            'total': len(rows),
+            'apis': [
+                {
+                    'api_id': row['api_id'],
+                    'version': row['version'],
+                    'dcc': row['dcc'],
+                    'domain': row['domain'],
+                    'action': row['action'],
+                    'tier': row['tier'],
+                    'execution_modes': row['execution_modes'],
+                    'operation_modes': row['operation_modes'],
+                    'help': row.get('help', {}),
+                    'summary': row.get('help', {}).get('summary', ''),
+                    'scenario': row.get('help', {}).get('scenario', ''),
+                }
+                for row in rows
+            ],
+            'usage': '先 api_help，再 execute_api(api_id, params=...)。',
         }
+
+
+    @mcp.tool(
+        name="api_help",
+        annotations={
+            "title": "Show one CGI API contract",
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": False,
+        }
+    )
+    async def api_help_tool(api_id: str) -> dict:
+        """Return manifest-backed inputs, modes, side effects and recovery."""
+        from api.registry import api_help
+        try:
+            return api_help(api_id)
+        except KeyError as exc:
+            return {
+                'status': 'ERROR',
+                'error_code': 'API_NOT_FOUND',
+                'error': str(exc),
+                'recovery_hint': '调用 list_apis 查看已登记 API。',
+            }
 
 
     @mcp.tool(
@@ -72,11 +88,12 @@ def register_readonly_tools(mcp):
 
         All operation tools return task_id after submission.
         Use this to poll until terminal state is reached.
-        State flow: NOT_FOUND -> STARTED/PROGRESS -> SUCCESS / ERROR / TIMEOUT / BLOCKED / AUDIT_FAILED / CHAIN_ABORTED
-        NOT_FOUND = task not yet picked up by worker, retry in 3-5s.
+        State flow: SUBMITTED -> STARTED/PROGRESS -> SUCCESS / ERROR / TIMEOUT / BLOCKED / AUDIT_FAILED / CHAIN_ABORTED
+        SUBMITTED = accepted by the submission path but not yet confirmed started by a worker.
+        NOT_FOUND is reserved for unknown/legacy task IDs; it is not a normal queue state.
         Exception: maya_exec_code(sync=True) returns result directly, no polling needed.
 
-        轮询异步任务状态。所有操作类 Tool 提交后返回 task_id。
+        轮询异步任务状态。所有操作类 Tool 提交后返回 task_id；排队任务至少有 SUBMITTED 记录。
         """
         return _read_audit(params.task_id)
 
@@ -213,7 +230,7 @@ def register_readonly_tools(mcp):
         """List all registered workflows and their descriptions.
 
         Read-only query, no DCC process started.
-        Returns workflow ID, name, description, and skill steps.
+        Returns workflow ID, name, description, and API steps.
 
         列出所有已注册的工作流及其描述和步骤。
         """
@@ -316,4 +333,72 @@ def register_readonly_tools(mcp):
             'message': f'Found {len(active_ports)} active Maya CommandPort session(s) in range {start}-{end}.',
             'next_step': 'Pass execution_mode="foreground" and foreground_port=<port> to maya_exec_code or named maya_ tools.',
             'open_port_hint': 'Maya: cmds.commandPort(name=":7009", sourceType="python", echoOutput=True)',
+        }
+
+    @mcp.tool(
+        name="blender_list_foreground_sessions",
+        annotations={
+            "title": "Discover active Blender foreground sessions",
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": False,
+        }
+    )
+    async def blender_list_foreground_sessions() -> dict:
+        """Discover authenticated CGI Pipeline bridges in open Blender sessions."""
+        from dccs.blender.foreground_client import blender_port_range, discover_blender_sessions
+
+        sessions = discover_blender_sessions()
+        ports = [session["port"] for session in sessions]
+        port_range = blender_port_range()
+        return {
+            "status": "SUCCESS",
+            "active_ports": ports,
+            "active_sessions": sessions,
+            "scan_range": [port_range.start, port_range.stop - 1],
+            "message": f"Found {len(sessions)} authenticated Blender foreground session(s).",
+            "next_step": "Pass execution_mode='foreground' and foreground_port=<port> to blender_exec_code.",
+        }
+
+    @mcp.tool(
+        name="ue_list_foreground_sessions",
+        annotations={
+            "title": "Discover active Unreal Editor sessions",
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": False,
+        }
+    )
+    async def ue_list_foreground_sessions() -> dict:
+        """Discover Unreal Editors exposing the internal localhost bridge.
+
+        Legacy McpAutomationBridge sessions use 8090-8099. The managed native
+        UE_MCP_Bridge publishes its per-project port in
+        ``Saved/UE_MCP_Bridge/port.json``. The foreground client safely probes
+        each transport with its own protocol and reports ``bridge_protocol``.
+        """
+        from dccs.ue.foreground_client import discover_ue_sessions, ue_port_range
+
+        sessions = discover_ue_sessions()
+        port_range = ue_port_range()
+        dynamic_ports = sorted(
+            {
+                port
+                for session in sessions
+                for port in session.get("ports", [])
+                if session.get("bridge_protocol") == "native"
+            }
+        )
+        return {
+            "status": "SUCCESS",
+            "active_ports": [session["port"] for session in sessions],
+            "active_sessions": sessions,
+            "scan_range": [port_range.start, port_range.stop - 1],
+            "dynamic_ports": dynamic_ports,
+            "dynamic_port_source": "<uproject>/Saved/UE_MCP_Bridge/port.json",
+            "bridge_protocols": ["legacy", "native"],
+            "message": f"Found {len(sessions)} Unreal Editor foreground session(s).",
+            "next_step": "Pass the selected foreground_port to ue_exec_code or ue_exec_action; transport selection is automatic.",
         }

@@ -1,0 +1,57 @@
+api_id: blender.asset.blender_extract_materials
+version: 1.0.0
+name: blender_extract_cache_materials
+dcc: blender
+domain: asset
+action: blender_extract_materials
+tier: write
+execution_modes:
+- background
+- foreground
+operation_modes:
+- apply
+inputs:
+  output_path:
+    type: string
+    default: ''
+    description: _materials.json 输出完整路径。workflow 中必须传入任务沙盒 .info 路径；为空时从任务沙盒自动推导。
+  cache_group:
+    type: string
+    description: 必填。要采集的 Blender 根对象名，由项目配置或 workflow 传入。
+    required: true
+preconditions:
+- 项目配置通过统一 config/{project}_config.json 接口加载。
+- 后台模式由 CGI Worker 打开或复用对应 DCC 场景。
+side_effects:
+  inspect: 只读取场景或标准数据，不改变资产。
+  apply: 按 API 实现对当前任务沙盒中的场景或数据执行操作。
+idempotent: false
+outputs:
+- name: output_path
+  type: json_file
+  label: _materials.json
+statuses:
+- SUCCESS
+- PARTIAL
+- ERROR
+- BLOCKED
+- NEEDS_ATTENTION
+- TIMEOUT
+- CANCELLED
+errors:
+  API_OPERATION_ERROR: 操作执行失败，详见报告。
+  API_IMPLEMENTATION_MISSING: 目录存在但没有本地实现。
+recovery:
+- 读取 api_help 获取参数、前置条件和输出。
+- 失败时检查任务报告中的错误与恢复建议。
+help:
+  summary: 从 Blender 场景 cache 组采集最终 Color/Alpha 与 per-face 对应关系；仅 UDIM 输入按 UV 象限拆分，输出
+    schema v3 _materials.json。与 maya_apply_materials 配对。
+  usage: execute_api(blender.asset.blender_extract_materials, params={...})
+  scenario: 从 Blender 场景 cache 组采集最终 Color/Alpha 与 per-face 对应关系；仅 UDIM 输入按 UV 象限拆分，输出
+    schema v3 _materials.json。与 maya_apply_materials 配对。
+  safety: read API 只读；write/destructive API 仅写入任务沙盒。
+tests:
+  contract: api.registry loads this manifest and api.runner validates its receipt.
+  smoke: 代表性 workflow 统一验收。
+handler: api.operations.blender_extract_materials.adapter:execute

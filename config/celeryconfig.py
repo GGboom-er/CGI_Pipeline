@@ -1,5 +1,5 @@
 # config/celeryconfig.py
-# ── CGI Pipeline v2.0 — 多 DCC 路由配置 ──
+# ── CGI Pipeline v2.0 — 单队列配置 ──
 import os
 from dotenv import load_dotenv
 load_dotenv()
@@ -20,23 +20,18 @@ task_acks_late         = True
 task_reject_on_worker_lost = True
 result_expires         = 86400
 
-# ── 多 DCC 队列路由 ──
-# 默认队列 dcc_queue 由 Maya Worker 消费。
-# 启动 Blender/UE Worker 时指定各自队列：
-#   celery -A core.tasks worker --pool=solo -Q blender_queue
-#   celery -A core.tasks worker --pool=solo -Q ue_queue
+# ── 单 CGI 队列路由 ──
+# DCC 类型只决定适配器，不再决定 Celery 队列。所有任务由一个串行 Worker
+# 消费，workflow 在该 Worker 内同步执行，避免嵌套任务和跨队列等待。
 task_routes = {
-    'core.tasks.execute_dcc_skill': {'queue': 'dcc_queue'},
-    'core.tasks.execute_workflow': {'queue': 'workflow_queue'},  # 工作流编排器独立队列
+    'core.tasks.execute_api_operation': {'queue': 'cgi_queue'},
+    'core.tasks.execute_api_chain': {'queue': 'cgi_queue'},
+    'core.tasks.execute_workflow': {'queue': 'cgi_queue'},
 }
 
 # ── 队列声明 ──
-# 预声明所有 DCC 队列，确保 Worker 启动时队列已存在
 from kombu import Queue
 task_queues = (
-    Queue('dcc_queue'),       # Maya（默认）
-    Queue('blender_queue'),   # Blender
-    Queue('ue_queue'),        # Unreal Engine
-    Queue('workflow_queue'),  # 工作流编排器（不与 DCC 竞争）
+    Queue('cgi_queue'),
 )
-task_default_queue = 'dcc_queue'
+task_default_queue = 'cgi_queue'

@@ -5,10 +5,9 @@
 # 纯 Python，无需 Maya/Blender，无子进程。
 # 返回与 maya_build_asset_info / blender_build_asset_info 完全一致的 dict。
 #
-# 法线修正：通过 Signed Volume（带符号体积，散度定理 Divergence Theorem）
-# 检测面绕序朝向。Volume < 0 表示上游 DCC 的负缩放烘焙导致了物理镜像，
-# 此时在数据级反转面索引绕序，确保 MFnMesh.create 后法线自然朝外。
-# 该方案不依赖任何 Metadata 或引擎插件，只信任微积分数学。
+# Maya AbcImport 会把 Alembic 的每个 polygon 顶点顺序逐面逆序后再创建
+# MFnMesh，并用同一映射写入 UV 与 face-varying normals。本 reader 在数据层
+# 做相同转换，所有下游 Maya 构建路径直接消费转换后的数组。
 
 import os
 from alembic.Abc import IArchive
@@ -81,64 +80,48 @@ def _extract_faceset_materials(obj):
     return materials
 
 
-def _compute_signed_volume(positions, face_counts, face_indices):
-    """计算网格的带符号体积（Signed Volume）。
-
-    基于散度定理（Divergence Theorem）的体积积分公式：
-    V = Σ dot(p0, cross(p1, p2)) / 6.0
-
-    对封闭几何体：
-    - Volume > 0 → 面法线朝外（正常绕序）
-    - Volume < 0 → 面法线朝内（被烘焙镜像，需反转绕序）
-
-    参数:
-        positions: ABC 顶点数组（Imath V3f 列表）
-        face_counts: 每个面的顶点数列表
-        face_indices: 面顶点索引展平列表
-
-    返回:
-        float: 带符号体积值
-    """
-    volume = 0.0
+def _reverse_per_face(face_counts, values):
+    """按 polygon 边界逐面逆序，不修改输入数组。"""
+    reversed_values = list(values)
     idx = 0
     for count in face_counts:
-        if count >= 3:
-            i0 = face_indices[idx]
-            p0 = positions[i0]
-            for j in range(1, count - 1):
-                i1 = face_indices[idx + j]
-                i2 = face_indices[idx + j + 1]
-                p1 = positions[i1]
-                p2 = positions[i2]
-                # cross(p1, p2)
-                cx = p1.y * p2.z - p1.z * p2.y
-                cy = p1.z * p2.x - p1.x * p2.z
-                cz = p1.x * p2.y - p1.y * p2.x
-                # dot(p0, cross) / 6
-                volume += (p0.x * cx + p0.y * cy + p0.z * cz) / 6.0
+        reversed_values[idx:idx + count] = reversed(
+            reversed_values[idx:idx + count]
+        )
         idx += count
-    return volume
+    return reversed_values
 
 
-def _fix_winding_order(face_counts, indices):
-    """按面反转索引绕序，保持拓扑结构不变。
+def _convert_face_order_for_maya(
+        face_counts, face_indices, uv_indices=None, normals_fv=None):
+    """复刻 Maya AbcImport 的逐面索引映射。
 
-    对每个面的顶点索引进行 reverse，使法线翻转到正确方向。
-    同时适用于面索引（face_indices）和 UV 索引（uv_indices）。
-
-    参数:
-        face_counts: 每个面的顶点数列表
-        indices: 待反转的索引列表（会被拷贝，不修改原数组）
-
-    返回:
-        list: 反转后的索引列表
+    normals_fv 是展平的 xyz 三元组。缺失或长度不符合 face-varying
+    契约时返回空数组，由 Maya 根据转换后的拓扑自动生成法线。
     """
-    fixed = list(indices)
-    idx = 0
-    for count in face_counts:
-        fixed[idx:idx + count] = reversed(fixed[idx:idx + count])
-        idx += count
-    return fixed
+    maya_face_indices = _reverse_per_face(face_counts, face_indices)
+
+    maya_uv_indices = list(uv_indices or [])
+    if maya_uv_indices:
+        maya_uv_indices = _reverse_per_face(face_counts, maya_uv_indices)
+
+    maya_normals_fv = list(normals_fv or [])
+    expected_normal_values = len(maya_face_indices) * 3
+    if maya_normals_fv and len(maya_normals_fv) == expected_normal_values:
+        normal_triples = [
+            maya_normals_fv[i:i + 3]
+            for i in range(0, len(maya_normals_fv), 3)
+        ]
+        normal_triples = _reverse_per_face(face_counts, normal_triples)
+        maya_normals_fv = [
+            component
+            for normal in normal_triples
+            for component in normal
+        ]
+    else:
+        maya_normals_fv = []
+
+    return maya_face_indices, maya_uv_indices, maya_normals_fv
 
 def read_abc_as_info(abc_path: str, lightweight: bool = False) -> dict:
     """
@@ -233,32 +216,25 @@ def read_abc_as_info(abc_path: str, lightweight: bool = False) -> dict:
         # normals_fv：每面顶点一个 [x,y,z]，展平为 [x,y,z, x,y,z, ...]，长度 = len(face_indices)*3。
         normals_fv = []
         normal_param = schema.getNormalsParam()
-        if normal_param.valid():
-            n_samp = normal_param.getExpandedValue()
-            n_vals = n_samp.getVals()
-            for n in n_vals:
-                normals_fv.extend([float(n.x), float(n.y), float(n.z)])
+        try:
+            if normal_param.valid():
+                n_samp = normal_param.getExpandedValue()
+                n_vals = n_samp.getVals()
+                for n in n_vals:
+                    normals_fv.extend([float(n.x), float(n.y), float(n.z)])
+        except Exception:
+            # 法线不是构建拓扑的前置条件；不可读时交给 Maya 自动生成。
+            normals_fv = []
 
         # 拓扑数据
         face_counts = list(sample.getFaceCounts())
         face_indices = list(sample.getFaceIndices())
 
-        # ── Signed Volume 检测：判断面绕序是否需要修正 ──
-        # 基于散度定理，Volume < 0 意味着上游 DCC 烘焙了负缩放镜像
-        # 但未修正面索引绕序，导致法线朝内。此时需要反转绕序。
-        signed_vol = _compute_signed_volume(positions, face_counts, face_indices)
-        winding_flipped = False
-        if signed_vol < 0:
-            face_indices = _fix_winding_order(face_counts, face_indices)
-            # UV 索引也必须同步反转，否则 UV 映射会错位
-            if uv_indices:
-                uv_indices = _fix_winding_order(face_counts, uv_indices)
-            # 法线(facevarying)按面同步反转（以 [x,y,z] 三元组为单位），否则法线与反转后的面顶点错位
-            if normals_fv:
-                tris = [normals_fv[i:i + 3] for i in range(0, len(normals_fv), 3)]
-                reordered = _fix_winding_order(face_counts, tris)
-                normals_fv = [c for tri in reordered for c in tri]
-            winding_flipped = True
+        # Maya AbcImport 对 Alembic polygon 固定逐面逆序；UV 和显式法线必须
+        # 使用同一 face-vertex 映射。这里不判断封闭性，也不猜测“外侧”。
+        face_indices, uv_indices, normals_fv = _convert_face_order_for_maya(
+            face_counts, face_indices, uv_indices, normals_fv
+        )
 
         # 材质名称（从 FaceSet 提取）
         materials = _extract_faceset_materials(obj)
@@ -273,7 +249,6 @@ def read_abc_as_info(abc_path: str, lightweight: bool = False) -> dict:
             'v_array': v_array,
             'uv_indices': uv_indices,
             'normals_fv': normals_fv,
-            'winding_flipped': winding_flipped,
         }
 
     result = {

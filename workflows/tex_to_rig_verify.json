@@ -6,21 +6,20 @@
   "steps": [
     {
       "step_id": "resolve_files",
-      "skill_id": "resolve_asset_files",
-      "parameters": {}
+      "parameters": {},
+      "api_id": "pipeline.pipeline.resolve_asset_files"
     },
     {
       "step_id": "export_abc",
-      "skill_id": "blender_export_abc",
       "source_path": "{{outputs.resolve_files.result.source_path}}",
       "parameters": {
         "abc_path": "{{input.info_dir}}/{{outputs.resolve_files.result.source_stem}}.abc",
         "cache_group": "{{config.stages.tex.geom_roots.0}}"
-      }
+      },
+      "api_id": "blender.asset.blender_export_abc"
     },
     {
       "step_id": "compare",
-      "skill_id": "maya_compare_asset_in_scene",
       "source_path": "{{outputs.resolve_files.result.rig_path}}",
       "parameters": {
         "input_source": "{{outputs.export_abc.output_path}}",
@@ -28,7 +27,8 @@
         "cache_group": "{{config.stages.rig.geom_roots.0}};{{config.stages.rig.geom_roots.1}}",
         "label_source": "tex",
         "label_target": "rig"
-      }
+      },
+      "api_id": "maya.asset.maya_compare_asset_in_scene"
     }
   ]
 }
