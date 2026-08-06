@@ -1,0 +1,47 @@
+api_id: maya.asset.maya_get_scene_info
+version: 1.0.0
+name: 获取场景总览
+dcc: maya
+domain: asset
+action: maya_get_scene_info
+tier: read
+execution_modes:
+- background
+- foreground
+operation_modes:
+- inspect
+inputs: {}
+preconditions:
+- 项目配置通过统一 config/{project}_config.json 接口加载。
+- 后台模式由 CGI Worker 打开或复用对应 DCC 场景。
+side_effects:
+  inspect: 只读取场景或标准数据，不改变资产。
+  apply: 按 API 实现对当前任务沙盒中的场景或数据执行操作。
+idempotent: true
+outputs:
+- name: scene_info
+  type: json
+  label: 场景信息 (JSON)
+statuses:
+- SUCCESS
+- PARTIAL
+- ERROR
+- BLOCKED
+- NEEDS_ATTENTION
+- TIMEOUT
+- CANCELLED
+errors:
+  API_OPERATION_ERROR: 操作执行失败，详见报告。
+  API_IMPLEMENTATION_MISSING: 目录存在但没有本地实现。
+recovery:
+- 读取 api_help 获取参数、前置条件和输出。
+- 失败时检查任务报告中的错误与恢复建议。
+help:
+  summary: 获取 Maya 当前场景的全面信息，包括对象统计、面数、材质列表、时间轴、渲染器、引用文件、未知节点等。AI 理解场景全貌的基础能力。
+  usage: execute_api(maya.asset.maya_get_scene_info, params={...})
+  scenario: 获取 Maya 当前场景的全面信息，包括对象统计、面数、材质列表、时间轴、渲染器、引用文件、未知节点等。AI 理解场景全貌的基础能力。
+  safety: read API 只读；write/destructive API 仅写入任务沙盒。
+tests:
+  contract: api.registry loads this manifest and api.runner validates its receipt.
+  smoke: 代表性 workflow 统一验收。
+handler: api.operations.maya_get_scene_info.adapter:execute

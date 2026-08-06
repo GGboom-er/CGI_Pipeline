@@ -1,12 +1,8 @@
 {
   "mcpServers": {
     "cgi_pipeline": {
-      "type": "stdio",
-      "command": "C:/Users/yuweiming/.conda/envs/cgi_pipeline/python.exe",
-      "args": [
-        "Y:/GGbommer/scripts/CGI_Pipeline/mcp_server/server.py"
-      ],
-      "env": {}
+      "type": "http",
+      "url": "http://127.0.0.1:8000/mcp"
     }
   }
 }

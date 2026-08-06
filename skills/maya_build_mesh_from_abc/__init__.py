@@ -1,1 +1,0 @@
-from skills.maya_build_mesh_from_abc.maya_build_mesh_from_abc import execute, create_mesh

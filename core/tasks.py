@@ -1,9 +1,10 @@
 # core/tasks.py
-# ── CGI Pipeline v2.0 — 每链一进程架构 ──
+# ── CGI Pipeline v2.0 — 单 CGI Worker 架构 ──
 #
-# 流程：AI 指令 → MCP → Celery → Worker(新进程) → 执行技能链 → 退出
+# 流程：AI 指令 → MCP → cgi_queue → 串行 Worker → DCC adapter → receipt/report
 #
-# Worker 生命周期：每个 Celery 任务创建新 DCC 进程，执行完 shutdown。
+# Worker 生命周期：Celery lane 常驻；Maya/Blender DCC 进程由 warm pool 复用，达到回收阈值或
+# shutdown_all 时退出。异常退出由 service_manager 兜底清理 CGI 标记的孤儿 DCC 进程。
 # 路径系统：统一使用 AssetResolver（基于项目配置）。
 
 from celery import Celery
@@ -20,7 +21,12 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 
-from core.skill_registry import get_skill_dcc, get_skip_audit_skills, reload as _reload_skill_registry
+from core.api_registry import (
+    get_api_dcc,
+    get_skip_audit_apis,
+    resolve_api_id,
+    reload as _reload_api_registry,
+)
 from core.progress import (
     publish_event, persist_outputs, restore_outputs,
     mark_segment_done, get_completed_segments, cleanup_workflow_state,
@@ -36,8 +42,8 @@ app = Celery('cgi_pipeline')
 app.config_from_object('config.celeryconfig')
 logger = get_task_logger(__name__)
 
-# ── 不需要走质检/发布的技能白名单（从动态 skill_registry 读取）──
-_SKIP_AUDIT_SKILLS = get_skip_audit_skills()
+# ── 不需要走质检/发布的 API 白名单（从 manifest 读取）──
+_SKIP_AUDIT_APIS = get_skip_audit_apis()
 
 
 def _get_audit_path(task_id: str) -> Path:
@@ -48,9 +54,33 @@ def _get_audit_path(task_id: str) -> Path:
 
 
 def _create_worker(dcc_type: str = 'maya', source_path: str = None):
-    """创建新的 DCC Worker 实例（每次调用都是新进程）"""
+    """通过 DCC 工厂取得适配器 Worker；生命周期由服务管理器负责。"""
     from core.dcc_factory import create_worker
     return create_worker(dcc_type, source_path)
+
+
+def _step_id(step: dict) -> str:
+    """Return the display/dispatch id for an API step."""
+    value = str(step.get('api_id') or '')
+    return resolve_api_id(value) if value else ''
+
+
+def _step_dcc(step: dict) -> str:
+    """Resolve DCC from the API manifest."""
+    api_id = _step_id(step)
+    if api_id:
+        from api.registry import get_api
+        return get_api(api_id)['dcc']
+    return get_api_dcc(api_id)
+
+
+def _is_save_api(api_id: str) -> bool:
+    """Use the manifest action so namespaced API IDs remain valid."""
+    try:
+        from api.registry import get_api
+        return get_api(api_id).get('action') == 'save_scene'
+    except (KeyError, TypeError):
+        return api_id.rsplit('.', 1)[-1] == 'save_scene'
 
 
 def _get_resolver(project: str):
@@ -166,7 +196,7 @@ def _select_segment_source_path(
 
 
 def _open_source_file(worker, task_id: str, source_path: str, dcc_type: str):
-    """在 DCC Worker 中打开源文件，链式和单技能共用。返回 (ok, error_msg)。"""
+    """在 DCC Worker 中打开源文件，链式和单API共用。返回 (ok, error_msg)。"""
     from core.dcc_factory import open_source_file
     return open_source_file(worker, task_id, source_path, dcc_type)
 
@@ -180,13 +210,13 @@ def _open_source_file(worker, task_id: str, source_path: str, dcc_type: str):
 def _call_write_report_for_chain(task_id, asset_name, project, source_path,
                                   run_dir, audit_path, mode='normal',
                                   hold_info=None):
-    """chain / workflow / single_skill 收尾统一走 write_task_report skill。
+    """chain / workflow / single API 收尾统一走 write_task_report API。
 
     mode: 'normal' | 'workflow'
     hold_info 仅保留旧审计兼容；后台 pipeline 不再进入人工暂停流程。
     """
     try:
-        from skills.write_task_report.write_task_report import execute as _write_report_exec
+        from api.operations.write_task_report.write_task_report import execute as _write_report_exec
         params = {
             'task_id': task_id,
             'audit_path': str(audit_path),
@@ -196,7 +226,7 @@ def _call_write_report_for_chain(task_id, asset_name, project, source_path,
         }
         if hold_info:
             params.update({
-                'hold_skill_id': hold_info.get('skill_id', ''),
+                'hold_api_id': hold_info.get('api_id', ''),
                 'hold_step_idx': hold_info.get('step_idx', -1),
                 'hold_detail': hold_info.get('detail', ''),
                 'hold_remaining': json.dumps(hold_info.get('remaining_steps') or [],
@@ -231,33 +261,33 @@ def _update_progress(task_instance, phase: str, message: str, step_info: str = '
 
 
 # ═══════════════════════════════════════════════════════════════
-# 链式执行 — 单 DCC 会话顺序执行技能链
+# 链式执行 — 单 DCC 会话顺序执行API链
 # ═══════════════════════════════════════════════════════════════
 
 @app.task(
     bind=True,
     max_retries=1,
     default_retry_delay=5,
-    name='core.tasks.execute_skill_chain'
+    name='core.tasks.execute_api_chain'
 )
-def execute_skill_chain(self, payload: dict):
+def execute_api_chain(self, payload: dict):
     """
-    链式执行：创建新 DCC 进程，顺序执行多个技能，完成后退出。
+    链式执行：创建新 DCC 进程，顺序执行多个API，完成后退出。
 
     payload = {
         'task_id': 'chain-xxx',
         'source_path': '...',
         'project': 'ysj',
         'asset_name': 'xiaotianquan',
-        'skill_chain': [
-            {'skill_id': 'clean_skinweights', 'parameters': {'threshold': 0.001}},
-            {'skill_id': 'save_scene', 'parameters': {'save_path': '...'}},
+        'api_chain': [
+            {'api_id': 'clean_skinweights', 'parameters': {'threshold': 0.001}},
+            {'api_id': 'save_scene', 'parameters': {'save_path': '...'}},
         ]
     }
     """
     task_id = payload.get('task_id', self.request.id)
     source_path = payload.get('source_path', '')
-    skill_chain = payload.get('skill_chain', [])
+    api_chain = payload.get('api_chain', [])
     asset_name = payload.get('asset_name', 'untitled')
     project = payload.get('project', 'default')
     workflow_id = payload.get('workflow_id', task_id)
@@ -292,20 +322,20 @@ def execute_skill_chain(self, payload: dict):
     if report_path and (not is_subchain or not Path(report_path).exists()):
         _report_writer.init_report(report_path, report_context)
     _t_chain_start = time.time()
-    def _write_audit(status, detail='', step_idx=-1, skill_id=''):
+    def _write_audit(status, detail='', step_idx=-1, api_id=''):
         entry = {
-            'task_id': task_id, 'skill_id': skill_id or 'chain',
+            'task_id': task_id, 'api_id': api_id or 'chain',
             'status': status, 'ts': time.time(), 'detail': detail,
-            'step': step_idx, 'total_steps': len(skill_chain),
+            'step': step_idx, 'total_steps': len(api_chain),
         }
         with open(audit_path, 'a') as f:
             f.write(json.dumps(entry) + '\n')
 
-    def _translate_error(detail: str, skill_id: str) -> str:
+    def _translate_error(detail: str, api_id: str) -> str:
         if "No such file or directory" in detail or "FileNotFoundError" in detail or "文件不存在或为空" in detail:
             return f"[文件读取异常] 尝试读取的源文件不存在或被占用，请检查上游环节是否已正确发布。原生报错: {detail[:200]}"
         if "IndexError" in detail and "list index out of range" in detail:
-            return f"[索引越界] {skill_id} 技能执行时遇到数组越界，场景中可能缺失预期的节点或组件。原生报错: {detail[:200]}"
+            return f"[索引越界] {api_id} API执行时遇到数组越界，场景中可能缺失预期的节点或组件。原生报错: {detail[:200]}"
         if "KeyError" in detail:
             return f"[数据缺失] 缺少关键数据键值。原生报错: {detail[:200]}"
         if "RuntimeError" in detail and "Object does not exist" in detail:
@@ -330,26 +360,22 @@ def execute_skill_chain(self, payload: dict):
 
     worker = None
     try:
-        _write_audit('CHAIN_STARTED', f'{len(skill_chain)} skills')
+        _write_audit('CHAIN_STARTED', f'{len(api_chain)} APIs')
 
-        # 热重载注册表，避免 Worker 长驻时新增技能无法识别
-        _reload_skill_registry()
+        # 热重载 API manifest，避免 Worker 长驻时新增 API 无法识别
+        _reload_api_registry()
 
-        dcc_type = get_skill_dcc(
-            skill_chain[0]['skill_id'] if skill_chain else 'ping'
-        )
+        dcc_type = _step_dcc(api_chain[0]) if api_chain else 'maya'
 
-        # 校验链内所有技能属于同一 DCC
-        dcc_types_in_chain = set(
-            get_skill_dcc(s['skill_id']) for s in skill_chain
-        )
+        # 校验链内所有 API 属于同一 DCC
+        dcc_types_in_chain = set(_step_dcc(s) for s in api_chain)
         if len(dcc_types_in_chain) > 1:
             err_msg = f'链中混合了多个 DCC 类型: {dcc_types_in_chain}'
             _write_audit('CHAIN_ABORTED', err_msg)
             _finalize_runtime_report('CHAIN_ABORTED', error=err_msg)
             return {
                 'task_id': task_id, 'status': 'CHAIN_ABORTED',
-                'error': f'链中所有技能必须属于同一个 DCC，当前包含: {dcc_types_in_chain}',
+                'error': f'链中所有 API 必须属于同一个 DCC，当前包含: {dcc_types_in_chain}',
                 'chain_results': [], 'report_path': report_path,
             }
 
@@ -389,12 +415,12 @@ def execute_skill_chain(self, payload: dict):
             })
             return str(dst_path)
 
-        # 扫描并沙盒化 skill_chain 中的所有文件参数
-        for step in skill_chain:
+        # 扫描并沙盒化 api_chain 中的所有文件参数
+        for step in api_chain:
             params = step.get('parameters', {})
             for k, v in params.items():
                 if isinstance(v, str):
-                    params[k] = _stage_to_sandbox(v, role=f'step.{step.get("skill_id", "?")}.{k}')
+                    params[k] = _stage_to_sandbox(v, role=f'step.{step.get("api_id", "?")}.{k}')
 
         if source_path and dcc_type != 'pipeline':
             # 无条件沙盒化主场景文件（X盘额外有只读锁，但所有路径都应在沙盒内操作）
@@ -456,10 +482,11 @@ def execute_skill_chain(self, payload: dict):
         _chain_extra_params.setdefault('run_dir', str(run_dir))
         _chain_extra_params.setdefault('info_dir', str(info_dir))
         _report_step_offset = int(payload.get('_step_index_offset') or 0)
-        _report_step_total = int(payload.get('_workflow_step_total') or len(skill_chain))
+        _report_step_total = int(payload.get('_workflow_step_total') or len(api_chain))
 
-        for i, step in enumerate(skill_chain):
-            step_skill_id = step['skill_id']
+        for i, step in enumerate(api_chain):
+            step_api_id = _step_id(step)
+            step['api_id'] = step_api_id
             step_params_raw = step.get('parameters', {})
             # 每一步执行前按当前已完成 step 的 outputs 解析模板
             try:
@@ -471,14 +498,14 @@ def execute_skill_chain(self, payload: dict):
                 step_params = dict(step_params_raw)
             step_task_id = f'{task_id}_s{i}'
 
-            if step_skill_id == 'save_scene' and chain_results:
+            if _is_save_api(step_api_id) and chain_results:
                 step_params = dict(step_params)
                 step_params['_chain_history'] = chain_results
                 step_params['_open_elapsed_sec'] = open_elapsed_sec
 
             step_payload = {
                 'task_id': step_task_id,
-                'skill_id': step_skill_id,
+                'api_id': step_api_id,
                 'source_path': source_path,
                 'project': payload.get('project', 'default'),
                 'asset_name': payload.get('asset_name', 'untitled'),
@@ -487,19 +514,29 @@ def execute_skill_chain(self, payload: dict):
                 'info_dir': str(info_dir),
                 'extra_params': dict(_chain_extra_params),
             }
+            if step_api_id:
+                step_payload['api_id'] = step_api_id
+                step_payload['api_params'] = dict(step_params)
+                step_payload['api_context'] = {
+                    'execution_mode': 'background',
+                    'project': payload.get('project', 'default'),
+                    'asset_name': payload.get('asset_name', 'untitled'),
+                    'source_path': source_path,
+                    'run_dir': str(run_dir),
+                }
 
-            _write_audit('STEP_START', f'step {i}: {step_skill_id}', i, step_skill_id)
+            _write_audit('STEP_START', f'step {i}: {step_api_id}', i, step_api_id)
             step_report_context = {
                 'step_index': _report_step_offset + i,
                 'step_total': _report_step_total,
-                'skill_id': step_skill_id,
+                'api_id': step_api_id,
                 'parameters': step_params,
                 'source_path': source_path,
                 'segment': _seg_idx,
             }
             if report_path:
                 _report_writer.upsert_step_started(report_path, step_report_context)
-            _update_progress(self, 'EXECUTING_SKILL', f'正在执行技能: {step_skill_id}', f'{i+1}/{len(skill_chain)}')
+            _update_progress(self, 'EXECUTING_API', f'正在执行 API: {step_api_id}', f'{i+1}/{len(api_chain)}')
 
             # 进度推送：步骤开始
             if _wf_id:
@@ -507,26 +544,26 @@ def execute_skill_chain(self, payload: dict):
                     'event_type': 'step.start',
                     'segment': _seg_idx,
                     'step': i,
-                    'step_total': len(skill_chain),
-                    'skill_id': step_skill_id,
-                    'progress': i / len(skill_chain),
-                    'message': f'正在执行: {step_skill_id} ({i+1}/{len(skill_chain)})',
+                    'step_total': len(api_chain),
+                    'api_id': step_api_id,
+                    'progress': i / len(api_chain),
+                    'message': f'正在执行: {step_api_id} ({i+1}/{len(api_chain)})',
                 })
-            result = worker.run_skill(step_payload)
+            result = worker.run_api(step_payload)
             step_status = result.get('status', 'UNKNOWN')
 
             raw_detail = result.get('detail', '')
             if not raw_detail and isinstance(result, dict) and (
-                'summary' in result or 'outputs' in result or 'skill_id' in result
+                'summary' in result or 'outputs' in result or 'api_id' in result
             ):
                 raw_detail = json.dumps(result, ensure_ascii=False, default=str)
 
             translated_err = ''
             if step_status == 'ERROR':
-                translated_err = _translate_error(str(raw_detail), step_skill_id)
+                translated_err = _translate_error(str(raw_detail), step_api_id)
                 result['error'] = translated_err
 
-            receipt = _report_writer.extract_receipt(raw_detail or result, step_skill_id, step_status)
+            receipt = _report_writer.extract_receipt(raw_detail or result, step_api_id, step_status)
             if step_status != 'SUCCESS' and receipt.get('status') == 'SUCCESS':
                 receipt['status'] = step_status
             if step_status == 'ERROR' and translated_err and not receipt.get('error'):
@@ -534,7 +571,7 @@ def execute_skill_chain(self, payload: dict):
 
             mem_gb = worker.get_memory_gb() if hasattr(worker, 'get_memory_gb') else -1
             step_result = {
-                'step': i, 'skill_id': step_skill_id,
+                'step': i, 'api_id': step_api_id,
                 'status': step_status, 'detail': raw_detail,
                 'memory_gb': round(mem_gb, 2),
             }
@@ -544,7 +581,7 @@ def execute_skill_chain(self, payload: dict):
             _write_audit(
                 f'STEP_{step_status}',
                 str(raw_detail) + f' [mem={mem_gb:.2f}GB]',
-                i, step_skill_id,
+                i, step_api_id,
             )
             if report_path:
                 _report_writer.upsert_step_finished(
@@ -562,21 +599,21 @@ def execute_skill_chain(self, payload: dict):
                     'event_type': 'step.done',
                     'segment': _seg_idx,
                     'step': i,
-                    'step_total': len(skill_chain),
-                    'skill_id': step_skill_id,
+                    'step_total': len(api_chain),
+                    'api_id': step_api_id,
                     'status': step_status,
-                    'progress': (i + 1) / len(skill_chain),
-                    'message': f'{step_skill_id}: {step_status}',
+                    'progress': (i + 1) / len(api_chain),
+                    'message': f'{step_api_id}: {step_status}',
                     'memory_gb': round(mem_gb, 2),
                 })
 
-            # 从 detail 中提取技能级状态
+            # 从 detail 中提取API级状态
             _inner_status = receipt.get('status', '')
             _inner_outputs = receipt.get('outputs', {}) or {}
             detail_str = str(raw_detail)
 
             # 灌本步 outputs 到 _chain_outputs 供后续步模板引用
-            _step_key = step.get('step_id') or step_skill_id
+            _step_key = step.get('step_id') or step_api_id
             if _step_key and _inner_outputs:
                 _chain_outputs[_step_key] = _inner_outputs
 
@@ -584,23 +621,23 @@ def execute_skill_chain(self, payload: dict):
             if effective_status in ('AUDIT_FAILED', 'NEEDS_ATTENTION'):
                 _write_audit(
                     'CHAIN_AUDIT_FAILED',
-                    f'step {i} ({step_skill_id}) 审计未通过: {effective_status}',
+                    f'step {i} ({step_api_id}) 审计未通过: {effective_status}',
                     i,
-                    step_skill_id,
+                    step_api_id,
                 )
-                _finalize_runtime_report('CHAIN_AUDIT_FAILED', error=f'step {i} ({step_skill_id}) 审计未通过: {effective_status}')
+                _finalize_runtime_report('CHAIN_AUDIT_FAILED', error=f'step {i} ({step_api_id}) 审计未通过: {effective_status}')
                 return {
                     'task_id': task_id, 'status': 'CHAIN_AUDIT_FAILED',
-                    'failed_step': i, 'failed_skill': step_skill_id,
+                    'failed_step': i, 'failed_api': step_api_id,
                     'detail': detail_str,
                     'chain_results': chain_results,
                     'report_path': report_path,
-                    'message': f'链在 step {i} ({step_skill_id}) 审计未通过，已按后台批处理策略中止',
+                    'message': f'链在 step {i} ({step_api_id}) 审计未通过，已按后台批处理策略中止',
                 }
 
             if _inner_status == 'BLOCKED':
-                _write_audit('CHAIN_BLOCKED', f'step {i} blocked: {step_skill_id}')
-                _finalize_runtime_report('CHAIN_BLOCKED', error=f'step {i} blocked: {step_skill_id}')
+                _write_audit('CHAIN_BLOCKED', f'step {i} blocked: {step_api_id}')
+                _finalize_runtime_report('CHAIN_BLOCKED', error=f'step {i} blocked: {step_api_id}')
                 return {
                     'task_id': task_id, 'status': 'CHAIN_BLOCKED',
                     'failed_step': i, 'detail': detail_str,
@@ -609,15 +646,15 @@ def execute_skill_chain(self, payload: dict):
                 }
 
             if step_status != 'SUCCESS':
-                chain_error = receipt.get('error') or translated_err or f'step {i} failed: {step_skill_id}'
-                _write_audit('CHAIN_ABORTED', f'step {i} failed: {step_skill_id}: {chain_error}')
+                chain_error = receipt.get('error') or translated_err or f'step {i} failed: {step_api_id}'
+                _write_audit('CHAIN_ABORTED', f'step {i} failed: {step_api_id}: {chain_error}')
                 _finalize_runtime_report(
                     'CHAIN_ABORTED',
-                    error=f'step {i} ({step_skill_id}) failed: {chain_error}',
+                    error=f'step {i} ({step_api_id}) failed: {chain_error}',
                 )
                 return {
                     'task_id': task_id, 'status': 'CHAIN_ABORTED',
-                    'failed_step': i, 'failed_skill': step_skill_id,
+                    'failed_step': i, 'failed_api': step_api_id,
                     'error': chain_error,
                     'detail': detail_str,
                     'chain_results': chain_results,
@@ -649,11 +686,6 @@ def execute_skill_chain(self, payload: dict):
         if isinstance(exc, SoftTimeLimitExceeded):
             _write_audit('TIMEOUT', 'Soft time limit exceeded (9 minutes). Terminating worker.')
             _finalize_runtime_report('TIMEOUT', error='Soft time limit exceeded (9 minutes). Terminating worker.')
-            if worker and hasattr(worker, 'shutdown'):
-                try:
-                    worker.shutdown()
-                except Exception:
-                    pass
             raise
 
         tb = traceback.format_exc()
@@ -662,36 +694,33 @@ def execute_skill_chain(self, payload: dict):
         raise self.retry(exc=exc)
 
     finally:
-        if worker and hasattr(worker, 'shutdown'):
-            try:
-                worker.shutdown()
-            except Exception:
-                logger.warning(f'[{task_id}] Worker shutdown 异常', exc_info=True)
+        # DCC Worker 由 service_manager 统一维护，任务完成后保持 warm pool。
+        pass
 
 
 # ═══════════════════════════════════════════════════════════════
-# 单技能执行
+# 单API执行
 # ═══════════════════════════════════════════════════════════════
 
 @app.task(
     bind=True,
     max_retries=3,
     default_retry_delay=5,
-    name='core.tasks.execute_dcc_skill'
+    name='core.tasks.execute_api_operation'
 )
-def execute_dcc_skill(self, payload: dict):
+def execute_api_operation(self, payload: dict):
     """
-    单技能执行：创建新 DCC 进程 → 执行 → 质检 → 发布 → 退出。
+    单API执行：创建新 DCC 进程 → 执行 → 质检 → 发布 → 退出。
     """
-    from core.schemas import SkillPayloadSchema
+    from core.schemas import ApiPayloadSchema
     from pydantic import ValidationError
 
     try:
-        validated_payload = SkillPayloadSchema(**payload)
+        validated_payload = ApiPayloadSchema(**payload)
         payload = validated_payload.model_dump()
     except ValidationError as e:
         task_id = payload.get('task_id', 'unknown_task')
-        skill_id = payload.get('skill_id', 'unknown_skill')
+        api_id = payload.get('api_id', 'unknown_api')
         error_msg = f"输入数据 Schema 校验失败 (Fail-Fast):\n{str(e)}"
         
         from core.bootstrap import cfg
@@ -701,21 +730,22 @@ def execute_dcc_skill(self, payload: dict):
                 import json
                 _audit_file.parent.mkdir(parents=True, exist_ok=True)
                 with open(_audit_file, 'a', encoding='utf-8') as f:
-                    f.write(json.dumps({'task_id': task_id, 'skill_id': skill_id, 'status': status, 'detail': msg, 'ts': time.time()}, ensure_ascii=False) + '\n')
+                    f.write(json.dumps({'task_id': task_id, 'api_id': api_id, 'status': status, 'detail': msg, 'ts': time.time()}, ensure_ascii=False) + '\n')
             except Exception: pass
         
         _write_err('ERROR', error_msg)
         raise ValueError(error_msg)
 
     task_id = payload.get('task_id', self.request.id)
-    skill_id = payload.get('skill_id', '')
+    api_id = payload.get('api_id', '')
+    api_id = payload.get('api_id', '')
     project = payload.get('project', 'default')
     asset_name = payload.get('asset_name', 'untitled')
     audit_path = _get_audit_path(task_id)
 
     def _write_audit(status, detail=''):
         entry = {
-            'task_id': task_id, 'skill_id': skill_id,
+            'task_id': task_id, 'api_id': api_id,
             'status': status, 'ts': time.time(), 'detail': detail,
             'attempt': self.request.retries + 1,
         }
@@ -750,12 +780,12 @@ def execute_dcc_skill(self, payload: dict):
             report_path, ctx, status, elapsed_min=elapsed_min,
             error=error, traceback_text=tb,
         )
-    def _translate_error(detail: str, skill_id: str) -> str:
+    def _translate_error(detail: str, api_id: str) -> str:
         """对底层原生报错进行业务级脱水转译"""
         if "No such file or directory" in detail or "FileNotFoundError" in detail or "文件不存在或为空" in detail:
             return f"[文件读取异常] 尝试读取的源文件不存在或被占用，请检查上游环节是否已正确发布。原生报错: {detail[:200]}"
         if "IndexError" in detail and "list index out of range" in detail:
-            return f"[索引越界] {skill_id} 技能执行时遇到数组越界，这通常是因为场景中缺失预期的节点或组件（如空组、空层级）。原生报错: {detail[:200]}"
+            return f"[索引越界] {api_id} API执行时遇到数组越界，这通常是因为场景中缺失预期的节点或组件（如空组、空层级）。原生报错: {detail[:200]}"
         if "KeyError" in detail:
             return f"[数据缺失] 缺少关键数据键值。原生报错: {detail[:200]}"
         if "RuntimeError" in detail and "Object does not exist" in detail:
@@ -764,12 +794,13 @@ def execute_dcc_skill(self, payload: dict):
 
     try:
         _write_audit('STARTED')
-        _reload_skill_registry()
-        dcc_type = get_skill_dcc(skill_id)
+        _reload_api_registry()
+        from api.registry import get_api
+        dcc_type = get_api(api_id)['dcc']
 
         # 自动定位源文件
         source_path = payload.get('source_path', '')
-        if not source_path and skill_id not in _SKIP_AUDIT_SKILLS:
+        if not source_path and api_id not in _SKIP_AUDIT_APIS and dcc_type != 'pipeline':
             _t_resolve = time.time()
             try:
                 resolver = _get_resolver(project)
@@ -841,44 +872,54 @@ def execute_dcc_skill(self, payload: dict):
             if not ok:
                 meaningful_err = _translate_error(err, "open_file")
                 _write_audit('OPEN_FILE_FAILED', meaningful_err)
-                _finalize_runtime_report('SKILL_ERROR', error=meaningful_err)
-                return {'task_id': task_id, 'status': 'SKILL_ERROR',
+                _finalize_runtime_report('API_ERROR', error=meaningful_err)
+                return {'task_id': task_id, 'status': 'ERROR',
                         'detail': f'打开文件失败: {source_path} — {meaningful_err}',
                         'report_path': report_path}
             _write_audit('CHAIN_FILE_OPENED', source_path)
         elif not source_path and dcc_type in ('maya', 'blender'):
             _open_source_file(worker, task_id, "", dcc_type)
 
-        # 执行技能
+        # 执行API
         payload['source_path'] = source_path
         payload['run_dir'] = str(run_dir)
         payload['info_dir'] = str(info_dir)
+        if api_id:
+            api_context = dict(payload.get('api_context') or {})
+            api_context.update({
+                'execution_mode': 'background',
+                'source_path': source_path,
+                'project': project,
+                'asset_name': asset_name,
+                'run_dir': str(run_dir),
+            })
+            payload['api_context'] = api_context
         payload.setdefault('extra_params', {})
         payload['extra_params'].setdefault('run_dir', str(run_dir))
         payload['extra_params'].setdefault('info_dir', str(info_dir))
-        _update_progress(self, 'EXECUTING_SKILL', f'正在执行技能: {skill_id}', '1/1')
-        _write_audit('STEP_START', f'step 0: {skill_id}')
+        _update_progress(self, 'EXECUTING_API', f'正在执行 API: {api_id}', '1/1')
+        _write_audit('STEP_START', f'step 0: {api_id}')
         step_report_context = {
             'step_index': 0,
             'step_total': 1,
-            'skill_id': skill_id,
-            'parameters': payload.get('parameters', {}),
+            'api_id': api_id,
+            'parameters': payload.get('api_params', payload.get('parameters', {})),
             'source_path': source_path,
         }
         _report_writer.upsert_step_started(report_path, step_report_context)
-        result = worker.run_skill(payload)
-        logger.info(f'[{task_id}] 技能执行完成: status={result["status"]}')
+        result = worker.run_api(payload)
+        logger.info(f'[{task_id}] API 执行完成: status={result["status"]}')
 
         raw_detail = result.get('detail', '')
         if not raw_detail and isinstance(result, dict) and (
-            'summary' in result or 'outputs' in result or 'skill_id' in result
+            'summary' in result or 'outputs' in result or 'api_id' in result
         ):
             raw_detail = json.dumps(result, ensure_ascii=False, default=str)
 
         if result['status'] != 'SUCCESS':
             raw_status = result.get('status', 'ERROR') or 'ERROR'
-            translated_err = _translate_error(str(raw_detail), skill_id) if raw_status == 'ERROR' else raw_detail
-            receipt = _report_writer.extract_receipt(raw_detail or result, skill_id, raw_status)
+            translated_err = _translate_error(str(raw_detail), api_id) if raw_status == 'ERROR' else raw_detail
+            receipt = _report_writer.extract_receipt(raw_detail or result, api_id, raw_status)
             if receipt.get('status') == 'SUCCESS':
                 receipt['status'] = raw_status
             if raw_status == 'ERROR' and translated_err and not receipt.get('error'):
@@ -891,14 +932,14 @@ def execute_dcc_skill(self, payload: dict):
                 'BLOCKED', 'AUDIT_FAILED', 'NEEDS_ATTENTION'
             ) else 'STEP_ERROR'
             _write_audit(audit_status, str(raw_detail))
-            _finalize_runtime_report(raw_status if raw_status != 'ERROR' else 'SKILL_ERROR',
+            _finalize_runtime_report(raw_status if raw_status != 'ERROR' else 'ERROR',
                                      error=str(translated_err))
-            return {'task_id': task_id, 'status': raw_status if raw_status != 'ERROR' else 'SKILL_ERROR',
+            return {'task_id': task_id, 'status': raw_status if raw_status != 'ERROR' else 'ERROR',
                     'detail': raw_detail,
                     'error': translated_err,
                     'report_path': report_path}
 
-        receipt = _report_writer.extract_receipt(raw_detail or result, skill_id, 'SUCCESS')
+        receipt = _report_writer.extract_receipt(raw_detail or result, api_id, 'SUCCESS')
         _report_writer.upsert_step_finished(
             report_path, step_report_context, receipt,
             worker_status='SUCCESS', raw_detail=str(raw_detail),
@@ -924,11 +965,6 @@ def execute_dcc_skill(self, payload: dict):
         if isinstance(exc, SoftTimeLimitExceeded):
             _write_audit('TIMEOUT', 'Soft time limit exceeded (9 minutes). Terminating worker.')
             _finalize_runtime_report('TIMEOUT', error='Soft time limit exceeded (9 minutes). Terminating worker.')
-            if worker and hasattr(worker, 'shutdown'):
-                try:
-                    worker.shutdown()
-                except Exception:
-                    pass
             raise
 
         tb = traceback.format_exc()
@@ -937,11 +973,8 @@ def execute_dcc_skill(self, payload: dict):
         raise self.retry(exc=exc)
 
     finally:
-        if worker and hasattr(worker, 'shutdown'):
-            try:
-                worker.shutdown()
-            except Exception:
-                logger.warning(f'[{task_id}] Worker shutdown 异常', exc_info=True)
+        # DCC Worker 由 service_manager 统一维护，任务完成后保持 warm pool。
+        pass
 
 
 # ── 工作流执行（跨 DCC 分段编排） ──
@@ -955,8 +988,9 @@ def execute_workflow(self, payload: dict):
     """
     工作流执行：支持跨 DCC 编排 + 断点恢复 + 实时进度推送。
 
-    将步骤按 DCC 类型分段（Segment），每段通过 apply_async 异步派发，
-    段间通过 Redis 持久化 outputs 字典传递中间结果。
+    将步骤按 DCC 类型分段（Segment），但在当前 CGI Worker 内同步执行每段，
+    段间通过 Redis 持久化 outputs 字典传递中间结果。不会在 Celery task 内
+    嵌套 apply_async，也不会轮询另一个 Worker。
 
     断点恢复：重新提交同一 task_id 时，自动跳过已完成段。
     进度推送：每个 segment/step 的开始/结束事件通过 Redis Pub/Sub 推送。
@@ -1111,13 +1145,13 @@ def execute_workflow(self, payload: dict):
             pass
 
         # ── 按 DCC 类型分段 ──
-        _reload_skill_registry()
+        _reload_api_registry()
         segments = []  # [(dcc_type, [steps])]
         current_dcc = None
         current_steps = []
 
         for step in steps:
-            step_dcc = get_skill_dcc(step['skill_id'])
+            step_dcc = _step_dcc(step)
             if step_dcc != current_dcc:
                 if current_steps:
                     segments.append((current_dcc, current_steps))
@@ -1167,9 +1201,12 @@ def execute_workflow(self, payload: dict):
                 )
                 resolved_step = {
                     'step_id': step.get('step_id', ''),
-                    'skill_id': step['skill_id'],
                     'parameters': resolved_params,
                 }
+                if step.get('api_id'):
+                    resolved_step['api_id'] = step['api_id']
+                else:
+                    resolved_step['api_id'] = step['api_id']
                 if step.get('source_path'):
                     resolved_step['source_path'] = _resolve_template_vars(
                         {'source_path': step.get('source_path')},
@@ -1196,15 +1233,12 @@ def execute_workflow(self, payload: dict):
 
             # 构建链式 payload：steps 用 resolved（已解析 input/config/跨段 outputs），
             # chain 引擎内部还会按每步完成后的 _chain_outputs 补解析剩余模板。
-            from core.manifest import get_dcc_queue
-            queue = get_dcc_queue(seg_dcc)
-
             chain_payload = {
                 'task_id': seg_task_id,
                 'source_path': seg_source_path,
                 'project': project,
                 'asset_name': asset_name,
-                'skill_chain': resolved_steps,       # 跨段已解析；同段模板保留待 chain 补解析
+                'api_chain': resolved_steps,       # 跨段已解析；同段模板保留待 chain 补解析
                 'workflow_id': task_id,              # 注入 wf_id 供子链发布进度事件
                 'segment_index': seg_idx,            # 注入段索引
                 'run_dir': str(run_dir),             # 共用 workflow 沙盒，不要再造
@@ -1216,33 +1250,28 @@ def execute_workflow(self, payload: dict):
                 '_workflow_step_total': _planned_step_total,
             }
 
-            # ── 异步派发子段，独立 Celery task context ──
-            seg_async = execute_skill_chain.apply_async(
-                args=[chain_payload], queue=queue, task_id=seg_task_id
+            # ── 在同一 Celery Worker 内同步执行子段 ──
+            # Task.apply 只建立本地 request context，不向 Redis 再投递任务，
+            # 因而不会形成 workflow → workflow worker → DCC worker 的嵌套死锁。
+            _segment_start = time.time()
+            seg_local = execute_api_chain.apply(
+                args=[chain_payload], task_id=seg_task_id, throw=False
             )
-
-            # 轮询等待子段完成（Celery 禁止在 task 内 .get()）。
-            # 不设置硬超时：大型 DCC 资产允许长时间运行，只在 worker 死亡时中断。
-            _poll_start = time.time()
-            seg_result = None
-            from core.service_manager import is_worker_alive
-            while True:
-                time.sleep(3)
-                if seg_async.ready():
-                    raw = seg_async.result
-                    if isinstance(raw, Exception):
-                        seg_result = {'status': 'CHAIN_ERROR', 'error': str(raw), 'chain_results': []}
-                    elif isinstance(raw, dict):
-                        seg_result = raw
-                    else:
-                        seg_result = {'status': 'CHAIN_ERROR', 'error': f'意外结果类型: {type(raw)}', 'chain_results': []}
-                    break
-                
-                # 防假死机制：如果负责执行的 Worker 进程已经死亡，直接阻断，避免死等 25 分钟
-                worker_alive, _ = is_worker_alive(seg_dcc)
-                if not worker_alive:
-                    seg_result = {'status': 'CHAIN_ERROR', 'error': f'DCC Worker ({seg_dcc}) 进程意外死亡或丢失', 'chain_results': []}
-                    break
+            raw = seg_local.result
+            if isinstance(raw, Exception):
+                seg_result = {
+                    'status': 'CHAIN_ERROR',
+                    'error': str(raw),
+                    'chain_results': [],
+                }
+            elif isinstance(raw, dict):
+                seg_result = raw
+            else:
+                seg_result = {
+                    'status': 'CHAIN_ERROR',
+                    'error': f'意外结果类型: {type(raw)}',
+                    'chain_results': [],
+                }
 
             seg_status = seg_result.get('status', 'UNKNOWN')
             seg_chain_results = seg_result.get('chain_results', [])
@@ -1251,11 +1280,7 @@ def execute_workflow(self, payload: dict):
             # 计算段耗时：首尾 chain_result 时间戳差（兜底 0）
             _seg_ts_min = 0.0
             if seg_chain_results:
-                try:
-                    _seg_start = seg_async.date_start if hasattr(seg_async, 'date_start') else None
-                except Exception:
-                    _seg_start = None
-                _seg_ts_min = (time.time() - _poll_start) / 60
+                _seg_ts_min = (time.time() - _segment_start) / 60
 
             # SEGMENT audit 填结构化 JSON，供 write_task_report workflow 模式消费
             seg_detail = {
@@ -1295,7 +1320,7 @@ def execute_workflow(self, payload: dict):
                 try:
                     inner = json.loads(cr.get('detail', '{}'))
                     step = resolved_steps[i]
-                    _used_id = step.get('step_id') or inner.get('step_id', '') or cr.get('skill_id', '')
+                    _used_id = step.get('step_id') or inner.get('step_id', '') or cr.get('api_id', '')
                     outputs = inner.get('outputs', {})
                     if _used_id and outputs:
                         all_outputs[_used_id] = outputs
@@ -1405,25 +1430,9 @@ def execute_workflow(self, payload: dict):
         }
 
     finally:
-        # workflow 跑完（成功/失败都）自动关 DCC worker 省资源（用户 2026-07-08 拍板·甲）。
-        # workflow worker solo 一次只跑一个 workflow，此刻 maya/blender 段已完、空闲，权威停。
-        try:
-            from core.service_manager import stop_worker
-            for _dcc in ('maya', 'blender'):
-                stop_worker(_dcc, timeout=6.0)
-        except Exception:
-            pass
-        # workflow worker 自身也跑完即温关（用户 2026-07-08 拍板·乙：跑完全清零，宁可下次冷启动）。
-        # 不能在此直接 stop 自己：acks_late=True 下 ack 在 return 之后，硬杀会触发
-        # reject_on_worker_lost 重投 → 整条 workflow 重跑。改发温关广播（fire-and-forget）：
-        # solo 池此刻正跑本任务收不到控制命令，必然排到「本任务 return → ack → 消费 shutdown
-        # → 退出」，先 ack 再退，不重投。终态已在 WORKFLOW_SUCCESS 落盘、_read_audit 读盘不读
-        # 结果后端，故 worker 退了客户端照样查得到。温关由 Celery 自删 pidfile，下次提交
-        # _ensure_worker('workflow') 冷启动重起（纯 Python 秒级，无 mayapy）。
-        try:
-            self.app.control.shutdown(destination=[self.request.hostname])
-        except Exception:
-            pass
+        # Worker 与 DCC warm pool 由 service_manager/Dashboard 统一维护。
+        # 单个 workflow 结束后保持进程存活，后续任务直接排队复用。
+        pass
 
 
 def _resolve_template_vars(params: dict, outputs: dict, extra_params: dict, config: dict = None) -> dict:

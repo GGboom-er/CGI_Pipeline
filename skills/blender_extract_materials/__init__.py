@@ -1,1 +1,0 @@
-from skills.blender_extract_materials.blender_extract_materials import execute

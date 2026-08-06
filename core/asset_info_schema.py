@@ -15,7 +15,7 @@ from typing import TypedDict, List, Dict, Optional, Literal, Any
 # ═══════════════════════════════════════════
 # compare() 返回结构契约（TypedDict，运行时零开销）
 #
-# 消费者：pipeline_compare_asset skill、maya_sync_rig_incremental。
+# 消费者：pipeline_compare_asset API、maya_sync_rig_incremental API。
 #
 # 主输出是 pairing_groups（连通分量列表）——sync 消费它按组执行。
 # 其余字段（paired/only_a/only_b/merge_groups/split_groups/hierarchy/

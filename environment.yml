@@ -1,9 +1,8 @@
-# ── CGI Pipeline v2.0 — Conda 环境定义 ──
-# 使用方法：conda env create -f environment.yml
-# 重建方法：conda env remove -n cgi_pipeline && conda env create -f environment.yml
+# ── Notes 通用 Python 基座（CGI Pipeline 兼容）— Conda 环境定义 ──
+# 仅由 bin/setup.bat 以 --prefix 写入 Notes 受管运行区；不要按 name 创建第二套环境。
+# 重建方法：先停止使用该基座的服务，再由 bin/setup.bat 更新该 prefix。
 # 行业标准：VFX Reference Platform CY2025 → Python 3.11
 
-name: cgi_pipeline
 channels:
   - conda-forge
   - defaults

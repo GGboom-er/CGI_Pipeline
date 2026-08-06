@@ -2,61 +2,64 @@
 # ── 操作类 MCP Tools ──
 # 从 server.py 拆分：所有修改场景数据或触发执行的 Tool
 
+import asyncio
 import sys
-import os
-import socket
-from pathlib import Path
-from fastmcp.tools import Tool
 
 from mcp_server.models import (
     ExecCodeInput,
+    UEExecCodeInput,
+    UEActionInput,
     ExecuteChainInput,
-    ExecuteSkillInput,
+    ExecuteApiInput,
     StartWorkerInput,
     CopyFilesInput,
     CompareAssetInput,
     SyncRigAssetInput,
     ExecuteWorkflowInput,
-    create_skill_model,
 )
 from mcp_server.internals import (
     _submit_to_celery,
+    _submit_api_to_celery,
     _submit_chain,
     _submit_workflow,
     _ensure_worker,
-    _is_pid_alive,
-    _SKILL_MAP,
     PROJECT_ROOT,
 )
 
-from core.skill_registry import get_all_skills, get_skill_map
+async def _execute_ue_action(foreground_port, action, payload, timeout):
+    """WebSocket 直连 UE_MCP_Bridge，执行插件的原生 method。
 
+    action 取插件原生 method 名，payload 用插件侧原生参数名，结果原样返回。
+    """
+    from dccs.ue import foreground_client
 
-SKILL_TIERS = {'read', 'write', 'destructive'}
+    return await asyncio.to_thread(
+        foreground_client.execute_action,
+        foreground_port,
+        action,
+        payload,
+        timeout,
+    )
 
 
 # ── AI 工具面白名单(单一真相源)──
 # 研究(Harness 130→11、IBM"只暴露业务级"、Anthropic 有效工具):工具越少 AI 选得越准。
-# 全部 skill 能力保留,但不各占 MCP 按钮——经 execute_skill(按名调)/工作流(按名编排)触达,
-# 不占 AI 注意力。maya_list_skills = 命令目录(API 手册)。
+# API 能力统一经 execute_api 或 workflow 入口触达，不再动态注册第二套具名入口。
 # 收/放某按钮:改本集合 + reload 即生效,可回滚。startup(server.py)与 reload 共用本 prune。
 EXPOSED_TOOLS = {
-    "pipeline_execute_workflow", "list_workflows",     # 跑工作流(生产主入口)
-    "maya_list_skills", "execute_skill",               # 命令库:目录 + 按名调
-    "maya_exec_code", "blender_exec_code", "maya_list_foreground_sessions",  # 调试
-    "maya_start_worker", "pipeline_restart_worker", "pipeline_service_status",  # worker 控制
-    "maya_query_task", "maya_resolve_asset",           # 查询
-    "reload_server",                                    # 开发
+    "pipeline_execute_workflow", "list_workflows",
+    "list_apis", "api_help", "execute_api",
 }
 
 
 async def prune_tools_to_whitelist(mcp):
-    """把 EXPOSED_TOOLS 之外的工具从 MCP 面移除(skill 能力仍在,只是不作按钮)。"""
+    """只保留 API 目录、API 执行和 workflow 入口。"""
     for t in await mcp.list_tools():
         name = getattr(t, "name", None)
         if name and name not in EXPOSED_TOOLS:
             try:
-                mcp.remove_tool(name)
+                # FastMCP 3.x：local_provider 是工具注册表的正式删除入口。
+                mcp.local_provider.remove_tool(name)
             except Exception:
                 pass
 
@@ -65,12 +68,23 @@ async def prune_tools_to_whitelist(mcp):
 from mcp_server.ports import discover_maya_ports
 
 
-def _require_explicit_foreground_port(params, tool_name):
-    """foreground 模式必须显式传端口，避免多 Maya 实例时误连默认端口。"""
+def _require_explicit_foreground_port(params, tool_name, dcc='maya'):
+    """foreground mode requires an explicit port for the matching DCC."""
     if getattr(params, 'execution_mode', 'background') != 'foreground':
         return None
-    if 'foreground_port' in getattr(params, 'model_fields_set', set()):
+    if getattr(params, 'foreground_port', None) is not None:
         return None
+    if dcc == 'blender':
+        from dccs.blender.foreground_client import discover_blender_sessions
+        sessions = discover_blender_sessions()
+        return {
+            'status': 'NEEDS_ATTENTION',
+            'tool': tool_name,
+            'error': 'foreground 模式必须显式传 foreground_port，避免误连其他 Blender 会话。',
+            'active_ports': [session['port'] for session in sessions],
+            'active_sessions': sessions,
+            'recovery_hint': '先用 blender_list_foreground_sessions 确认会话，再显式传 foreground_port。',
+        }
     return {
         'status': 'NEEDS_ATTENTION',
         'tool': tool_name,
@@ -80,135 +94,40 @@ def _require_explicit_foreground_port(params, tool_name):
     }
 
 
-def _skill_tool_annotations(skill: dict) -> dict:
-    """Build MCP annotations from SKILL.md frontmatter tier."""
-    skill_id = skill.get('skill_id', 'unknown_skill')
-    tier = str(skill.get('tier') or 'destructive').strip().lower()
-    if tier not in SKILL_TIERS:
-        tier = 'destructive'
-
-    is_read = tier == 'read'
-    is_destructive = tier == 'destructive'
-    return {
-        "title": skill.get('name', skill_id),
-        "readOnlyHint": is_read,
-        "destructiveHint": is_destructive,
-        "idempotentHint": is_read,
-        "openWorldHint": True,
-    }
-
-
 def register_operation_tools(mcp):
     """将所有操作类 Tools 注册到 MCP Server 实例"""
 
-    # ── 动态注册所有标准技能 Tools ──
-    from core.skill_registry import get_all_skills
-    
-    # ── 白名单式暴露 ──
-    # 只有 SKILL.md frontmatter 显式声明 mcp_expose: true 的技能才注册为具名 MCP 工具。
-    # 新增 skill 默认不暴露（需显式开启），符合最小暴露原则；未暴露的技能仍可经
-    # execute_skill(skill_id=...) 兜底调用，能力无损。不声明 mcp_expose 的常见原因：
-    # 有专属手动 Tool / 低频可被 exec_code 替代 / 被更高级工具覆盖 / 仅内部或 workflow 调用。
-    
-    for skill in get_all_skills():
-        skill_id = skill.get('skill_id')
-        if not skill_id or not skill.get('mcp_expose', False):
-            continue
-            
-        # 动态创建 Input Model
-        InputModel = create_skill_model(skill)
-        
-        # 闭包捕获，避免循环变量泄漏
-        def make_tool_func(sid, s_desc):
-            async def dynamic_tool(params: InputModel) -> dict:
-                guard = _require_explicit_foreground_port(params, sid)
-                if guard:
-                    return guard
-
-                # 提取 parameters (排除 _SkillInput 的基础字段)
-                raw_params = params.model_dump()
-                p_project = raw_params.pop('project', 'default')
-                p_asset = raw_params.pop('asset_name', 'untitled')
-                p_source = raw_params.pop('source_path', '')
-                
-                return _submit_to_celery(sid, {
-                    'project': p_project,
-                    'asset_name': p_asset,
-                    'source_path': p_source,
-                    'parameters': raw_params,
-                })
-            
-            dynamic_tool.__name__ = sid
-            dynamic_tool.__doc__ = s_desc
-            return dynamic_tool
-            
-        desc = skill.get('description', f"Execute skill {skill_id}. Returns task_id (async).")
-        tool_fn = make_tool_func(skill_id, desc)
-        
-        tool_obj = Tool.from_tool(
-            tool_fn,
-            name=skill_id,
-            description=desc,
-            annotations=_skill_tool_annotations(skill),
-        )
-        mcp.add_tool(tool_obj)
-
-
-    # ── 通用技能执行 ──
-
     @mcp.tool(
-        name="execute_skill",
+        name="execute_api",
         annotations={
-            "title": "执行任意已注册技能（Maya/Blender 通用）",
+            "title": "执行一个 CGI 原子 API",
             "readOnlyHint": False,
             "destructiveHint": True,
             "idempotentHint": False,
             "openWorldHint": True,
         }
     )
-    async def execute_skill(params: ExecuteSkillInput) -> dict:
-        """通用技能执行入口（兜底接口）。
+    async def execute_api_tool(params: ExecuteApiInput) -> dict:
+        """Execute one catalog API through the existing DCC Worker path.
 
-        异步执行，返回 task_id。优先使用具名 Tool（如 maya_clean_skinweights）。
-        仅在调用没有独立 Tool 的技能时使用，如 fix_shape_names、udim_material_split、
-        import_abc、assign_udim_materials、blender_export_abc 等。
-        支持 Maya 和 Blender 技能，DCC 类型由 skill 注册信息自动推断。
-        用 maya_list_skills 查看所有可用 skill_id 及其参数。
+        API is the deterministic layer: use api_help first for inputs and
+        operation modes. Workflows remain the composition layer.
         """
-        from mcp_server.internals import _SKILL_MAP
-        guard = _require_explicit_foreground_port(params, 'execute_skill')
-        if guard:
-            return guard
-
-        # exec_code / blender_exec_code 有专属具名工具，兜底入口挡掉，避免同一能力多入口
-        _NAMED_TOOL_FOR = {'exec_code': 'maya_exec_code', 'blender_exec_code': 'blender_exec_code'}
-        if params.skill_id in _NAMED_TOOL_FOR:
-            named = _NAMED_TOOL_FOR[params.skill_id]
-            return {
-                'status': 'ERROR',
-                'error': f'技能 "{params.skill_id}" 有专属具名工具，请直接用 {named}；execute_skill 仅兜底无具名工具的技能。',
-                'use_tool': named,
-                'recovery_hint': f'改调用 {named}。',
-            }
-
-        if params.skill_id not in _SKILL_MAP:
-            return {
-                'status': 'ERROR',
-                'error': f'未知技能 "{params.skill_id}"',
-                'available_skills': list(_SKILL_MAP.keys()),
-                'recovery_hint': '使用 maya_list_skills 查看所有可用技能。',
-            }
-        p = params.parameters or {}
-        p['execution_mode'] = params.execution_mode
-        p['foreground_port'] = params.foreground_port
-        
-        return _submit_to_celery(params.skill_id, {
+        context = {
+            'execution_mode': params.execution_mode,
+            'foreground_port': params.foreground_port,
             'project': params.project,
             'asset_name': params.asset_name,
             'source_path': params.source_path,
-            'parameters': p,
+            'sync': params.sync,
+        }
+        return _submit_api_to_celery(params.api_id, {
+            'project': params.project,
+            'asset_name': params.asset_name,
+            'source_path': params.source_path,
+            'params': params.params,
+            'context': context,
         })
-
 
     # ── 高级 Tools ──
 
@@ -229,10 +148,10 @@ def register_operation_tools(mcp):
         使用 pidfile 防重复：Worker 已在运行时直接返回 SUCCESS。
         现在提交任务时会自动拉起 Worker，通常不需要手动调用此接口。
         """
-        if params.dcc not in ("maya", "blender", "workflow", "pipeline"):
+        if params.dcc not in ("cgi", "maya", "blender", "ue", "workflow", "pipeline"):
             return {"status": "ERROR", "message": f"暂不支持启动 {params.dcc} worker"}
 
-        dcc = 'maya' if params.dcc == 'pipeline' else params.dcc
+        dcc = 'cgi'
         pidfile = PROJECT_ROOT / 'runtime' / f'worker_{dcc}.pid'
 
         from core.service_manager import ensure_worker_healthy, get_worker_health
@@ -277,9 +196,9 @@ def register_operation_tools(mcp):
     )
     async def pipeline_restart_worker(params: StartWorkerInput) -> dict:
         """重启指定后台 Worker。用于 PID 存活但 Celery 心跳丢失、队列无响应等场景。"""
-        if params.dcc not in ("maya", "blender", "workflow", "pipeline"):
+        if params.dcc not in ("cgi", "maya", "blender", "ue", "workflow", "pipeline"):
             return {"status": "ERROR", "message": f"暂不支持重启 {params.dcc} worker"}
-        dcc = 'maya' if params.dcc == 'pipeline' else params.dcc
+        dcc = 'cgi'
         from core.service_manager import restart_worker, get_worker_health
         ok = restart_worker(dcc)
         return {
@@ -340,9 +259,64 @@ def register_operation_tools(mcp):
 
 
     @mcp.tool(
+        name="ue_exec_code",
+        annotations={
+            "title": "在 Unreal Editor 中执行 Python 代码",
+            "readOnlyHint": False,
+            "destructiveHint": True,
+            "idempotentHint": False,
+            "openWorldHint": True,
+        }
+    )
+    async def ue_exec_code(params: UEExecCodeInput) -> dict:
+        """Execute Python in the selected open Unreal Editor.
+
+        Call ue_list_foreground_sessions first and pass its foreground_port.
+        The UE localhost bridge is internal transport; this tool is the sole
+        AI-facing UE execution entry. Code may print and may assign a JSON-
+        serializable value to ``result``. The response includes result, stdout,
+        stderr, traceback, session identity, timeout, and connection failures.
+        """
+        from dccs.ue.foreground_client import execute_python
+
+        return await asyncio.to_thread(
+            execute_python,
+            params.foreground_port,
+            params.code,
+            params.description,
+            params.timeout_seconds,
+        )
+
+
+    @mcp.tool(
+        name="ue_exec_action",
+        annotations={
+            "title": "调用 Unreal Editor 结构化动作",
+            "readOnlyHint": False,
+            "destructiveHint": True,
+            "idempotentHint": False,
+            "openWorldHint": True,
+        }
+    )
+    async def ue_exec_action(params: UEActionInput) -> dict:
+        """Call an existing structured Unreal plugin action through CGI Pipeline.
+
+        Use this for editor operations that standard UE Python does not expose,
+        such as Blueprint graph editing. Clients still connect only to the
+        cgi_pipeline MCP.
+        """
+        return await _execute_ue_action(
+            params.foreground_port,
+            params.action,
+            params.payload,
+            params.timeout_seconds,
+        )
+
+
+    @mcp.tool(
         name="maya_execute_chain",
         annotations={
-            "title": "链式批处理（多技能顺序执行）",
+            "title": "链式批处理（多 API 顺序执行）",
             "readOnlyHint": False,
             "destructiveHint": True,
             "idempotentHint": False,
@@ -350,30 +324,30 @@ def register_operation_tools(mcp):
         }
     )
     async def maya_execute_chain(params: ExecuteChainInput) -> dict:
-        """一次性提交多步技能链，在同一个 DCC 会话中顺序执行。支持 Maya 和 Blender。
+        """一次性提交多步 API 链，在同一个 DCC 会话中顺序执行。支持 Maya 和 Blender。
 
         异步执行，返回 task_id。链引擎自动打开 source_path，步骤中不需要再传 source_path。
-        DCC 类型由第一个技能的注册信息自动推断（Maya 技能 → Maya 进程，Blender 技能 → Blender 进程）。
-        链内所有技能必须属于同一个 DCC，混合链会被拒绝。
+        DCC 类型由第一个 API 的 manifest 自动推断（Maya API → Maya 进程，Blender API → Blender 进程）。
+        链内所有 API 必须属于同一个 DCC，混合链会被拒绝。
 
         关键规则：
         - save_scene 必须放在链的最后一步（Maya 链）
         - 任何步骤失败 → 链中断，返回 CHAIN_ABORTED
         - 步骤返回 AUDIT_FAILED/BLOCKED/ERROR → 链中止并生成报告；后台流程不等待人工继续
 
-        Maya 链典型用法：clean_skinweights → fix_shape_names → save_scene
-        Blender 链典型用法：blender_export_abc → blender_build_asset_info
+        Maya 链典型用法：maya.rig.clean_skinweights → maya.asset.save_scene
+        Blender 链典型用法：blender.asset.blender_export_abc → blender.asset.blender_build_asset_info
         """
         guard = _require_explicit_foreground_port(params, 'maya_execute_chain')
         if guard:
             return guard
 
-        chain_data = [{'skill_id': s.skill_id, 'parameters': s.parameters} for s in params.skill_chain]
+        chain_data = [{'api_id': s.api_id, 'parameters': s.parameters} for s in params.api_chain]
         return _submit_chain({
             'source_path': params.source_path,
             'project': params.project,
             'asset_name': params.asset_name,
-            'skill_chain': chain_data,
+            'api_chain': chain_data,
             'execution_mode': params.execution_mode,
             'foreground_port': params.foreground_port,
         })
@@ -425,7 +399,7 @@ def register_operation_tools(mcp):
 
         异步执行，返回 task_id。任务框架会创建沙盒和 .info 目录；
         compare_result.json 写入沙盒 .info，Markdown 内容进入统一任务报告。
-        DCC 源文件请先通过对应采集/导出 skill 转换为 _info.json 或 .abc。
+        DCC 源文件请先通过对应采集/导出 API 转换为 _info.json 或 .abc。
         """
         return _submit_to_celery('pipeline_compare_asset', {
             'project': params.project,
@@ -455,7 +429,7 @@ def register_operation_tools(mcp):
 
         异步执行（Maya 链），返回 task_id。
         `source_path` 是 Celery 框架层键名——这里承载 **target 侧 rig 场景**。
-        `compare_result` 必须来自前置对比 skill。
+        `compare_result` 必须来自前置对比 API。
         `source_abc` 或 `source_info` 至少填一个；同时提供时优先 ABC。
         操作包裹在 undo chunk 中。
         """
@@ -563,7 +537,7 @@ def register_operation_tools(mcp):
         }
     )
     async def reload_server() -> dict:
-        """热重载 MCP Server 业务模块，使 core/ 和 skills/ 的代码修改立即生效。
+        """热重载 MCP Server 业务模块，使 core/、api/ 和 DCC 适配器修改立即生效。
 
         清除已缓存的 Python 模块，移除并重新注册所有 Tool handler（替换旧闭包），
         使 tools_readonly/tools_operations 改动对客户端立即生效。不会中断 MCP 连接。
@@ -571,7 +545,7 @@ def register_operation_tools(mcp):
         import importlib
         reloaded = []
         for mod_name in list(sys.modules.keys()):
-            if mod_name.startswith(('core.', 'skills.', 'mcp_server.', 'dccs.')):
+            if mod_name.startswith(('core.', 'api.operations.', 'mcp_server.', 'dccs.')):
                 try:
                     importlib.reload(sys.modules[mod_name])
                     reloaded.append(mod_name)
@@ -610,11 +584,11 @@ def register_operation_tools(mcp):
                 "message": "需要彻底重启 MCP server 进程",
             }
 
-        from mcp_server.internals import _SKILLS
+        from mcp_server.internals import _APIS
         return {
             "status": "RELOADED",
             "reloaded_modules": reloaded,
-            "skills_count": len(_SKILLS),
+            "apis_count": len(_APIS),
             "tools_reregistered": re_registered,
-            "message": f"已热重载 {len(reloaded)} 个模块，重注册 {re_registered} 个 Tool，{len(_SKILLS)} 个技能",
+            "message": f"已热重载 {len(reloaded)} 个模块，重注册 {re_registered} 个 Tool，{len(_APIS)} 个 API",
         }

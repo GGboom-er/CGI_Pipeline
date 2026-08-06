@@ -24,7 +24,7 @@ def _build_env(worker_id: str) -> dict:
 
 
 class BlenderWorker:
-    """一次性 Blender 进程：start → run_skill × N → shutdown"""
+    """可复用 Blender 进程：start → run_api × N → shutdown。"""
 
     def __init__(self, source_path: str = None):
         self.worker_id  = str(uuid.uuid4())[:8]
@@ -67,7 +67,7 @@ class BlenderWorker:
             err = (log_dir / f'blender_{self.worker_id}.log').read_text()[:500]
             raise RuntimeError(f'Blender 启动失败: {err}')
 
-    def run_skill(self, payload: dict) -> dict:
+    def run_api(self, payload: dict) -> dict:
         task_id = payload['task_id']
         result_file = self.result_dir / f'{task_id}.json'
         tmp = self.cmd_file.with_suffix('.tmp')
@@ -96,7 +96,7 @@ class BlenderWorker:
         """优雅退出：发送 __DIE__ → 等待退出 → 清理 IPC"""
         if self.process and self.process.poll() is None:
             try:
-                die_payload = json.dumps({'skill_id': '__DIE__'})
+                die_payload = json.dumps({'api_id': '__DIE__'})
                 tmp = self.cmd_file.with_suffix('.tmp')
                 tmp.write_text(die_payload)
                 os.replace(tmp, self.cmd_file)

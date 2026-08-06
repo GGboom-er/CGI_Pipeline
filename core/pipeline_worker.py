@@ -1,5 +1,5 @@
 # core/pipeline_worker.py
-# 轻量级 Pipeline Worker — 不启动 DCC 进程，直接在 Celery 进程内执行技能
+# 轻量级 Pipeline Worker — 不启动 DCC 进程，直接在 Celery 进程内执行API
 
 import importlib
 import json
@@ -23,11 +23,11 @@ class PipelineWorker:
     def start(self):
         pass
 
-    def run_skill(self, payload: dict) -> dict:
-        skill_id = payload.get('skill_id', '')
+    def run_api(self, payload: dict) -> dict:
+        api_id = payload.get('api_id', '')
         task_id = payload.get('task_id', 'unknown')
         try:
-            mod = importlib.import_module(f'skills.{skill_id}')
+            mod = importlib.import_module(f'api.operations.{api_id}')
             importlib.reload(mod)
             result = mod.execute(payload)
             if isinstance(result, dict):

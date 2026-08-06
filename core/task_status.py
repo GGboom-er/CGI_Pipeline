@@ -9,7 +9,6 @@
 TERMINAL_STATUSES: frozenset[str] = frozenset({
     'SUCCESS',
     'ERROR',
-    'SKILL_ERROR',
     'BLOCKED',
     'AUDIT_FAILED',
     'STEP_ERROR',

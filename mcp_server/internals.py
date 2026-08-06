@@ -24,12 +24,14 @@ AUDIT_DIR = PROJECT_ROOT / 'audit'
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from core.skill_registry import get_all_skills, get_skill_map, get_skill_dcc
+from core.api_registry import get_all_apis, get_api_map, get_api_dcc, resolve_api_id
 from core.manifest import get_dcc_queue, get_dcc_queue_map
 from core.task_status import TERMINAL_STATUSES
+from api.registry import get_api
+from api.contract import ApiContractError, validate_params
 
-_SKILLS = get_all_skills()
-_SKILL_MAP = get_skill_map()
+_APIS = get_all_apis()
+_API_MAP = get_api_map()
 _DCC_QUEUE_MAP = get_dcc_queue_map()
 
 
@@ -46,9 +48,9 @@ def _is_pid_alive(pid: int) -> bool:
             return False
 
 
-def _resolve_queue(skill_id: str) -> str:
-    """根据技能注册的 DCC 类型返回对应队列名"""
-    dcc = get_skill_dcc(skill_id)
+def _resolve_queue(api_id: str) -> str:
+    """返回统一 CGI 队列；保留 DCC 查找只用于兼容和校验。"""
+    dcc = get_api_dcc(api_id)
     return get_dcc_queue(dcc)
 
 
@@ -58,16 +60,44 @@ def _ensure_worker(dcc: str) -> tuple[bool, str]:
     return ensure_worker_healthy(dcc)
 
 
-def _submit_to_celery(skill_id: str, payload: dict) -> dict:
+def _append_submission_audit(task_id: str, api_id: str, queue: str, status: str = 'SUBMITTED', detail: str = '') -> Path:
+    """记录提交阶段，避免排队任务或提交中断伪装成 NOT_FOUND。"""
+    AUDIT_DIR.mkdir(parents=True, exist_ok=True)
+    audit_path = AUDIT_DIR / f'{task_id}.json'
+    entry = {
+        'task_id': task_id,
+        'api_id': api_id,
+        'status': status,
+        'ts': time.time(),
+        'detail': detail or f'任务已提交至 {queue}，等待 Worker 开始执行',
+        'queue': queue,
+    }
+    with audit_path.open('a', encoding='utf-8') as handle:
+        handle.write(json.dumps(entry, ensure_ascii=False) + '\n')
+    return audit_path
+
+
+def _submit_to_celery(api_id: str, payload: dict) -> dict:
     """统一 Celery / Foreground 提交入口"""
+    api_id = resolve_api_id(api_id)
     task_id = payload.get('task_id', f"task-{uuid.uuid4().hex[:12]}")
     payload['task_id'] = task_id
-    payload['skill_id'] = skill_id
+    payload['api_id'] = api_id
     payload['submitted_at'] = time.time()
     
     execution_mode = payload.get('parameters', {}).get('execution_mode', 'background')
     if execution_mode == 'foreground':
-        from mcp_server.foreground_client import submit_foreground_task
+        dcc = get_api_dcc(api_id)
+        if dcc == 'blender':
+            from dccs.blender.foreground_client import submit_foreground_task
+        elif dcc == 'maya':
+            from mcp_server.foreground_client import submit_foreground_task
+        else:
+            return {
+                'task_id': task_id,
+                'status': 'SUBMIT_FAILED',
+                'error': f'Foreground mode is not supported for DCC: {dcc}',
+            }
         # foreground 默认走 sync：客户端 schema 缓存里可能没 sync 字段（MCP 协议
         # tools/list_changed 通知不一定被客户端响应），所以由服务端强制默认开，
         # 体验跟 Script Editor 一致。显式 sync=False 可回退原异步行为。
@@ -81,19 +111,17 @@ def _submit_to_celery(skill_id: str, payload: dict) -> dict:
         return {
             'task_id': task_id,
             'status': 'SUBMITTED',
-            'skill_id': skill_id,
-            'message': '任务已派发至前台 Maya 实例执行 (异步跟踪中)',
+            'api_id': api_id,
+            'message': f'任务已派发至前台 {dcc.title()} 实例执行 (异步跟踪中)',
         }
-        
+
     # ── 后台模式：清除框架路由参数，防止 Worker 端 Schema 校验拒绝 ──
     params = payload.get('parameters', {})
     params.pop('execution_mode', None)
     params.pop('foreground_port', None)
     params.pop('sync', None)
-    
-    queue = _resolve_queue(skill_id)
 
-    # 确保 Redis 就绪后再拉起 Worker
+    queue = _resolve_queue(api_id)
     from core.service_manager import start_redis
     if not start_redis():
         return {
@@ -102,7 +130,7 @@ def _submit_to_celery(skill_id: str, payload: dict) -> dict:
             'error': 'Redis 未运行且启动失败',
             'recovery_hint': '请检查 Memurai/Redis 是否已安装并可执行',
         }
-    ok, worker_msg = _ensure_worker(_SKILL_MAP.get(skill_id, {}).get('dcc', 'maya'))
+    ok, worker_msg = _ensure_worker(_API_MAP.get(api_id, {}).get('dcc', 'maya'))
     if not ok:
         return {
             'task_id': task_id,
@@ -110,18 +138,29 @@ def _submit_to_celery(skill_id: str, payload: dict) -> dict:
             'error': worker_msg,
             'recovery_hint': '请检查 Redis/Celery Worker 日志，或调用 pipeline_service_status 查看心跳状态。',
         }
-
     try:
         from core.service_manager import get_celery_app
         _app = get_celery_app()
-        result = _app.send_task('core.tasks.execute_dcc_skill', args=[payload], task_id=task_id, queue=queue)
+        _append_submission_audit(
+            task_id, api_id, queue, status='DISPATCHING',
+            detail=f'准备提交至 {queue} 队列',
+        )
+        _app.send_task('core.tasks.execute_api_operation', args=[payload], task_id=task_id, queue=queue)
+        _append_submission_audit(task_id, api_id, queue)
         return {
             'task_id': task_id,
             'status': 'SUBMITTED',
-            'skill_id': skill_id,
+            'api_id': api_id,
             'message': f'任务已提交至 {queue} 队列',
         }
     except Exception as e:
+        try:
+            _append_submission_audit(
+                task_id, api_id, queue, status='SUBMIT_FAILED',
+                detail=f'任务提交失败: {e}',
+            )
+        except Exception:
+            pass
         return {
             'task_id': task_id,
             'status': 'SUBMIT_FAILED',
@@ -129,6 +168,164 @@ def _submit_to_celery(skill_id: str, payload: dict) -> dict:
             'recovery_hint': '请检查：1) Redis 是否运行 2) Celery Worker 是否启动 3) Maya 是否可用',
         }
 
+
+def _submit_api_to_celery(api_id: str, payload: dict) -> dict:
+    """Submit one catalog API through the existing Worker/report path.
+
+    API execution deliberately reuses ``execute_api_operation`` as the transport
+    task.  The DCC adapter dispatches ``api_id`` to ``api.runner``; no second
+    queue, worker, or workflow implementation is created.
+    """
+    requested_api_id = str(api_id or '')
+    try:
+        api_id = resolve_api_id(requested_api_id)
+    except KeyError as exc:
+        task_id = payload.get('task_id', f"api-{uuid.uuid4().hex[:12]}")
+        return {
+            'task_id': task_id,
+            'status': 'ERROR',
+            'api_id': requested_api_id,
+            'error_code': 'API_NOT_FOUND',
+            'error': str(exc),
+            'recovery_hint': 'Use list_apis or api_help to select a registered API.',
+        }
+
+    task_id = payload.get('task_id', f"api-{uuid.uuid4().hex[:12]}")
+    payload['task_id'] = task_id
+    payload['api_id'] = api_id
+    payload['submitted_at'] = time.time()
+
+    try:
+        spec = get_api(api_id)
+    except KeyError as exc:
+        return {
+            'task_id': task_id,
+            'status': 'ERROR',
+            'api_id': api_id,
+            'error_code': 'API_NOT_FOUND',
+            'error': str(exc),
+            'recovery_hint': 'Use list_apis or api_help to select a registered API.',
+        }
+
+    try:
+        normalized_params = validate_params(spec, payload.get('params') or {})
+    except ApiContractError as exc:
+        return {
+            'task_id': task_id,
+            'status': 'ERROR',
+            'api_id': api_id,
+            'error_code': 'API_CONTRACT_ERROR',
+            'error': str(exc),
+            'recovery_hint': 'Read api_help for required inputs and choices.',
+        }
+
+    context = dict(payload.get('context') or {})
+    execution_mode = str(context.get('execution_mode') or 'background')
+    if execution_mode not in spec.get('execution_modes', []):
+        return {
+            'task_id': task_id,
+            'status': 'ERROR',
+            'api_id': api_id,
+            'error_code': 'API_CONTRACT_ERROR',
+            'error': f'{api_id} does not support execution_mode={execution_mode}',
+            'recovery_hint': 'Read api_help for supported execution modes.',
+        }
+
+    payload['api_params'] = normalized_params
+    payload['api_context'] = {
+        **context,
+        'execution_mode': execution_mode,
+        'project': payload.get('project', context.get('project', '')),
+        'asset_name': payload.get('asset_name', context.get('asset_name', '')),
+        'source_path': payload.get('source_path', context.get('source_path', '')),
+        'run_dir': context.get('run_dir', ''),
+    }
+    payload['parameters'] = {}
+
+    if execution_mode == 'foreground':
+        dcc = spec['dcc']
+        if dcc == 'maya':
+            from mcp_server.foreground_client import submit_foreground_task
+        elif dcc == 'blender':
+            from dccs.blender.foreground_client import submit_foreground_task
+        else:
+            return {
+                'task_id': task_id,
+                'status': 'SUBMIT_FAILED',
+                'api_id': api_id,
+                'error': f'Foreground mode is not supported for DCC: {dcc}',
+            }
+        port = context.get('foreground_port')
+        if port:
+            payload['parameters']['foreground_port'] = port
+        payload['parameters']['sync'] = bool(context.get('sync', True))
+        if payload['parameters']['sync']:
+            return submit_foreground_task(payload, sync=True)
+        import threading
+        threading.Thread(
+            target=submit_foreground_task,
+            args=(payload,),
+            daemon=True,
+        ).start()
+        return {
+            'task_id': task_id,
+            'status': 'SUBMITTED',
+            'api_id': api_id,
+            'message': f'API 已派发至前台 {dcc.title()} 实例执行',
+        }
+
+    queue = get_dcc_queue(spec['dcc'])
+    from core.service_manager import start_redis
+    if not start_redis():
+        return {
+            'task_id': task_id,
+            'status': 'SUBMIT_FAILED',
+            'api_id': api_id,
+            'error': 'Redis 未运行且启动失败',
+            'recovery_hint': '请检查 CGI 运行时服务状态。',
+        }
+    ok, worker_msg = _ensure_worker(spec['dcc'])
+    if not ok:
+        return {
+            'task_id': task_id,
+            'status': 'SUBMIT_FAILED',
+            'api_id': api_id,
+            'error': worker_msg,
+            'recovery_hint': '调用 pipeline_service_status 查看 Worker 心跳。',
+        }
+    try:
+        from core.service_manager import get_celery_app
+        app = get_celery_app()
+        _append_submission_audit(
+            task_id, api_id, queue, status='DISPATCHING',
+            detail=f'准备提交 API 至 {queue} 队列',
+        )
+        app.send_task(
+            'core.tasks.execute_api_operation',
+            args=[payload], task_id=task_id, queue=queue,
+        )
+        _append_submission_audit(task_id, api_id, queue)
+        return {
+            'task_id': task_id,
+            'status': 'SUBMITTED',
+            'api_id': api_id,
+            'message': f'API 已提交至 {queue} 队列',
+        }
+    except Exception as exc:
+        try:
+            _append_submission_audit(
+                task_id, api_id, queue, status='SUBMIT_FAILED',
+                detail=f'API 提交失败: {exc}',
+            )
+        except Exception:
+            pass
+        return {
+            'task_id': task_id,
+            'status': 'SUBMIT_FAILED',
+            'api_id': api_id,
+            'error': str(exc),
+            'recovery_hint': '请检查 Redis、Celery Worker 与 DCC 环境。',
+        }
 
 def _submit_chain(payload: dict) -> dict:
     """提交链式执行任务"""
@@ -141,13 +338,17 @@ def _submit_chain(payload: dict) -> dict:
         return {
             'task_id': task_id,
             'status': 'SUBMIT_FAILED',
-            'error': '前台模式目前暂不支持链式执行 (Execute Chain)，请对单个技能使用前台模式。',
+            'error': '前台模式目前暂不支持链式执行 (Execute Chain)，请对单个API使用前台模式。',
         }
         
-    skill_chain = payload.get('skill_chain', [])
-    first_skill = skill_chain[0]['skill_id'] if skill_chain else 'ping'
-    queue = _resolve_queue(first_skill)
-    ok, worker_msg = _ensure_worker(_SKILL_MAP.get(first_skill, {}).get('dcc', 'maya'))
+    api_chain = payload.get('api_chain', [])
+    first_step = api_chain[0] if api_chain else {}
+    first_api_id = resolve_api_id(str(first_step.get('api_id') or ''))
+    first_step['api_id'] = first_api_id
+    payload['api_chain'] = api_chain
+    dcc = get_api(first_api_id)['dcc']
+    queue = get_dcc_queue(dcc)
+    ok, worker_msg = _ensure_worker(dcc)
     if not ok:
         return {
             'task_id': task_id,
@@ -160,13 +361,13 @@ def _submit_chain(payload: dict) -> dict:
     try:
         from core.service_manager import get_celery_app
         _app = get_celery_app()
-        _app.send_task('core.tasks.execute_skill_chain', args=[payload], task_id=task_id, queue=queue)
+        _app.send_task('core.tasks.execute_api_chain', args=[payload], task_id=task_id, queue=queue)
         return {
             'task_id': task_id,
             'status': 'SUBMITTED',
             'dispatched': True,
-            'steps': len(skill_chain),
-            'message': f'链式任务已提交至 {queue}，共 {len(skill_chain)} 步',
+            'steps': len(api_chain),
+            'message': f'链式任务已提交至 {queue}，共 {len(api_chain)} 步',
         }
     except Exception as e:
         return {
@@ -179,16 +380,26 @@ def _submit_chain(payload: dict) -> dict:
 
 
 def _submit_workflow(payload: dict) -> dict:
-    """提交工作流执行任务（独立 workflow_queue，不与 DCC 竞争）"""
+    """提交工作流到唯一 CGI 队列；workflow 内部顺序执行各 DCC 段。"""
     task_id = f"wf-{uuid.uuid4().hex[:8]}"
     payload['task_id'] = task_id
     payload['submitted_at'] = time.time()
 
-    # 工作流编排器跑在独立的 workflow_queue 上，避免与 DCC Worker 死锁
-    queue = 'workflow_queue'
+    queue = 'cgi_queue'
 
-    # 确保有 Worker 消费 workflow_queue
-    ok, worker_msg = _ensure_worker('workflow')
+    # 先校验工作流定义，再只确保一个 CGI Worker。
+    from core.workflow_engine import load_workflow
+    try:
+        load_workflow(payload['workflow_id'])
+    except Exception as exc:
+        return {
+            'task_id': task_id,
+            'status': 'SUBMIT_FAILED',
+            'workflow_id': payload.get('workflow_id', ''),
+            'error': f'工作流定义不可用: {exc}',
+        }
+
+    ok, worker_msg = _ensure_worker('cgi')
     if not ok:
         return {
             'task_id': task_id,
@@ -197,33 +408,6 @@ def _submit_workflow(payload: dict) -> dict:
             'error': worker_msg,
             'recovery_hint': '请检查 workflow worker 日志，或调用 pipeline_service_status 查看心跳状态。',
         }
-
-    # 同时确保工作流中用到的 DCC Worker 也在运行
-    from core.workflow_engine import load_workflow
-    try:
-        wf = load_workflow(payload['workflow_id'])
-        seen_dcc = set()
-        for step in wf.get('steps', []):
-            dcc = get_skill_dcc(step['skill_id'])
-            if dcc not in seen_dcc:
-                seen_dcc.add(dcc)
-                ok, worker_msg = _ensure_worker(dcc)
-                if not ok:
-                    return {
-                        'task_id': task_id,
-                        'status': 'SUBMIT_FAILED',
-                        'workflow_id': payload.get('workflow_id', ''),
-                        'error': worker_msg,
-                    }
-    except Exception:
-        ok, worker_msg = _ensure_worker('maya')
-        if not ok:
-            return {
-                'task_id': task_id,
-                'status': 'SUBMIT_FAILED',
-                'workflow_id': payload.get('workflow_id', ''),
-                'error': worker_msg,
-            }
 
     try:
         from core.service_manager import get_celery_app
@@ -257,7 +441,7 @@ def _read_audit(task_id: str) -> dict:
                     'status': 'PROGRESS',
                     'detail': state.get('message', ''),
                     'step': state.get('step', -1),
-                    'skill_id': state.get('skill_id', ''),
+                    'api_id': state.get('api_id', ''),
                     'timestamp': state.get('timestamp', 0),
                     'progress': state.get('progress', 0),
                     'event_type': evt,
@@ -322,7 +506,7 @@ def _read_audit(task_id: str) -> dict:
         'status': latest.get('status', 'UNKNOWN'),
         'detail': latest.get('detail', ''),
         'step': latest.get('step', -1),
-        'skill_id': latest.get('skill_id', ''),
+        'api_id': latest.get('api_id', ''),
         'timestamp': latest.get('ts', 0),
         'total_entries': len(entries),
         'entries': entries,  # 暴露全部审计条目，供调用方遍历链步骤
@@ -390,7 +574,7 @@ def _find_audit_file(task_id: str):
 def collect_workflow_steps(task_id: str) -> list[dict]:
     """汇总工作流每步终态。跨段子链的 workflow_id 被注入成主 wf id，所有段的
     STEP_* 都写进同一个主 wf 审计文件（非独立 seg 文件）。按文件内出现顺序把
-    STEP_START → STEP_<终态> 配对，拼成有序步骤清单 [{step, skill_id, status}]。
+    STEP_START → STEP_<终态> 配对，拼成有序步骤清单 [{step, api_id, status}]。
     段边界天然由顺序保持，不依赖每段自 0 起的 step 索引。
     """
     steps: list[dict] = []
@@ -411,14 +595,14 @@ def collect_workflow_steps(task_id: str) -> list[dict]:
         st = e.get('status', '')
         if not st.startswith('STEP_'):
             continue
-        skill_id = e.get('skill_id', '')
+        api_id = e.get('api_id', '')
         if st == 'STEP_START':
-            steps.append({'step': len(steps) + 1, 'skill_id': skill_id, 'status': 'RUNNING'})
+            steps.append({'step': len(steps) + 1, 'api_id': api_id, 'status': 'RUNNING'})
         elif steps and steps[-1]['status'] == 'RUNNING':
             steps[-1]['status'] = st[len('STEP_'):]  # STEP_SUCCESS -> SUCCESS
         else:
             # 无配对 START 的收尾（防御）：单列一步
-            steps.append({'step': len(steps) + 1, 'skill_id': skill_id, 'status': st[len('STEP_'):]})
+            steps.append({'step': len(steps) + 1, 'api_id': api_id, 'status': st[len('STEP_'):]})
     return steps
 
 
@@ -431,17 +615,17 @@ def render_step_checklist(steps: list[dict]) -> str:
     for s in steps:
         mark = _mark.get(s['status'], '✗' if s['status'] not in ('RUNNING',) else '…')
         suffix = '' if s['status'] in ('SUCCESS', 'RUNNING') else f'  [{s["status"]}]'
-        lines.append(f"  {s['step']:>2}. {s['skill_id']:<32} {mark}{suffix}")
+        lines.append(f"  {s['step']:>2}. {s['api_id']:<32} {mark}{suffix}")
     return '\n'.join(lines)
 
 
 def reload_internals():
     """热重载内部状态（由 reload_server tool 调用）"""
-    global _SKILLS, _SKILL_MAP, _DCC_QUEUE_MAP
-    from core.skill_registry import reload as _reload_registry
+    global _APIS, _API_MAP, _DCC_QUEUE_MAP
+    from core.api_registry import reload as _reload_registry
     from core.manifest import reload as _reload_manifest
     _reload_registry()
     _reload_manifest()
-    _SKILLS = get_all_skills()
-    _SKILL_MAP = get_skill_map()
+    _APIS = get_all_apis()
+    _API_MAP = get_api_map()
     _DCC_QUEUE_MAP = get_dcc_queue_map()

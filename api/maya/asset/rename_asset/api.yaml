@@ -1,0 +1,71 @@
+api_id: maya.asset.rename_asset
+version: 1.0.0
+name: 标准化资产重命名
+dcc: maya
+domain: asset
+action: rename_asset
+tier: write
+execution_modes:
+- background
+- foreground
+operation_modes:
+- apply
+inputs:
+  project:
+    type: string
+    default: ''
+    description: 项目代号，为空则从数据流推断
+  category:
+    type: string
+    default: ''
+    description: 资产分类，为空则从数据流推断
+  asset_name:
+    type: string
+    default: ''
+    description: 资产名称，为空则从数据流推断
+  stage:
+    type: string
+    default: ''
+    description: 制作阶段，为空则从数据流推断
+  task:
+    type: string
+    default: ''
+    description: 子任务名（可选）
+  output_dir:
+    type: string
+    default: ''
+    description: 输出目录（可选，默认与源文件同目录）
+preconditions:
+- 项目配置通过统一 config/{project}_config.json 接口加载。
+- 后台模式由 CGI Worker 打开或复用对应 DCC 场景。
+side_effects:
+  inspect: 只读取场景或标准数据，不改变资产。
+  apply: 按 API 实现对当前任务沙盒中的场景或数据执行操作。
+idempotent: false
+outputs:
+- name: scene
+  type: scene_file
+  label: 重命名后场景
+statuses:
+- SUCCESS
+- PARTIAL
+- ERROR
+- BLOCKED
+- NEEDS_ATTENTION
+- TIMEOUT
+- CANCELLED
+errors:
+  API_OPERATION_ERROR: 操作执行失败，详见报告。
+  API_IMPLEMENTATION_MISSING: 目录存在但没有本地实现。
+recovery:
+- 读取 api_help 获取参数、前置条件和输出。
+- 失败时检查任务报告中的错误与恢复建议。
+help:
+  summary: '将当前场景按管线命名规范重命名并另存为。格式: {project}_{category}_{asset}_{stage}_{task}_v{version}.ma。不修改场景内容。'
+  usage: execute_api(maya.asset.rename_asset, params={...})
+  scenario: '将当前场景按管线命名规范重命名并另存为。格式: {project}_{category}_{asset}_{stage}_{task}_v{version}.ma。不修改场景内容。'
+  safety: read API 只读；write/destructive API 仅写入任务沙盒。
+tests:
+  contract: api.registry loads this manifest and api.runner validates its receipt.
+  smoke: 代表性 workflow 统一验收。
+handler: api.operations.rename_asset.adapter:execute

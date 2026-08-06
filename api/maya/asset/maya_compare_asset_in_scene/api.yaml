@@ -1,0 +1,79 @@
+api_id: maya.asset.maya_compare_asset_in_scene
+version: 1.0.0
+name: maya_compare_abc_to_scene_geometry
+dcc: maya
+domain: asset
+action: maya_compare_asset_in_scene
+tier: read
+execution_modes:
+- background
+- foreground
+operation_modes:
+- inspect
+inputs:
+  input_source:
+    type: string
+    default: ''
+    description: source 侧 ABC 或 _info.json。新 workflow 推荐传 blender_export_abc 的 output_path。
+  source_abc:
+    type: string
+    default: ''
+    description: 兼容参数：source 侧 ABC。input_source 为空时使用。
+  source_info:
+    type: string
+    default: ''
+    description: 兼容参数：source 侧 _info.json。input_source/source_abc 为空时使用。
+  cache_group:
+    type: string
+    description: 必填。当前 Maya target rig 场景中的几何根组，由项目配置或 workflow 传入。
+    required: true
+  output_path:
+    type: string
+    default: ''
+    description: compare_result.json 输出路径。为空时从任务沙盒 .info 自动推导。
+  label_source:
+    type: string
+    default: ''
+    description: source 标签，空值时从输入路径自动推断。
+  label_target:
+    type: string
+    default: rig
+    description: target 标签，默认 rig。
+preconditions:
+- 项目配置通过统一 config/{project}_config.json 接口加载。
+- 后台模式由 CGI Worker 打开或复用对应 DCC 场景。
+side_effects:
+  inspect: 只读取场景或标准数据，不改变资产。
+  apply: 按 API 实现对当前任务沙盒中的场景或数据执行操作。
+idempotent: true
+outputs:
+- name: compare_result
+  type: json_file
+  label: compare_result.json
+statuses:
+- SUCCESS
+- PARTIAL
+- ERROR
+- BLOCKED
+- NEEDS_ATTENTION
+- TIMEOUT
+- CANCELLED
+errors:
+  API_OPERATION_ERROR: 操作执行失败，详见报告。
+  API_IMPLEMENTATION_MISSING: 目录存在但没有本地实现。
+recovery:
+- 读取 api_help 获取参数、前置条件和输出。
+- 失败时检查任务报告中的错误与恢复建议。
+help:
+  summary: 在当前已打开的 target rig Maya 场景内采集指定 cache_group 的 ShapeOrig 几何信息，读取 source
+    侧 ABC 或 _info.json，调用统一 compare 算法并写出 compare_result.json。用于只看差异或为后续 maya_sync_rig_incremental
+    提供拼装决策。
+  usage: execute_api(maya.asset.maya_compare_asset_in_scene, params={...})
+  scenario: 在当前已打开的 target rig Maya 场景内采集指定 cache_group 的 ShapeOrig 几何信息，读取 source
+    侧 ABC 或 _info.json，调用统一 compare 算法并写出 compare_result.json。用于只看差异或为后续 maya_sync_rig_incremental
+    提供拼装决策。
+  safety: read API 只读；write/destructive API 仅写入任务沙盒。
+tests:
+  contract: api.registry loads this manifest and api.runner validates its receipt.
+  smoke: 代表性 workflow 统一验收。
+handler: api.operations.maya_compare_asset_in_scene.adapter:execute

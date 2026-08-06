@@ -1,0 +1,54 @@
+api_id: maya.rig.maya_fix_shape_names
+version: 1.0.0
+name: maya_fix_cache_shape_names
+dcc: maya
+domain: rig
+action: maya_fix_shape_names
+tier: destructive
+execution_modes:
+- background
+- foreground
+operation_modes:
+- apply
+inputs:
+  target_group:
+    type: string
+    default: ''
+    description: 要限制检查的特定组名（如 |Group|Geometry），为空则强制检查全场景网格
+preconditions:
+- 项目配置通过统一 config/{project}_config.json 接口加载。
+- 后台模式由 CGI Worker 打开或复用对应 DCC 场景。
+side_effects:
+  inspect: 只读取场景或标准数据，不改变资产。
+  apply: 按 API 实现对当前任务沙盒中的场景或数据执行操作。
+idempotent: false
+outputs:
+- name: scene
+  type: scene_file
+  label: 处理后场景
+- name: report
+  type: report
+  label: 修复报告 (.md)
+statuses:
+- SUCCESS
+- PARTIAL
+- ERROR
+- BLOCKED
+- NEEDS_ATTENTION
+- TIMEOUT
+- CANCELLED
+errors:
+  API_OPERATION_ERROR: 操作执行失败，详见报告。
+  API_IMPLEMENTATION_MISSING: 目录存在但没有本地实现。
+recovery:
+- 读取 api_help 获取参数、前置条件和输出。
+- 失败时检查任务报告中的错误与恢复建议。
+help:
+  summary: 规范化网格 Shape 的名称为 [模型名]Shape，将绑定或变形原始形重命名为 [模型名]ShapeOrig，并严格拔除没有任何连接的残渣死形节点。
+  usage: execute_api(maya.rig.maya_fix_shape_names, params={...})
+  scenario: 规范化网格 Shape 的名称为 [模型名]Shape，将绑定或变形原始形重命名为 [模型名]ShapeOrig，并严格拔除没有任何连接的残渣死形节点。
+  safety: read API 只读；write/destructive API 仅写入任务沙盒。
+tests:
+  contract: api.registry loads this manifest and api.runner validates its receipt.
+  smoke: 代表性 workflow 统一验收。
+handler: api.operations.maya_fix_shape_names.adapter:execute

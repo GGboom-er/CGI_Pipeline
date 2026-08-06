@@ -1,0 +1,74 @@
+api_id: pipeline.pipeline.resolve_asset_files
+version: 1.0.0
+name: pipeline_resolve_tex_rig_paths
+dcc: pipeline
+domain: pipeline
+action: resolve_asset_files
+tier: read
+execution_modes:
+- background
+operation_modes:
+- inspect
+inputs:
+  category:
+    type: string
+    default: chr
+    description: 资产类型，如 chr/prp/env。为空时优先读取 input.category，最后回退 chr。
+  source_stage:
+    type: string
+    default: tex
+    description: source 侧阶段，默认 tex。
+  source_task:
+    type: string
+    default: ''
+    description: source 侧 task；为空时使用项目配置中的 primary_task。
+  source_extensions:
+    type: string
+    default: .blend
+    description: source 侧允许扩展名，逗号分隔。
+  rig_stage:
+    type: string
+    default: rig
+    description: target rig 阶段，默认 rig。
+  rig_task:
+    type: string
+    default: ''
+    description: target rig task；为空时使用项目配置中的 primary_task。
+  rig_extensions:
+    type: string
+    default: .ma,.mb
+    description: target rig 允许扩展名，逗号分隔。
+preconditions:
+- 项目配置通过统一 config/{project}_config.json 接口加载。
+- 后台模式由 CGI Worker 打开或复用对应 DCC 场景。
+side_effects:
+  inspect: 只读取场景或标准数据，不改变资产。
+  apply: 按 API 实现对当前任务沙盒中的场景或数据执行操作。
+idempotent: true
+outputs:
+- name: result
+  type: any_file
+  label: 解析结果字典
+statuses:
+- SUCCESS
+- PARTIAL
+- ERROR
+- BLOCKED
+- NEEDS_ATTENTION
+- TIMEOUT
+- CANCELLED
+errors:
+  API_OPERATION_ERROR: 操作执行失败，详见报告。
+  API_IMPLEMENTATION_MISSING: 目录存在但没有本地实现。
+recovery:
+- 读取 api_help 获取参数、前置条件和输出。
+- 失败时检查任务报告中的错误与恢复建议。
+help:
+  summary: 根据项目配置解析资产 source tex 文件与 target rig 文件。支持只传资产名自动查服务器最新版本，也支持传入明确文件路径直接透传。
+  usage: execute_api(pipeline.pipeline.resolve_asset_files, params={...})
+  scenario: 根据项目配置解析资产 source tex 文件与 target rig 文件。支持只传资产名自动查服务器最新版本，也支持传入明确文件路径直接透传。
+  safety: read API 只读；write/destructive API 仅写入任务沙盒。
+tests:
+  contract: api.registry loads this manifest and api.runner validates its receipt.
+  smoke: 代表性 workflow 统一验收。
+handler: api.operations.resolve_asset_files.adapter:execute

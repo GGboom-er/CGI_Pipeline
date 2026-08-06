@@ -15,7 +15,7 @@ _PROJECT_ROOT = _cfg.PROJECT_ROOT
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
-from core.skill_registry import get_skill_dcc
+from core.api_registry import get_api_dcc, resolve_api_id
 
 
 _warm_pool = {}
@@ -61,8 +61,8 @@ class WarmWorkerProxy:
         """
         return True
         
-    def run_skill(self, payload):
-        return self.real_worker.run_skill(payload)
+    def run_api(self, payload):
+        return self.real_worker.run_api(payload)
         
     def get_memory_gb(self):
         if hasattr(self.real_worker, 'get_memory_gb'):
@@ -101,7 +101,7 @@ def create_worker(dcc_type: str = 'maya', source_path: str = None):
 
 def open_source_file(worker, task_id: str, source_path: str, dcc_type: str):
     """在 DCC Worker 中打开源文件。返回 (ok, error_msg)。
-    对 .abc 等非原生格式，新建空场景（由后续 skill 自行导入）。
+        对 .abc 等非原生格式，新建空场景（由后续 API 负责导入）。
     """
     import json as _json
     safe_path = _json.dumps(source_path)
@@ -113,7 +113,7 @@ def open_source_file(worker, task_id: str, source_path: str, dcc_type: str):
         return True, ''
 
     if dcc_type == 'blender':
-        open_skill = 'blender_exec_code'
+        open_api = resolve_api_id('blender_exec_code')
         if empty_scene or non_native:
             open_code = (
                 'import bpy\n'
@@ -139,7 +139,7 @@ def open_source_file(worker, task_id: str, source_path: str, dcc_type: str):
                 '    result = {"status":"ERROR","message":f"文件不存在或为空 (可能由 SMB 缓存延迟导致): {sp}"}\n'
             )
     else:
-        open_skill = 'exec_code'
+        open_api = resolve_api_id('exec_code')
         if empty_scene or non_native:
             open_code = (
                 'import maya.cmds as cmds\n'
@@ -163,14 +163,20 @@ def open_source_file(worker, task_id: str, source_path: str, dcc_type: str):
 
     open_payload = {
         'task_id': f'{task_id}_open',
-        'skill_id': open_skill,
+        'api_id': open_api,
         'source_path': '',
-        'parameters': {
+        'api_params': {
             'code': open_code,
             'description': '自动打开源文件',
-        }
+        },
+        'api_context': {
+            'execution_mode': 'background',
+            'project': '',
+            'asset_name': '',
+            'source_path': '',
+        },
     }
-    open_result = worker.run_skill(open_payload)
+    open_result = worker.run_api(open_payload)
     if open_result.get('status') != 'SUCCESS':
         return False, open_result.get('detail', '打开文件失败')
     return True, ''

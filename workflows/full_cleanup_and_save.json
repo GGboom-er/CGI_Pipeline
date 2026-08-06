@@ -6,28 +6,30 @@
   "steps": [
     {
       "step_id": "clean_weights",
-      "skill_id": "maya_clean_skinweights",
-      "parameters": {}
+      "parameters": {},
+      "api_id": "maya.rig.maya_clean_skinweights"
     },
     {
       "step_id": "cleanup",
-      "skill_id": "maya_master_cleanup",
-      "parameters": {"mode": "fix"}
+      "parameters": {
+        "mode": "fix"
+      },
+      "api_id": "maya.asset.maya_master_cleanup"
     },
     {
       "step_id": "fix_shapes",
-      "skill_id": "maya_fix_shape_names",
-      "parameters": {}
+      "parameters": {},
+      "api_id": "maya.rig.maya_fix_shape_names"
     },
     {
       "step_id": "normals",
-      "skill_id": "maya_conform_normals",
-      "parameters": {}
+      "parameters": {},
+      "api_id": "maya.asset.maya_conform_normals"
     },
     {
       "step_id": "save",
-      "skill_id": "save_scene",
-      "parameters": {}
+      "parameters": {},
+      "api_id": "maya.asset.save_scene"
     }
   ]
 }

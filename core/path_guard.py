@@ -90,7 +90,7 @@ def assert_save_allowed(save_path: str, context: str = '') -> None:
 
     Args:
         save_path: 目标保存路径
-        context: 调用上下文（如 skill_id），用于错误信息追踪
+        context: 调用上下文（如 api_id），用于错误信息追踪
 
     Raises:
         ProtectedPathError: 路径受保护时抛出

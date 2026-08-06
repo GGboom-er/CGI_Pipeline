@@ -1,5 +1,5 @@
 """
-一键执行：杀旧进程树 → 清 Redis 队列 → 启新 Worker → 提交工作流 → 等结果 → 关闭进程树
+一键执行（显式调试工具）：清理旧 CGI Worker → 清 Redis 队列 → 启动唯一 Worker → 提交工作流 → 等结果 → 关闭进程树
 
 经验教训（Lesson #33/#34/#38/#41）：
 - 杀进程必须用进程树杀法（psutil），否则 mayapy 子进程泄漏
@@ -13,10 +13,7 @@ PYTHON = sys.executable
 CWD = os.path.dirname(os.path.abspath(__file__))
 
 PID_FILES = [
-    os.path.join(CWD, 'worker_maya.pid'),
-    os.path.join(CWD, 'worker_blender.pid'),
-    os.path.join(CWD, 'runtime', 'worker_maya.pid'),
-    os.path.join(CWD, 'runtime', 'worker_blender.pid'),
+    os.path.join(CWD, 'runtime', 'worker_cgi.pid'),
 ]
 
 
@@ -165,7 +162,8 @@ try:
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
     log_file = open(log_path, 'w')
     worker_proc = subprocess.Popen(
-        [PYTHON, '-m', 'celery', '-A', 'core.tasks', 'worker', '-l', 'info', '--pool=solo'],
+        [PYTHON, '-m', 'celery', '-A', 'core.tasks', 'worker', '-Q', 'cgi_queue',
+         '--hostname=cgi@%h', '-l', 'info', '--pool=solo', '-c', '1'],
         cwd=CWD,
         stdout=log_file, stderr=log_file,
         creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0,

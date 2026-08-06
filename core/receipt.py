@@ -17,7 +17,7 @@ def _sec_to_min(sec):
 
 
 def make_receipt(
-    skill_id: str,
+    api_id: str,
     status: str,
     start_time: float,
     input: dict = None,
@@ -31,6 +31,7 @@ def make_receipt(
     error: str = '',
     recovery_hint: str = '',
     report_content: str = '',
+    api_version: str = '',
 ) -> dict:
     if output is None:
         output = outputs or {}
@@ -47,14 +48,19 @@ def make_receipt(
 
     elapsed_sec = round(time.time() - start_time, 3)
     elapsed_min = _sec_to_min(elapsed_sec)
-    # 旧展示字段只为历史 skill 和 audit 回放保留；新增 skill 必须只设计 input/output。
+    if not api_version:
+        try:
+            from api.registry import get_api
+            api_version = str(get_api(api_id).get('version', '1.0.0'))
+        except Exception:
+            api_version = '1.0.0'
     receipt = {
-        'skill': skill_id,
+        'api_version': api_version,
         'input': input,
         'output': output,
         'status': status,
         'elapsed_sec': elapsed_sec,
-        'skill_id': skill_id,
+        'api_id': api_id,
         'elapsed_min': elapsed_min,
         'summary': {
             'input': summary_input,

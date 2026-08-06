@@ -33,7 +33,7 @@ def _build_env(worker_id: str) -> dict:
 
 
 class MayaWorker:
-    """一次性 Maya 进程：start → run_skill × N → shutdown"""
+    """一次性 Maya 进程：start → run_api × N → shutdown"""
 
     def __init__(self):
         self.worker_id  = str(uuid.uuid4())[:8]
@@ -67,7 +67,7 @@ class MayaWorker:
             err = (log_dir / f'mayapy_{self.worker_id}.log').read_text()[:500]
             raise RuntimeError(f'Maya failed to start: {err}')
 
-    def run_skill(self, payload: dict) -> dict:
+    def run_api(self, payload: dict) -> dict:
         task_id = payload['task_id']
         result_file = self.result_dir / f'{task_id}.json'
         tmp = self.cmd_file.with_suffix('.tmp')
@@ -101,7 +101,7 @@ class MayaWorker:
         """优雅退出：发送 __DIE__ → 等待退出 → 清理 IPC"""
         if self.process and self.process.poll() is None:
             try:
-                die_payload = json.dumps({'skill_id': '__DIE__'})
+                die_payload = json.dumps({'api_id': '__DIE__'})
                 tmp = self.cmd_file.with_suffix('.tmp')
                 tmp.write_text(die_payload)
                 os.replace(tmp, self.cmd_file)
@@ -173,11 +173,11 @@ def is_rpyc_available(host, port) -> bool:
 
 
 class MayaCommandPortWorker:
-    """通过 RPyC 直连已打开的 Maya 实例执行技能（由 commandPort 负责自动引导）。
+    """通过 RPyC 直连已打开的 Maya 实例执行API（由 commandPort 负责自动引导）。
     
     架构说明：
     使用持久化连接池，在整个 Worker 生命周期内复用同一个 RPyC 连接。
-    消除了每次 run_skill() 都 connect/close 导致的 WinError 10054 (EOFError)。
+    消除了每次 run_api() 都 connect/close 导致的 WinError 10054 (EOFError)。
     只在 shutdown() 时才优雅断开连接。
     """
 
@@ -272,7 +272,7 @@ class MayaCommandPortWorker:
             f'Maya commandPort 活着，但 RPyC 服务在 5 秒内没起来。\n'
             f'最常见原因：当前 MCP server 进程的 Python 环境里没装 rpyc。\n'
             f'检查过的 site-packages：\n  - ' + '\n  - '.join(hint_paths) + '\n'
-            f'修复方法：在仓库根目录跑 `bin\\setup.bat`，或手动 `pip install rpyc==6.0.2` 进仓库 conda env（cgi_pipeline）。\n'
+            f'修复方法：在仓库根目录跑 `bin\\setup.bat`，或手动 `pip install rpyc==6.0.2` 进 Notes 受管 prefix（Tools/_managed/conda_envs/cgi_pipeline）。\n'
             f'注意：rpyc 必须装进 MCP server 运行的那个 Python 环境，不是 mayapy。'
         )
 
@@ -288,37 +288,39 @@ class MayaCommandPortWorker:
                 pass
             self._conn = None
 
-    def run_skill(self, payload: dict) -> dict:
+    def run_api(self, payload: dict) -> dict:
         task_id = payload['task_id']
-        skill_id = payload.get('skill_id', '')
+        api_id = payload.get('api_id', '')
+        if not api_id:
+            return {
+                'status': 'ERROR',
+                'detail': '缺少 api_id；Maya Worker 只接受 API 调用。',
+            }
         
         try:
             conn = self._ensure_connection()
             
             # 注入一个代理执行函数：为了保证管线数据的安全切断，边界通信依然使用 JSON
             remote_run_code = f"""
-def _cgi_run_skill_json(payload_json):
-    import importlib, sys, json
+def _cgi_run_api_json(payload_json):
+    import sys, json
     project_path = r'{str(PROJECT_ROOT)}'
     if project_path not in sys.path:
         sys.path.insert(0, project_path)
-    
-    # 获取并重载目标模块
-    try:
-        mod = importlib.import_module('skills.{skill_id}')
-        if not hasattr(mod, 'execute'):
-            mod = importlib.import_module('skills.{skill_id}.{skill_id}')
-    except ImportError:
-        mod = importlib.import_module('skills.{skill_id}.{skill_id}')
-    importlib.reload(mod)
-    
-    # 解析负载并执行
+    from api.runner import execute_api
+    import maya.cmds as cmds
     payload = json.loads(payload_json)
-    res = mod.execute(payload)
-    return json.dumps(res)
+    context = dict(payload.get('api_context') or {{}})
+    context.setdefault('execution_mode', 'foreground')
+    context.setdefault('source_path', payload.get('source_path', ''))
+    context.setdefault('project', payload.get('project', ''))
+    context.setdefault('asset_name', payload.get('asset_name', ''))
+    context['cmds_module'] = cmds
+    res = execute_api(payload['api_id'], payload.get('api_params') or {{}}, context)
+    return json.dumps(res, ensure_ascii=False, default=str)
 """
             conn.execute(remote_run_code)
-            remote_func = conn.namespace['_cgi_run_skill_json']
+            remote_func = conn.namespace['_cgi_run_api_json']
             
             # 在 Maya 主线程安全调度执行，杜绝崩溃风险
             result_json = conn.modules['maya.utils'].executeInMainThreadWithResult(

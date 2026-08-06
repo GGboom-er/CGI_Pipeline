@@ -1,7 +1,7 @@
 # core/workflow_engine.py
 # 工作流定义加载器 — 只负责读取 JSON，不执行
 #
-# 执行逻辑统一走 core/tasks.py 的 execute_skill_chain。
+# 执行逻辑统一走 core/tasks.py 的 execute_api_chain。
 # 本模块仅保留工作流 JSON 的发现和加载能力。
 
 import json
@@ -23,7 +23,7 @@ def list_workflows() -> list[dict]:
                 'name': wf.get('name', ''),
                 'status': wf.get('status', 'active'),
                 'description': wf.get('description', ''),
-                'steps': [s['skill_id'] for s in wf.get('steps', [])],
+                'steps': [s.get('api_id') or s.get('api_id') for s in wf.get('steps', [])],
             })
         except Exception:
             pass

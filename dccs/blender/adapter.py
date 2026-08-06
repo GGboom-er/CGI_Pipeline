@@ -4,7 +4,7 @@
 # 用法：blender --background --python dccs/blender/adapter.py
 #
 # 在 Blender 后台模式中运行，轮询 IPC 指令文件，
-# 动态加载 skills 模块执行技能，结果写回 JSON。
+# 通过统一 API runner 执行 API，结果写回 JSON。
 
 import bpy
 import json, os, time, sys, traceback, importlib
@@ -31,50 +31,48 @@ def _write_result(task_id: str, status: str, detail: str = ''):
     os.replace(tmp, final)
 
 
-def _dispatch_skill(payload: dict):
-    """执行技能"""
+def _dispatch_api(payload: dict):
+    """在 Blender 主线程内执行一个 API。"""
     task_id = payload.get('task_id', 'unknown')
-    skill_id = payload.get('skill_id', '')
+    api_id = payload.get('api_id', '')
     try:
-        # 动态加载技能模块
-        try:
-            skill_module = importlib.import_module(f'skills.{skill_id}')
-            if not hasattr(skill_module, 'execute'):
-                skill_module = importlib.import_module(f'skills.{skill_id}.{skill_id}')
-        except ImportError:
-            try:
-                skill_module = importlib.import_module(f'skills.{skill_id}.{skill_id}')
-            except ImportError:
-                _write_result(task_id, 'ERROR',
-                             f'Skill "{skill_id}" not found. Tried skills.{skill_id} and skills.{skill_id}.{skill_id}')
-                return
+        if not api_id:
+            _write_result(task_id, 'ERROR', '缺少 api_id；Blender 适配器只接受 API 调用。')
+            return
+        from api.runner import execute_api
+        api_context = dict(payload.get('api_context') or {})
+        api_context.setdefault('execution_mode', 'background')
+        api_context.setdefault('source_path', payload.get('source_path', ''))
+        api_context.setdefault('project', payload.get('project', ''))
+        api_context.setdefault('asset_name', payload.get('asset_name', ''))
+        api_context['bpy_module'] = bpy
+        api_result = execute_api(
+            api_id,
+            payload.get('api_params') or payload.get('params') or {},
+            api_context,
+        )
 
-        importlib.reload(skill_module)  # 热更新支持
-        skill_result = skill_module.execute(payload)
-
-        # 技能执行后安全检查：如果场景仍指向受保护路径，强制清空
-        _skill_status = ''
-        if isinstance(skill_result, dict):
-            _skill_status = skill_result.get('status', '')
+        # API 执行后安全检查：如果场景仍指向受保护路径，强制断开关联
+        api_status = api_result.get('status', '') if isinstance(api_result, dict) else 'ERROR'
 
         try:
             from core.path_guard import is_protected_path
             current_file = bpy.data.filepath or ''
             if current_file and is_protected_path(current_file):
                 # 断开文件路径关联，防止意外保存回受保护路径
-                # 但保留场景数据，允许后续 skill 继续操作
+                # 但保留场景数据，允许后续 API 继续操作
                 bpy.data.filepath = ''
-                if isinstance(skill_result, dict):
-                    skill_result['_guard_warning'] = (
+                if isinstance(api_result, dict):
+                    api_result['_guard_warning'] = (
                         f'安全守卫：已断开受保护路径 "{current_file}" 的关联，场景数据保留。'
                     )
         except Exception:
             pass
 
         result_status = 'SUCCESS'
-        if isinstance(skill_result, dict) and skill_result.get('status') in ('ERROR', 'BLOCKED', 'AUDIT_FAILED', 'NEEDS_ATTENTION'):
-            result_status = skill_result['status']
-        _write_result(task_id, result_status, json.dumps(skill_result, ensure_ascii=False, default=str))
+        if api_status in ('ERROR', 'BLOCKED', 'NEEDS_ATTENTION', 'TIMEOUT', 'CANCELLED'):
+            result_status = api_status
+        _write_result(task_id, result_status, json.dumps(api_result, ensure_ascii=False, default=str))
     except Exception:
         _write_result(task_id, 'ERROR', traceback.format_exc())
 
@@ -94,10 +92,10 @@ def _poll_loop():
                 raw = processing_file.read_text()
                 processing_file.unlink()
                 payload = json.loads(raw)
-                if payload.get('skill_id') == '__DIE__':
+                if payload.get('api_id') == '__DIE__':
                     import sys
                     sys.exit(0)
-                _dispatch_skill(payload)
+                _dispatch_api(payload)
         except Exception:
             sys.stderr.write(f'[Adapter Poll Error] {traceback.format_exc()}\n')
         time.sleep(POLL_INTERVAL)

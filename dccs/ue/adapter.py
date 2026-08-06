@@ -6,7 +6,7 @@
 # 在 UE Editor commandlet 模式中运行，轮询 IPC 指令。
 # UE Python 仅限 Editor 工具脚本，禁止 Runtime 调用。
 
-import json, os, time, sys, traceback, importlib
+import json, os, time, sys, traceback
 from pathlib import Path
 
 # UE Python 环境中 unreal 模块可用
@@ -37,20 +37,21 @@ def _write_result(task_id: str, status: str, detail: str = ''):
     os.replace(tmp, final)
 
 
-def _dispatch_skill(payload: dict):
+def _dispatch_api(payload: dict):
     task_id = payload.get('task_id', 'unknown')
-    skill_id = payload.get('skill_id', '')
+    api_id = payload.get('api_id', '')
     try:
-        try:
-            skill_module = importlib.import_module(f'skills.{skill_id}')
-        except ImportError:
-            _write_result(task_id, 'ERROR',
-                         f'Skill "{skill_id}" not found in skills/{skill_id}.py')
+        if not api_id:
+            _write_result(task_id, 'ERROR', '缺少 api_id；UE 适配器只接受 API 调用。')
             return
-
-        importlib.reload(skill_module)
-        skill_result = skill_module.execute(payload)
-        _write_result(task_id, 'SUCCESS', str(skill_result))
+        from api.runner import execute_api
+        context = dict(payload.get('api_context') or {})
+        context.setdefault('execution_mode', 'background')
+        context.setdefault('project', payload.get('project', ''))
+        context.setdefault('asset_name', payload.get('asset_name', ''))
+        context.setdefault('source_path', payload.get('source_path', ''))
+        result = execute_api(api_id, payload.get('api_params') or {}, context)
+        _write_result(task_id, result.get('status', 'ERROR'), json.dumps(result, ensure_ascii=False, default=str))
     except Exception:
         _write_result(task_id, 'ERROR', traceback.format_exc())
 
@@ -66,9 +67,9 @@ def _poll_loop():
                 raw = CMD_FILE.read_text()
                 CMD_FILE.unlink()
                 payload = json.loads(raw)
-                if payload.get('skill_id') == '__DIE__':
+                if payload.get('api_id') == '__DIE__':
                     break
-                _dispatch_skill(payload)
+                _dispatch_api(payload)
         except Exception:
             sys.stderr.write(f'[UE Adapter Error] {traceback.format_exc()}\n')
         time.sleep(POLL_INTERVAL)
