@@ -1,1 +1,0 @@
-from .maya_compare_asset_in_scene import execute

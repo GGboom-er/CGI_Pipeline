@@ -1,1 +1,0 @@
-"""Maya rig-domain APIs."""
