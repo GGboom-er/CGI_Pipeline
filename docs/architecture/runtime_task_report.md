@@ -1,6 +1,6 @@
 # REPORT.md 运行时报告契约
 
-报告由 `core/task_report_writer.py` 根据审计 JSONL 和标准 API receipt 生成。Markdown 只供人阅读，不作为后续 API 的输入。
+报告由 `cgi_pipeline.core.task_report_writer` 根据审计 JSONL 和标准 API receipt 生成。Markdown 只供人阅读，不作为后续 API 的输入。
 
 ## 报告结构
 

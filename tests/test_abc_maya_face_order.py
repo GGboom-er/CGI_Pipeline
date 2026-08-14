@@ -1,6 +1,6 @@
 import unittest
 
-from core.abc_reader import _convert_face_order_for_maya
+from cgi_pipeline.core.abc_reader import _convert_face_order_for_maya
 
 
 class MayaFaceOrderTests(unittest.TestCase):

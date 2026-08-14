@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import unittest
 
-from api.registry import api_help, get_api, list_apis, reload
-from api.runner import execute_api
+from cgi_pipeline.catalog import capability_help, get_capability, list_capabilities, reload
+from cgi_pipeline.execution import execute_api
 
 
 class ApiRegistryTests(unittest.TestCase):
@@ -12,13 +12,15 @@ class ApiRegistryTests(unittest.TestCase):
         reload()
 
     def test_reference_api_is_discoverable_by_facets(self):
-        rows = list_apis(dcc="maya", domain="rig", action="reference.update")
+        rows = list_capabilities(
+            executor="maya", capability="rigging.reference", operation="update"
+        )
         self.assertEqual([row["api_id"] for row in rows], ["maya.rig.reference.update"])
-        self.assertEqual(rows[0]["operation_modes"], ["preview", "apply"])
+        self.assertEqual(rows[0]["modes"], ["preview", "apply"])
 
     def test_help_is_manifest_backed(self):
-        spec = get_api("maya.rig.reference.update")
-        help_data = api_help("maya.rig.reference.update")
+        spec = get_capability("maya.rig.reference.update")
+        help_data = capability_help("maya.rig.reference.update")
         self.assertNotIn("handler", help_data)
         self.assertEqual(help_data["api_id"], spec["api_id"])
         self.assertIn("target_map", help_data["inputs"])

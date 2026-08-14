@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from api.runner import execute_api
+from cgi_pipeline.execution import execute_api
 
 
 class FakeCmds:

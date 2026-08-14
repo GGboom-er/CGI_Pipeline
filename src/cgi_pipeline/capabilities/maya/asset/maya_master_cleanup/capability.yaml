@@ -1,0 +1,68 @@
+api_id: maya.asset.maya_master_cleanup
+version: 1.0.0
+name: 管线全自动清理与优化
+executor: maya
+capability: scene.cleanup
+operation: clean
+stages:
+- modeling
+- rigging
+- animation
+targets:
+- scene
+access: destructive
+effects:
+  inspect: 只读取场景或标准数据，不改变资产。
+  apply: 按 API 实现对当前任务沙盒中的场景或数据执行操作。
+execution_modes:
+- local
+- background
+- foreground
+surfaces:
+- maya
+- service
+modes:
+- apply
+inputs:
+  mode:
+    type: string
+    default: check
+    description: 操作模式：'check' 生成质检报告（只读安全），'fix' 会产生破坏性修复动作
+  save_path:
+    type: string
+    default: ''
+    description: 另存路径，清理后保存到此路径，MD报告自动输出在旁边
+preconditions:
+- 项目配置通过统一 config/{project}_config.json 接口加载。
+- 后台模式由 CGI Worker 打开或复用对应 DCC 场景。
+idempotent: false
+outputs:
+- name: scene
+  type: scene_file
+  label: 清理后场景
+- name: report
+  type: report
+  label: 清理报告 (.md)
+statuses:
+- SUCCESS
+- PARTIAL
+- ERROR
+- BLOCKED
+- NEEDS_ATTENTION
+- TIMEOUT
+- CANCELLED
+errors:
+  API_OPERATION_ERROR: 操作执行失败，详见报告。
+  API_IMPLEMENTATION_MISSING: 目录存在但没有本地实现。
+recovery:
+- 读取 api_help 获取参数、前置条件和输出。
+- 失败时检查任务报告中的错误与恢复建议。
+help:
+  summary: 基于管线项目上下文，扫描或清理未知节点、插件残留、野生相机、多余UV集、死动画帧与空骨骼权重。支持 Check（只读诊断）和 Fix（执行清理）两种模式。
+  usage: execute_api(maya.asset.maya_master_cleanup, params={...})
+  scenario: 基于管线项目上下文，扫描或清理未知节点、插件残留、野生相机、多余UV集、死动画帧与空骨骼权重。支持 Check（只读诊断）和 Fix（执行清理）两种模式。
+  safety: read API 只读；write/destructive API 仅写入任务沙盒。
+tests:
+  contract: api.registry loads this manifest and api.runner validates its receipt.
+  smoke: 代表性 workflow 统一验收。
+handler: cgi_pipeline.capabilities.maya.asset.maya_master_cleanup.adapter:execute

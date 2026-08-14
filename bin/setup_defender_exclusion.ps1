@@ -1,5 +1,5 @@
 # setup_defender_exclusion.ps1
-# ── CGI Pipeline v2.0 — 缺陷2修正：Windows Defender 扫描豁免 ──
+# ── CGI Pipeline — Windows Defender 扫描豁免 ──
 # ⚠ 必须以管理员权限运行此脚本
 # 用法：powershell -ExecutionPolicy Bypass -File setup_defender_exclusion.ps1
 

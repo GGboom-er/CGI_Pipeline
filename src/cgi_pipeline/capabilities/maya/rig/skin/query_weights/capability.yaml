@@ -1,0 +1,70 @@
+api_id: maya.rig.skin.query_weights
+version: 1.0.0
+executor: maya
+capability: rigging.skin
+operation: query
+stages:
+- rigging
+targets:
+- skin_weights
+- mesh
+access: read
+effects:
+  inspect: Reads Maya skinCluster weights only. No scene data is changed.
+execution_modes:
+- local
+- foreground
+- background
+surfaces:
+- maya
+- service
+modes:
+- inspect
+inputs:
+  mesh:
+    type: string
+    required: true
+    description: Mesh transform or non-intermediate mesh shape to inspect.
+  vertices:
+    type: array
+    default: []
+    description: Optional vertex indices. Empty samples from vertex zero up to max_vertices.
+  influence:
+    type: string
+    default: ''
+    description: Optional exact influence name to filter returned weights.
+  minimum_weight:
+    type: number
+    default: 0.0001
+    description: Weights below this value are omitted from each vertex row.
+  max_vertices:
+    type: integer
+    default: 50
+    description: Safety bound for implicit or explicit vertex queries.
+preconditions:
+- The mesh belongs to the selected Maya execution context.
+- The mesh has one readable skinCluster.
+idempotent: true
+outputs:
+  shape: Resolved non-intermediate Maya mesh shape.
+  skin_cluster: Skin cluster used for the query.
+  rows: Per-vertex sparse influence-to-weight maps.
+  truncated: Whether max_vertices limited the requested result.
+statuses:
+- SUCCESS
+- ERROR
+errors:
+  MAYA_CONTEXT_MISSING: The API was not dispatched through Maya.
+  SKIN_QUERY_FAILED: The mesh, skinCluster, vertex range, or influence is invalid.
+recovery:
+- Use pipeline.session.discover to select an interactive Maya session, or provide a source_path for background mode.
+- Query fewer vertices or set influence to inspect one joint.
+help:
+  summary: Read bounded skinCluster weights from one Maya mesh without modifying the scene.
+  usage: execute_api(maya.rig.skin.query_weights, params={mesh, vertices})
+  scenario: Inspect selected vertices or a short mesh sample before changing skin weights.
+  safety: Read-only. The handler runs on Maya's main thread through the existing adapter.
+tests:
+  contract: tests/test_api_catalog_additions.py
+  smoke: Read-only query against a skinned test mesh in the final Maya integration check.
+handler: cgi_pipeline.capabilities.maya.rig.skin.query_weights.handler:execute

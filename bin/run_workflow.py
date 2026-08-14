@@ -10,7 +10,11 @@
 import subprocess, time, json, sys, os, signal, shutil
 
 PYTHON = sys.executable
-CWD = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SOURCE_ROOT = os.path.join(PROJECT_ROOT, "src")
+if SOURCE_ROOT not in sys.path:
+    sys.path.insert(0, SOURCE_ROOT)
+CWD = PROJECT_ROOT
 
 PID_FILES = [
     os.path.join(CWD, 'runtime', 'worker_cgi.pid'),
@@ -73,7 +77,7 @@ def _kill_celery_workers():
         for proc in psutil.process_iter(['pid', 'cmdline']):
             try:
                 cmdline = ' '.join(proc.info['cmdline'] or [])
-                if 'celery' in cmdline and 'core.tasks' in cmdline:
+                if 'celery' in cmdline and 'cgi_pipeline.core.tasks' in cmdline:
                     print(f"  杀 Celery 进程树: PID={proc.pid}")
                     _kill_process_tree(proc.pid)
             except (psutil.NoSuchProcess, psutil.AccessDenied):
@@ -84,7 +88,7 @@ def _kill_celery_workers():
             subprocess.run(
                 ['powershell', '-Command',
                  'Get-CimInstance Win32_Process | '
-                 'Where-Object { $_.CommandLine -match "celery" -and $_.CommandLine -match "core.tasks" } | '
+                 'Where-Object { $_.CommandLine -match "celery" -and $_.CommandLine -match "cgi_pipeline.core.tasks" } | '
                  'ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }'],
                 capture_output=True, text=True, timeout=10
             )
@@ -126,7 +130,7 @@ def _flush_redis():
         # redis-py 不可用，回退到子进程方式
         try:
             subprocess.run([PYTHON, '-c',
-                'from core.tasks import app; app.control.purge()'],
+                'from cgi_pipeline.core.tasks import app; app.control.purge()'],
                 cwd=CWD, capture_output=True, timeout=10)
         except Exception:
             pass
@@ -162,7 +166,7 @@ try:
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
     log_file = open(log_path, 'w')
     worker_proc = subprocess.Popen(
-        [PYTHON, '-m', 'celery', '-A', 'core.tasks', 'worker', '-Q', 'cgi_queue',
+        [PYTHON, '-m', 'celery', '-A', 'cgi_pipeline.core.tasks', 'worker', '-Q', 'cgi_queue',
          '--hostname=cgi@%h', '-l', 'info', '--pool=solo', '-c', '1'],
         cwd=CWD,
         stdout=log_file, stderr=log_file,
@@ -186,7 +190,7 @@ try:
 
     # ── 3. 提交工作流 ──
     print("[3/5] 提交 tex_to_rig_verify_and_sync 工作流...")
-    from core.tasks import execute_workflow
+    from cgi_pipeline.core.tasks import execute_workflow
 
     task_id = f"auto_qc_{int(time.time())}"
     payload = {

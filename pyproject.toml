@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cgi-pipeline"
+version = "1.0.0"
+description = "Unified CGI capability framework and host-safe SDK"
+requires-python = ">=3.11"
+
+[project.scripts]
+cgi-pipeline = "cgi_pipeline.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+cgi_pipeline = ["data/*.json", "capabilities/**/capability.yaml"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+

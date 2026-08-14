@@ -20,7 +20,7 @@
         "ERROR": "失败",
         "TIMEOUT": "超时",
         "BLOCKED": "路径保护拦截",
-        "NEEDS_ATTENTION": "旧版兼容：需人工决策",
+        "NEEDS_ATTENTION": "需人工决策",
         "CHAIN_ABORTED": "链中断",
         "AUDIT_FAILED": "质检不通过",
         "CHAIN_AUDIT_FAILED": "链审计不通过",
@@ -35,7 +35,7 @@
         "禁止用 os.system/subprocess/shutil 等绕过 path_guard 写入受保护路径",
         "所有文件写入操作必须指向当前任务沙盒目录"
     ],
-    "dcc_queues": {
+    "executor_queues": {
         "maya": "cgi_queue",
         "blender": "cgi_queue",
         "ue": "cgi_queue",
@@ -43,8 +43,7 @@
     },
     "chain_rules": {
         "save_scene_must_be_last": true,
-        "abort_on_step_failure": true,
-        "hold_on_needs_attention": false
+        "abort_on_step_failure": true
     },
     "payload_schema": {
         "required": [
@@ -71,7 +70,6 @@
         "optional_fields": [
             "summary",
             "items",
-            "outputs",
             "error",
             "recovery_hint"
         ]

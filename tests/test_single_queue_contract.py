@@ -4,9 +4,9 @@ import ast
 import inspect
 from unittest.mock import patch
 
-from mcp_server import internals
-from core import tasks
-from core.service_manager import _normalize_dcc, _queue_for_dcc, _worker_hostname
+from cgi_pipeline.server import internals
+from cgi_pipeline.core import tasks
+from cgi_pipeline.core.service_manager import _normalize_dcc, _queue_for_dcc, _worker_hostname
 
 
 class _FakeCelery:
@@ -29,8 +29,8 @@ def test_workflow_submit_ensures_only_canonical_worker():
     celery = _FakeCelery()
     ensure_calls = []
     with patch.object(internals, '_ensure_worker', side_effect=lambda dcc: ensure_calls.append(dcc) or (True, 'ok')), \
-         patch('core.workflow_engine.load_workflow', return_value={'workflow_id': 'wf', 'steps': []}), \
-         patch('core.service_manager.get_celery_app', return_value=celery), \
+         patch('cgi_pipeline.core.workflow_engine.load_workflow', return_value={'workflow_id': 'wf', 'steps': []}), \
+         patch('cgi_pipeline.core.service_manager.get_celery_app', return_value=celery), \
          patch.object(internals, '_append_submission_audit'):
         result = internals._submit_workflow({'workflow_id': 'wf'})
 

@@ -1,4 +1,4 @@
-# ── CGI Pipeline v2.0 ──
+# ── CGI Pipeline ──
 
 # ── 运行时产物（禁止提交）──
 runtime/
@@ -74,6 +74,7 @@ Desktop.ini
 graphify-out/
 
 # ── 第三方独立仓（只统一位置，不并入本仓版本树）──
-# 上游与用途见 dccs/ue/extensions/UPSTREAM.md；照常 git pull 更新。
-# 不用 submodule：db-lyon 要跟随上游而非 pin commit，且避免每次 --recurse-submodules。
-dccs/ue/extensions/ue-mcp/
+# 上游与用途见各 DCC 的 extensions/UPSTREAM.md；独立仓照常 git pull 更新。
+# 不用 submodule：第三方上游独立演进，不进入 CGI Pipeline 版本树。
+integrations/ue/extensions/ue-mcp/
+integrations/blender/extensions/blender_mcp/

@@ -1,0 +1,67 @@
+api_id: maya.rig.reference.update
+version: 1.0.0
+executor: maya
+capability: rigging.reference
+operation: update
+stages:
+- rigging
+targets:
+- reference
+- rig
+access: destructive
+effects:
+  preview: No scene mutation.
+  apply: Replaces only references whose old_path is present in target_map.
+execution_modes:
+- local
+- foreground
+- background
+surfaces:
+- maya
+- service
+modes:
+- preview
+- apply
+inputs:
+  operation:
+    type: string
+    required: true
+    choices:
+    - preview
+    - apply
+  target_map:
+    type: array
+    required: true
+    description: Explicit old_path -> new_path mapping produced by a project resolver.
+  skip_status:
+    type: string
+    required: false
+    default: SKIP_NOT_TARGET
+preconditions:
+- A Maya scene is already open in the selected execution context.
+- Project-specific resolution has produced explicit target_map entries.
+idempotent: false
+outputs:
+  rows: Per-reference plan or verification rows.
+  counts: Status counts.
+  updated_count: Number of verified reference replacements.
+statuses:
+- SUCCESS
+- PARTIAL
+- ERROR
+errors:
+  REFERENCE_PLAN_FAILED: Preview could not build a valid plan.
+  REFERENCE_VERIFY_FAILED: Apply completed with one or more verification failures.
+recovery:
+- Inspect output.rows and fix the project resolver mapping.
+- Retry preview before apply.
+help:
+  summary: Update Maya references from an explicit project-resolved mapping.
+  usage: execute_api(maya.rig.reference.update, params={operation, target_map})
+  safety: apply is destructive; preview is the default review step in workflows.
+tests:
+  unit:
+  - tests/test_api_registry.py
+  - tests/test_maya_reference_api.py
+  smoke: mayapy with a Maya scene containing one loaded reference.
+handler: cgi_pipeline.capabilities.maya.rig.reference.update.handler:execute

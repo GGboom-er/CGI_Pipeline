@@ -1,0 +1,1 @@
+from cgi_pipeline.capabilities.blender.asset.blender_extract_materials.blender_extract_materials import execute

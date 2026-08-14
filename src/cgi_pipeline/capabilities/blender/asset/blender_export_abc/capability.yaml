@@ -1,0 +1,66 @@
+api_id: blender.asset.blender_export_abc
+version: 1.0.0
+name: blender_export_cache_to_abc
+executor: blender
+capability: asset.exchange
+operation: export
+stages:
+- modeling
+- rigging
+- animation
+targets:
+- asset
+- alembic
+access: write
+effects:
+  inspect: 只读取场景或标准数据，不改变资产。
+  apply: 按 API 实现对当前任务沙盒中的场景或数据执行操作。
+execution_modes:
+- local
+- background
+- foreground
+surfaces:
+- blender
+- service
+modes:
+- apply
+inputs:
+  abc_path:
+    type: string
+    default: ''
+    description: ABC 输出完整路径。workflow 中必须传入任务沙盒 .info 路径；为空时从任务沙盒自动推导。
+  cache_group:
+    type: string
+    default: ''
+    description: 要导出的组名（为空则从项目推断即可）
+preconditions:
+- 项目配置通过统一 config/{project}_config.json 接口加载。
+- 后台模式由 CGI Worker 打开或复用对应 DCC 场景。
+idempotent: false
+outputs:
+- name: abc
+  type: abc_file
+  label: 导出的 .abc
+statuses:
+- SUCCESS
+- PARTIAL
+- ERROR
+- BLOCKED
+- NEEDS_ATTENTION
+- TIMEOUT
+- CANCELLED
+errors:
+  API_OPERATION_ERROR: 操作执行失败，详见报告。
+  API_IMPLEMENTATION_MISSING: 目录存在但没有本地实现。
+recovery:
+- 读取 api_help 获取参数、前置条件和输出。
+- 失败时检查任务报告中的错误与恢复建议。
+help:
+  summary: 选中指定几何根组，禁用修改器，导出 Alembic (.abc)。只管 ABC 几何导出，不生成 _info.json 或 _materials.json。
+  usage: execute_api(blender.asset.blender_export_abc, params={...})
+  scenario: 选中指定几何根组，禁用修改器，导出 Alembic (.abc)。只管 ABC 几何导出，不生成 _info.json 或 _materials.json。
+  safety: read API 只读；write/destructive API 仅写入任务沙盒。
+tests:
+  contract: api.registry loads this manifest and api.runner validates its receipt.
+  smoke: 代表性 workflow 统一验收。
+handler: cgi_pipeline.capabilities.blender.asset.blender_export_abc.adapter:execute

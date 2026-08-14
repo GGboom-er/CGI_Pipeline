@@ -13,7 +13,10 @@ param(
 $ErrorActionPreference = "Stop"
 $ListenAddress = "127.0.0.1"
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$NotesPythonPrefix = (Resolve-Path (Join-Path (Split-Path $ProjectRoot -Parent) "conda_envs\cgi_pipeline") -ErrorAction SilentlyContinue).Path
+$SourceRoot = (Resolve-Path (Join-Path $ProjectRoot "src")).Path
+$env:PYTHONPATH = ((@($SourceRoot) + @($env:PYTHONPATH -split [IO.Path]::PathSeparator)) |
+    Where-Object { $_ } | Select-Object -Unique) -join [IO.Path]::PathSeparator
+$NotesPythonPrefix = (Resolve-Path (Join-Path (Split-Path $ProjectRoot -Parent) "..\..\..\.conda_envs\brain") -ErrorAction SilentlyContinue).Path
 if ($NotesPythonPrefix) {
     $env:PYTHONNOUSERSITE = "1"
     $managedPath = @(
@@ -26,7 +29,7 @@ if ($NotesPythonPrefix) {
     $env:PATH = (($managedPath + ($env:PATH -split [IO.Path]::PathSeparator)) |
         Where-Object { $_ } | Select-Object -Unique) -join [IO.Path]::PathSeparator
 }
-$ServerPath = (Resolve-Path (Join-Path $ProjectRoot "mcp_server\server.py")).Path
+$ServerPath = (Resolve-Path (Join-Path $SourceRoot "cgi_pipeline\server\server.py")).Path
 $RuntimeDir = Join-Path $ProjectRoot "runtime"
 $LogDir = Join-Path $ProjectRoot "logs"
 $PidFile = Join-Path $RuntimeDir "mcp_http_$Port.pid"
@@ -151,8 +154,32 @@ function ConvertTo-UtcTicks {
     }
 }
 
+function Test-RepositoryPythonEntry {
+    param([string]$Value)
+    try {
+        if (-not [IO.Path]::IsPathFullyQualified($Value)) {
+            return $false
+        }
+        $candidate = [IO.Path]::GetFullPath($Value)
+        $root = [IO.Path]::GetFullPath($ProjectRoot).TrimEnd('\', '/')
+        $prefix = $root + [IO.Path]::DirectorySeparatorChar
+        return $candidate.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase) -and
+            [string]::Equals(
+                [IO.Path]::GetExtension($candidate),
+                ".py",
+                [StringComparison]::OrdinalIgnoreCase
+            )
+    }
+    catch {
+        return $false
+    }
+}
+
 function Get-ManagedIdentity {
-    param([switch]$RequireListener)
+    param(
+        [switch]$RequireListener,
+        [switch]$AllowRepositoryRelocation
+    )
     $loaded = Read-PidMetadata
     if (-not $loaded.valid_json) {
         return [pscustomobject]@{
@@ -172,7 +199,15 @@ function Get-ManagedIdentity {
     if (-not [int]::TryParse([string]$metadata.port, [ref]$metadataPort) -or $metadataPort -ne $Port) {
         return [pscustomobject]@{ exists = $true; valid = $false; reason = "metadata_port_mismatch"; metadata = $metadata; process = $null }
     }
-    if (-not [string]::Equals([string]$metadata.server_path, $ServerPath, [StringComparison]::OrdinalIgnoreCase)) {
+    $managedServerPath = [string]$metadata.server_path
+    $repositoryRelocation = -not [string]::Equals(
+        $managedServerPath,
+        $ServerPath,
+        [StringComparison]::OrdinalIgnoreCase
+    )
+    if ($repositoryRelocation -and
+        (-not $AllowRepositoryRelocation -or
+         -not (Test-RepositoryPythonEntry $managedServerPath))) {
         return [pscustomobject]@{ exists = $true; valid = $false; reason = "metadata_server_path_mismatch"; metadata = $metadata; process = $null }
     }
     $record = Get-ProcessRecord $metadataPid
@@ -187,9 +222,15 @@ function Get-ManagedIdentity {
         return [pscustomobject]@{ exists = $true; valid = $false; reason = "metadata_command_line_unavailable"; metadata = $metadata; process = $record.process }
     }
     $command = $record.command_line.Replace("\", "/").ToLowerInvariant()
-    $server = $ServerPath.Replace("\", "/").ToLowerInvariant()
+    $server = $managedServerPath.Replace("\", "/").ToLowerInvariant()
     if (-not $command.Contains($server) -or $command -notmatch '(^|\s)--http(\s|$)') {
         return [pscustomobject]@{ exists = $true; valid = $false; reason = "metadata_command_line_mismatch"; metadata = $metadata; process = $record.process }
+    }
+    if ($repositoryRelocation) {
+        $python = (Resolve-PythonPath).Replace("\", "/").ToLowerInvariant()
+        if (-not $command.Contains($python)) {
+            return [pscustomobject]@{ exists = $true; valid = $false; reason = "metadata_python_path_mismatch"; metadata = $metadata; process = $record.process }
+        }
     }
     if ($RequireListener) {
         $listenerPid = Get-ListenerPid
@@ -203,9 +244,11 @@ function Get-ManagedIdentity {
     return [pscustomobject]@{
         exists = $true
         valid = $true
-        reason = "metadata_identity_match"
+        reason = if ($repositoryRelocation) { "metadata_repository_relocation_match" } else { "metadata_identity_match" }
         metadata = $metadata
         process = $record.process
+        repository_relocation = $repositoryRelocation
+        managed_server_path = $managedServerPath
     }
 }
 
@@ -299,7 +342,7 @@ function Resolve-PythonPath {
         }
     }
 
-    $canonical = Join-Path (Split-Path $ProjectRoot -Parent) "conda_envs\cgi_pipeline\python.exe"
+    $canonical = Join-Path (Split-Path $ProjectRoot -Parent) "..\..\..\.conda_envs\brain\python.exe"
     if (-not (Test-Path -LiteralPath $canonical -PathType Leaf)) {
         throw "Canonical CGI Python not found: $canonical. Run bin\setup.bat first."
     }
@@ -320,7 +363,7 @@ function Invoke-CooperativeShutdown {
     $cleanupProcess = [Diagnostics.Process]::new()
     try {
         $python = Resolve-PythonPath
-        $cleanupCode = "from core.service_manager import shutdown_all; shutdown_all()"
+        $cleanupCode = "from cgi_pipeline.core.service_manager import shutdown_worker_owned_by; shutdown_worker_owned_by($managedProcessId)"
         $startInfo = [Diagnostics.ProcessStartInfo]::new()
         $startInfo.FileName = $python
         $startInfo.Arguments = "-s -c `"$cleanupCode`""
@@ -333,7 +376,7 @@ function Invoke-CooperativeShutdown {
         if (-not $cleanupProcess.Start()) {
             return [pscustomobject]@{
                 status = "FAILED"
-                detail = "Could not start shutdown_all helper"
+                detail = "Could not start scoped Worker shutdown helper"
             }
         }
         $stdoutTask = $cleanupProcess.StandardOutput.ReadToEndAsync()
@@ -345,7 +388,7 @@ function Invoke-CooperativeShutdown {
             [void]$stderrTask.GetAwaiter().GetResult()
             return [pscustomobject]@{
                 status = "TIMEOUT"
-                detail = "shutdown_all did not finish within 20 seconds"
+                detail = "Scoped Worker shutdown did not finish within 20 seconds"
             }
         }
         [void]$stdoutTask.GetAwaiter().GetResult()
@@ -353,12 +396,12 @@ function Invoke-CooperativeShutdown {
         if ($cleanupProcess.ExitCode -ne 0) {
             return [pscustomobject]@{
                 status = "FAILED"
-                detail = if ($cleanupError) { $cleanupError } else { "shutdown_all exited with code $($cleanupProcess.ExitCode)" }
+                detail = if ($cleanupError) { $cleanupError } else { "Scoped Worker shutdown exited with code $($cleanupProcess.ExitCode)" }
             }
         }
         return [pscustomobject]@{
             status = "COMPLETED"
-            detail = "shutdown_all completed before HTTP process termination"
+            detail = "Scoped Worker ownership cleanup completed before HTTP process termination"
         }
     }
     catch {
@@ -373,7 +416,8 @@ function Invoke-CooperativeShutdown {
 }
 
 function Stop-ManagedService {
-    $identity = Get-ManagedIdentity -RequireListener
+    param([switch]$AllowRepositoryRelocation)
+    $identity = Get-ManagedIdentity -RequireListener -AllowRepositoryRelocation:$AllowRepositoryRelocation
     if (-not $identity.valid) {
         if ($identity.exists) {
             Remove-PidMetadata
@@ -393,7 +437,7 @@ function Stop-ManagedService {
 
     # Re-read every identity component immediately before termination. The Process
     # object then keeps the verified OS process handle, avoiding a PID-only kill.
-    $confirmed = Get-ManagedIdentity -RequireListener
+    $confirmed = Get-ManagedIdentity -RequireListener -AllowRepositoryRelocation:$AllowRepositoryRelocation
     if (-not $confirmed.valid) {
         throw "Managed process identity changed before stop ($($confirmed.reason)); no process was stopped."
     }
@@ -418,6 +462,8 @@ function Stop-ManagedService {
         endpoint = $Endpoint
         shutdown_cleanup = $cleanupResult.status
         shutdown_detail = $cleanupResult.detail
+        replaced_repository_entry = [bool]$confirmed.repository_relocation
+        previous_server_path = if ($confirmed.repository_relocation) { [string]$confirmed.managed_server_path } else { $null }
         message = "Managed CGI Pipeline HTTP service stopped."
     }
 }
@@ -497,8 +543,11 @@ try {
         "stop" { Invoke-WithPortLock { Stop-ManagedService } }
         "restart" {
             Invoke-WithPortLock {
-                [void](Stop-ManagedService)
-                Start-ManagedService
+                $stopped = Stop-ManagedService -AllowRepositoryRelocation
+                $started = Start-ManagedService
+                $started | Add-Member -NotePropertyName replaced_repository_entry -NotePropertyValue ([bool]$stopped.replaced_repository_entry)
+                $started | Add-Member -NotePropertyName previous_server_path -NotePropertyValue $stopped.previous_server_path
+                $started
             }
         }
     }

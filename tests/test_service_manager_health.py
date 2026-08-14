@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core import service_manager as sm
+from cgi_pipeline.core import service_manager as sm
 
 
 def _check(name, condition, detail=""):
@@ -113,6 +113,52 @@ def test_ensure_healthy_no_restart():
         sm.restart_worker = originals["restart_worker"]
 
 
+def test_ensure_available_skips_heartbeat_for_live_worker():
+    print("\n=== Test: 提交热路径不广播探活 ===")
+    originals = {
+        "start_redis": sm.start_redis,
+        "is_worker_alive": sm.is_worker_alive,
+        "get_worker_health": sm.get_worker_health,
+        "start_worker": sm.start_worker,
+    }
+    try:
+        sm.start_redis = lambda: True
+        sm.is_worker_alive = lambda dcc: (True, 999)
+        sm.get_worker_health = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unexpected heartbeat"))
+        sm.start_worker = lambda dcc: (_ for _ in ()).throw(AssertionError("unexpected restart"))
+
+        ok, msg = sm.ensure_worker_available("pipeline")
+        _check("活 PID 直接可用", ok, msg)
+        _check("返回 canonical PID", "999" in msg, msg)
+    finally:
+        sm.start_redis = originals["start_redis"]
+        sm.is_worker_alive = originals["is_worker_alive"]
+        sm.get_worker_health = originals["get_worker_health"]
+        sm.start_worker = originals["start_worker"]
+
+
+def test_ensure_available_starts_missing_worker():
+    print("\n=== Test: 提交时缺 Worker 走验证启动 ===")
+    originals = {
+        "start_redis": sm.start_redis,
+        "is_worker_alive": sm.is_worker_alive,
+        "start_worker": sm.start_worker,
+    }
+    starts = []
+    try:
+        sm.start_redis = lambda: True
+        sm.is_worker_alive = lambda dcc: (False, None)
+        sm.start_worker = lambda dcc: starts.append(dcc) or True
+
+        ok, msg = sm.ensure_worker_available("blender")
+        _check("缺 Worker 时启动成功", ok, msg)
+        _check("只启动 canonical Worker", starts == ["cgi"], starts)
+    finally:
+        sm.start_redis = originals["start_redis"]
+        sm.is_worker_alive = originals["is_worker_alive"]
+        sm.start_worker = originals["start_worker"]
+
+
 def test_service_status_alive_uses_heartbeat():
     print("\n=== Test: 服务状态按心跳判活 ===")
     originals = {
@@ -137,7 +183,7 @@ def test_service_status_alive_uses_heartbeat():
 
         status = sm.get_service_status(include_heartbeat=True)
         _check("唯一 CGI Worker 无心跳时不算 alive", status["worker_cgi"]["alive"] is False, status)
-        _check("兼容别名与 canonical 状态一致", status["worker_maya"]["alive"] is False and status["worker_blender"]["alive"] is False, status)
+        _check("服务状态只暴露唯一 Worker", not ({"worker_maya", "worker_blender", "worker_workflow"} & set(status)), status)
     finally:
         sm.is_redis_alive = originals["is_redis_alive"]
         sm.is_worker_alive = originals["is_worker_alive"]
@@ -186,6 +232,29 @@ def test_clear_stale_pidfile():
         finally:
             sm.RUNTIME_DIR = original_runtime
             sm._is_pid_alive = original_is_pid_alive
+
+
+def test_http_owner_cleanup_is_scoped():
+    print("\n=== Test: HTTP Worker owner cleanup stays scoped ===")
+    original_runtime = sm.RUNTIME_DIR
+    original_stop_worker = sm.stop_worker
+    stopped = []
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            sm.RUNTIME_DIR = Path(tmp)
+            sm.stop_worker = lambda dcc: stopped.append(dcc) or True
+            sm.claim_worker_owner(1001)
+
+            _check("非 owner 不停止 Worker", not sm.shutdown_worker_owned_by(2002))
+            _check("非 owner 保留记录", sm._worker_owner_path().exists())
+            _check("非 owner 未调用 stop", stopped == [], stopped)
+
+            _check("owner 停止 Worker", sm.shutdown_worker_owned_by(1001))
+            _check("只停止 canonical Worker", stopped == ["cgi"], stopped)
+            _check("owner 记录已清理", not sm._worker_owner_path().exists())
+        finally:
+            sm.RUNTIME_DIR = original_runtime
+            sm.stop_worker = original_stop_worker
 
 
 def test_start_worker_loser_awaits_not_popen():
@@ -260,9 +329,12 @@ if __name__ == "__main__":
     test_dead_pidfile_cleanup()
     test_ensure_busy_worker_not_killed()
     test_ensure_healthy_no_restart()
+    test_ensure_available_skips_heartbeat_for_live_worker()
+    test_ensure_available_starts_missing_worker()
     test_service_status_alive_uses_heartbeat()
     test_start_lock_acquire_release()
     test_clear_stale_pidfile()
+    test_http_owner_cleanup_is_scoped()
     test_start_worker_loser_awaits_not_popen()
     test_start_worker_winner_popens_and_releases()
     print("\n✅ all pass")

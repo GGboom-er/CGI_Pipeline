@@ -1,0 +1,3755 @@
+[
+  {
+    "api_id": "blender.asset.blender_build_asset_info",
+    "version": "1.0.0",
+    "name": "Blender 资产信息采集",
+    "executor": "blender",
+    "capability": "asset.metadata",
+    "operation": "build",
+    "stages": [
+      "modeling"
+    ],
+    "targets": [
+      "asset",
+      "mesh"
+    ],
+    "access": "read",
+    "effects": {
+      "inspect": "只读取场景或标准数据，不改变资产。",
+      "apply": "按 API 实现对当前任务沙盒中的场景或数据执行操作。"
+    },
+    "execution_modes": [
+      "local",
+      "background",
+      "foreground"
+    ],
+    "surfaces": [
+      "blender",
+      "service"
+    ],
+    "modes": [
+      "inspect"
+    ],
+    "inputs": {
+      "info_path": {
+        "type": "string",
+        "default": "",
+        "description": "_info.json 输出完整路径。workflow 中必须传入任务沙盒 .info 路径；为空时从任务沙盒自动推导。"
+      },
+      "cache_group": {
+        "type": "string",
+        "description": "必填。要采集的 Blender 根对象名，由项目配置或 workflow 传入。",
+        "required": true
+      }
+    },
+    "preconditions": [
+      "项目配置通过统一 config/{project}_config.json 接口加载。",
+      "后台模式由 CGI Worker 打开或复用对应 DCC 场景。"
+    ],
+    "idempotent": true,
+    "outputs": [
+      {
+        "name": "info",
+        "type": "json_file",
+        "label": "_info.json"
+      }
+    ],
+    "statuses": [
+      "SUCCESS",
+      "PARTIAL",
+      "ERROR",
+      "BLOCKED",
+      "NEEDS_ATTENTION",
+      "TIMEOUT",
+      "CANCELLED"
+    ],
+    "errors": {
+      "API_OPERATION_ERROR": "操作执行失败，详见报告。",
+      "API_IMPLEMENTATION_MISSING": "目录存在但没有本地实现。"
+    },
+    "recovery": [
+      "读取 api_help 获取参数、前置条件和输出。",
+      "失败时检查任务报告中的错误与恢复建议。"
+    ],
+    "help": {
+      "summary": "遍历指定 Blender 几何根组下所有 mesh，采集拓扑指纹（顶点数+世界空间坐标），输出标准 _info.json。只负责几何信息，不采集贴图或面级材质。",
+      "usage": "execute_api(blender.asset.blender_build_asset_info, params={...})",
+      "scenario": "遍历指定 Blender 几何根组下所有 mesh，采集拓扑指纹（顶点数+世界空间坐标），输出标准 _info.json。只负责几何信息，不采集贴图或面级材质。",
+      "safety": "read API 只读；write/destructive API 仅写入任务沙盒。"
+    },
+    "tests": {
+      "contract": "api.registry loads this manifest and api.runner validates its receipt.",
+      "smoke": "代表性 workflow 统一验收。"
+    },
+    "handler": "cgi_pipeline.capabilities.blender.asset.blender_build_asset_info.adapter:execute",
+    "manifest_path": "src/cgi_pipeline/capabilities/blender/asset/blender_build_asset_info/capability.yaml"
+  },
+  {
+    "api_id": "blender.asset.blender_capture_viewport",
+    "version": "1.0.0",
+    "name": "Blender 视口截图",
+    "executor": "blender",
+    "capability": "viewport.capture",
+    "operation": "capture",
+    "stages": [
+      "modeling",
+      "rigging",
+      "animation"
+    ],
+    "targets": [
+      "viewport"
+    ],
+    "access": "read",
+    "effects": {
+      "inspect": "只读取场景或标准数据，不改变资产。",
+      "apply": "按 API 实现对当前任务沙盒中的场景或数据执行操作。"
+    },
+    "execution_modes": [
+      "local",
+      "background",
+      "foreground"
+    ],
+    "surfaces": [
+      "blender",
+      "service"
+    ],
+    "modes": [
+      "inspect"
+    ],
+    "inputs": {
+      "width": {
+        "type": "number",
+        "default": 1920,
+        "description": "截图宽度"
+      },
+      "height": {
+        "type": "number",
+        "default": 1080,
+        "description": "截图高度"
+      }
+    },
+    "preconditions": [
+      "项目配置通过统一 config/{project}_config.json 接口加载。",
+      "后台模式由 CGI Worker 打开或复用对应 DCC 场景。"
+    ],
+    "idempotent": true,
+    "outputs": [
+      {
+        "name": "output_path",
+        "type": "image_file",
+        "label": "PNG 截图"
+      }
+    ],
+    "statuses": [
+      "SUCCESS",
+      "PARTIAL",
+      "ERROR",
+      "BLOCKED",
+      "NEEDS_ATTENTION",
+      "TIMEOUT",
+      "CANCELLED"
+    ],
+    "errors": {
+      "API_OPERATION_ERROR": "操作执行失败，详见报告。",
+      "API_IMPLEMENTATION_MISSING": "目录存在但没有本地实现。"
+    },
+    "recovery": [
+      "读取 api_help 获取参数、前置条件和输出。",
+      "失败时检查任务报告中的错误与恢复建议。"
+    ],
+    "help": {
+      "summary": "获取 Blender 当前活动视口或后台渲染截图，并保存为 PNG。",
+      "usage": "execute_api(blender.asset.blender_capture_viewport, params={...})",
+      "scenario": "获取 Blender 当前活动视口或后台渲染截图，并保存为 PNG。",
+      "safety": "read API 只读；write/destructive API 仅写入任务沙盒。"
+    },
+    "tests": {
+      "contract": "api.registry loads this manifest and api.runner validates its receipt.",
+      "smoke": "代表性 workflow 统一验收。"
+    },
+    "handler": "cgi_pipeline.capabilities.blender.asset.blender_capture_viewport.adapter:execute",
+    "manifest_path": "src/cgi_pipeline/capabilities/blender/asset/blender_capture_viewport/capability.yaml"
+  },
+  {
+    "api_id": "blender.asset.blender_exec_code",
+    "version": "1.0.0",
+    "name": "Blender 动态代码执行",
+    "executor": "blender",
+    "capability": "runtime.code",
+    "operation": "execute",
+    "stages": [
+      "modeling",
+      "rigging",
+      "animation"
+    ],
+    "targets": [
+      "host_runtime"
+    ],
+    "access": "destructive",
+    "effects": {
+      "inspect": "只读取场景或标准数据，不改变资产。",
+      "apply": "按 API 实现对当前任务沙盒中的场景或数据执行操作。"
+    },
+    "execution_modes": [
+      "local",
+      "background",
+      "foreground"
+    ],
+    "surfaces": [
+      "blender",
+      "service"
+    ],
+    "modes": [
+      "apply"
+    ],
+    "inputs": {
+      "code": {
+        "type": "string",
+        "default": "",
+        "description": "待执行的 Python 代码字符串"
+      },
+      "description": {
+        "type": "string",
+        "default": "",
+        "description": "代码用途描述（用于审计日志）"
+      }
+    },
+    "preconditions": [
+      "项目配置通过统一 config/{project}_config.json 接口加载。",
+      "后台模式由 CGI Worker 打开或复用对应 DCC 场景。"
+    ],
+    "idempotent": false,
+    "outputs": [
+      {
+        "name": "blend",
+        "type": "blend_file",
+        "label": "处理后 .blend"
+      }
+    ],
+    "statuses": [
+      "SUCCESS",
+      "PARTIAL",
+      "ERROR",
+      "BLOCKED",
+      "NEEDS_ATTENTION",
+      "TIMEOUT",
+      "CANCELLED"
+    ],
+    "errors": {
+      "API_OPERATION_ERROR": "操作执行失败，详见报告。",
+      "API_IMPLEMENTATION_MISSING": "目录存在但没有本地实现。"
+    },
+    "recovery": [
+      "读取 api_help 获取参数、前置条件和输出。",
+      "失败时检查任务报告中的错误与恢复建议。"
+    ],
+    "help": {
+      "summary": "在 Blender Python 环境中执行任意代码并返回结果。支持后台无头模式和当前 Blender 界面前台模式；代码中将结果赋值给 result 变量。",
+      "usage": "execute_api(blender.asset.blender_exec_code, params={...})",
+      "scenario": "在 Blender Python 环境中执行任意代码并返回结果。支持后台无头模式和当前 Blender 界面前台模式；代码中将结果赋值给 result 变量。",
+      "safety": "read API 只读；write/destructive API 仅写入任务沙盒。"
+    },
+    "tests": {
+      "contract": "api.registry loads this manifest and api.runner validates its receipt.",
+      "smoke": "代表性 workflow 统一验收。"
+    },
+    "handler": "cgi_pipeline.capabilities.blender.asset.blender_exec_code.adapter:execute",
+    "manifest_path": "src/cgi_pipeline/capabilities/blender/asset/blender_exec_code/capability.yaml"
+  },
+  {
+    "api_id": "blender.asset.blender_export_abc",
+    "version": "1.0.0",
+    "name": "blender_export_cache_to_abc",
+    "executor": "blender",
+    "capability": "asset.exchange",
+    "operation": "export",
+    "stages": [
+      "modeling",
+      "rigging",
+      "animation"
+    ],
+    "targets": [
+      "asset",
+      "alembic"
+    ],
+    "access": "write",
+    "effects": {
+      "inspect": "只读取场景或标准数据，不改变资产。",
+      "apply": "按 API 实现对当前任务沙盒中的场景或数据执行操作。"
+    },
+    "execution_modes": [
+      "local",
+      "background",
+      "foreground"
+    ],
+    "surfaces": [
+      "blender",
+      "service"
+    ],
+    "modes": [
+      "apply"
+    ],
+    "inputs": {
+      "abc_path": {
+        "type": "string",
+        "default": "",
+        "description": "ABC 输出完整路径。workflow 中必须传入任务沙盒 .info 路径；为空时从任务沙盒自动推导。"
+      },
+      "cache_group": {
+        "type": "string",
+        "default": "",
+        "description": "要导出的组名（为空则从项目推断即可）"
+      }
+    },
+    "preconditions": [
+      "项目配置通过统一 config/{project}_config.json 接口加载。",
+      "后台模式由 CGI Worker 打开或复用对应 DCC 场景。"
+    ],
+    "idempotent": false,
+    "outputs": [
+      {
+        "name": "abc",
+        "type": "abc_file",
+        "label": "导出的 .abc"
+      }
+    ],
+    "statuses": [
+      "SUCCESS",
+      "PARTIAL",
+      "ERROR",
+      "BLOCKED",
+      "NEEDS_ATTENTION",
+      "TIMEOUT",
+      "CANCELLED"
+    ],
+    "errors": {
+      "API_OPERATION_ERROR": "操作执行失败，详见报告。",
+      "API_IMPLEMENTATION_MISSING": "目录存在但没有本地实现。"
+    },
+    "recovery": [
+      "读取 api_help 获取参数、前置条件和输出。",
+      "失败时检查任务报告中的错误与恢复建议。"
+    ],
+    "help": {
+      "summary": "选中指定几何根组，禁用修改器，导出 Alembic (.abc)。只管 ABC 几何导出，不生成 _info.json 或 _materials.json。",
+      "usage": "execute_api(blender.asset.blender_export_abc, params={...})",
+      "scenario": "选中指定几何根组，禁用修改器，导出 Alembic (.abc)。只管 ABC 几何导出，不生成 _info.json 或 _materials.json。",
+      "safety": "read API 只读；write/destructive API 仅写入任务沙盒。"
+    },
+    "tests": {
+      "contract": "api.registry loads this manifest and api.runner validates its receipt.",
+      "smoke": "代表性 workflow 统一验收。"
+    },
+    "handler": "cgi_pipeline.capabilities.blender.asset.blender_export_abc.adapter:execute",
+    "manifest_path": "src/cgi_pipeline/capabilities/blender/asset/blender_export_abc/capability.yaml"
+  },
+  {
+    "api_id": "blender.asset.blender_extract_materials",
+    "version": "1.0.0",
+    "name": "blender_extract_cache_materials",
+    "executor": "blender",
+    "capability": "lookdev.material",
+    "operation": "extract",
+    "stages": [
+      "lookdev"
+    ],
+    "targets": [
+      "material",
+      "texture"
+    ],
+    "access": "write",
+    "effects": {
+      "inspect": "只读取场景或标准数据，不改变资产。",
+      "apply": "按 API 实现对当前任务沙盒中的场景或数据执行操作。"
+    },
+    "execution_modes": [
+      "local",
+      "background",
+      "foreground"
+    ],
+    "surfaces": [
+      "blender",
+      "service"
+    ],
+    "modes": [
+      "apply"
+    ],
+    "inputs": {
+      "output_path": {
+        "type": "string",
+        "default": "",
+        "description": "_materials.json 输出完整路径。workflow 中必须传入任务沙盒 .info 路径；为空时从任务沙盒自动推导。"
+      },
+      "cache_group": {
+        "type": "string",
+        "description": "必填。要采集的 Blender 根对象名，由项目配置或 workflow 传入。",
+        "required": true
+      }
+    },
+    "preconditions": [
+      "项目配置通过统一 config/{project}_config.json 接口加载。",
+      "后台模式由 CGI Worker 打开或复用对应 DCC 场景。"
+    ],
+    "idempotent": false,
+    "outputs": [
+      {
+        "name": "output_path",
+        "type": "json_file",
+        "label": "_materials.json"
+      }
+    ],
+    "statuses": [
+      "SUCCESS",
+      "PARTIAL",
+      "ERROR",
+      "BLOCKED",
+      "NEEDS_ATTENTION",
+      "TIMEOUT",
+      "CANCELLED"
+    ],
+    "errors": {
+      "API_OPERATION_ERROR": "操作执行失败，详见报告。",
+      "API_IMPLEMENTATION_MISSING": "目录存在但没有本地实现。"
+    },
+    "recovery": [
+      "读取 api_help 获取参数、前置条件和输出。",
+      "失败时检查任务报告中的错误与恢复建议。"
+    ],
+    "help": {
+      "summary": "从 Blender 场景 cache 组采集最终 Color/Alpha 与 per-face 对应关系；仅 UDIM 输入按 UV 象限拆分，输出 schema v3 _materials.json。与 maya_apply_materials 配对。",
+      "usage": "execute_api(blender.asset.blender_extract_materials, params={...})",
+      "scenario": "从 Blender 场景 cache 组采集最终 Color/Alpha 与 per-face 对应关系；仅 UDIM 输入按 UV 象限拆分，输出 schema v3 _materials.json。与 maya_apply_materials 配对。",
+      "safety": "read API 只读；write/destructive API 仅写入任务沙盒。"
+    },
+    "tests": {
+      "contract": "api.registry loads this manifest and api.runner validates its receipt.",
+      "smoke": "代表性 workflow 统一验收。"
+    },
+    "handler": "cgi_pipeline.capabilities.blender.asset.blender_extract_materials.adapter:execute",
+    "manifest_path": "src/cgi_pipeline/capabilities/blender/asset/blender_extract_materials/capability.yaml"
+  },
+  {
+    "api_id": "maya.asset.check_uvsets",
+    "version": "1.0.0",
+    "name": "UV Set 检查",
+    "executor": "maya",
+    "capability": "modeling.uv",
+    "operation": "inspect",
+    "stages": [
+      "modeling",
+      "rigging"
+    ],
+    "targets": [
+      "mesh",
+      "uv_set"
+    ],
+    "access": "read",
+    "effects": {
+      "inspect": "只读取场景或标准数据，不改变资产。",
+      "apply": "按 API 实现对当前任务沙盒中的场景或数据执行操作。"
+    },
+    "execution_modes": [
+      "local",
+      "background",
+      "foreground"
+    ],
+    "surfaces": [
+      "maya",
+      "service"
+    ],
+    "modes": [
+      "inspect"
+    ],
+    "inputs": {
+      "cache_group": {
+        "type": "string",
+        "default": "cache",
+        "description": "扫描的根组名称，默认 cache"
+      }
+    },
+    "preconditions": [
+      "项目配置通过统一 config/{project}_config.json 接口加载。",
+      "后台模式由 CGI Worker 打开或复用对应 DCC 场景。"
+    ],
+    "idempotent": true,
+    "outputs": [
+      {
+        "name": "result",
+        "type": "json",
+        "label": "UV 检查结构化结果"
+      }
+    ],
+    "statuses": [
+      "SUCCESS",
+      "PARTIAL",
+      "ERROR",
+      "BLOCKED",
+      "NEEDS_ATTENTION",
+      "TIMEOUT",
+      "CANCELLED"
+    ],
+    "errors": {
+      "API_OPERATION_ERROR": "操作执行失败，详见报告。",
+      "API_IMPLEMENTATION_MISSING": "目录存在但没有本地实现。"
+    },
+    "recovery": [
+      "读取 api_help 获取参数、前置条件和输出。",
+      "失败时检查任务报告中的错误与恢复建议。"
+    ],
+    "help": {
+      "summary": "只读扫描 cache 组下所有 mesh 的 UV set 状况，并标记需要清理的 mesh；建议在执行 simplify_uvsets 之前先运行此 API。",
+      "usage": "execute_api(maya.asset.check_uvsets, params={...})",
+      "scenario": "在清理 UV set 前确认每个 mesh 的 UV 集数量、有效性和空壳集。",
+      "safety": "read API 只读；write/destructive API 仅写入任务沙盒。"
+    },
+    "tests": {
+      "contract": "api.registry loads this manifest and api.runner validates its receipt.",
+      "smoke": "代表性 workflow 统一验收。"
+    },
+    "handler": "cgi_pipeline.capabilities.maya.asset.check_uvsets.adapter:execute",
+    "manifest_path": "src/cgi_pipeline/capabilities/maya/asset/check_uvsets/capability.yaml"
+  },
+  {
+    "api_id": "maya.asset.exec_code",
+    "version": "1.0.0",
+    "name": "动态代码执行",
+    "executor": "maya",
+    "capability": "runtime.code",
+    "operation": "execute",
+    "stages": [
+      "modeling",
+      "rigging",
+      "animation"
+    ],
+    "targets": [
+      "host_runtime"
+    ],
+    "access": "destructive",
+    "effects": {
+      "inspect": "只读取场景或标准数据，不改变资产。",
+      "apply": "按 API 实现对当前任务沙盒中的场景或数据执行操作。"
+    },
+    "execution_modes": [
+      "local",
+      "background",
+      "foreground"
+    ],
+    "surfaces": [
+      "maya",
+      "service"
+    ],
+    "modes": [
+      "apply"
+    ],
+    "inputs": {
+      "code": {
+        "type": "string",
+        "default": "",
+        "description": "待执行的 Python 代码字符串"
+      },
+      "description": {
+        "type": "string",
+        "default": "",
+        "description": "代码用途描述（用于审计日志）"
+      }
+    },
+    "preconditions": [
+      "项目配置通过统一 config/{project}_config.json 接口加载。",
+      "后台模式由 CGI Worker 打开或复用对应 DCC 场景。"
+    ],
+    "idempotent": false,
+    "outputs": [
+      {
+        "name": "scene",
+        "type": "scene_file",
+        "label": "处理后场景"
+      }
+    ],
+    "statuses": [
+      "SUCCESS",
+      "PARTIAL",
+      "ERROR",
+      "BLOCKED",
+      "NEEDS_ATTENTION",
+      "TIMEOUT",
+      "CANCELLED"
+    ],
+    "errors": {
+      "API_OPERATION_ERROR": "操作执行失败，详见报告。",
+      "API_IMPLEMENTATION_MISSING": "目录存在但没有本地实现。"
+    },
+    "recovery": [
+      "读取 api_help 获取参数、前置条件和输出。",
+      "失败时检查任务报告中的错误与恢复建议。"
+    ],
+    "help": {
+      "summary": "在当前 Maya 会话中执行任意 Python 代码并返回结果。代码中将结果赋值给 result 变量即可。",
+      "usage": "execute_api(maya.asset.exec_code, params={...})",
+      "scenario": "在当前 Maya 会话中执行任意 Python 代码并返回结果。代码中将结果赋值给 result 变量即可。",
+      "safety": "read API 只读；write/destructive API 仅写入任务沙盒。"
+    },
+    "tests": {
+      "contract": "api.registry loads this manifest and api.runner validates its receipt.",
+      "smoke": "代表性 workflow 统一验收。"
+    },
+    "handler": "cgi_pipeline.capabilities.maya.asset.exec_code.adapter:execute",
+    "manifest_path": "src/cgi_pipeline/capabilities/maya/asset/exec_code/capability.yaml"
+  },
+  {
+    "api_id": "maya.asset.maya_apply_materials",
+    "version": "1.0.0",
+    "name": "maya_apply_materials_to_cache",
+    "executor": "maya",
+    "capability": "lookdev.material",
+    "operation": "apply",
+    "stages": [
+      "lookdev"
+    ],
+    "targets": [
+      "material",
+      "mesh"
+    ],
+    "access": "write",
+    "effects": {
+      "inspect": "只读取场景或标准数据，不改变资产。",
+      "apply": "按 API 实现对当前任务沙盒中的场景或数据执行操作。"
+    },
+    "execution_modes": [
+      "local",
+      "background",
+      "foreground"
+    ],
+    "surfaces": [
+      "maya",
+      "service"
+    ],
+    "modes": [
+      "apply"
+    ],
+    "inputs": {
+      "materials_path": {
+        "type": "string",
+        "default": "",
+        "description": "_materials.json 文件路径（必填）"
+      },
+      "target_group": {
+        "type": "string",
+        "default": "",
+        "description": "限定处理范围的组名，为空则处理全场景"
+      }
+    },
+    "preconditions": [
+      "项目配置通过统一 config/{project}_config.json 接口加载。",
+      "后台模式由 CGI Worker 打开或复用对应 DCC 场景。"
+    ],
+    "idempotent": false,
+    "outputs": [
+      {
+        "name": "scene",
+        "type": "scene_file",
+        "label": "已赋材场景"
+      }
+    ],
+    "statuses": [
+      "SUCCESS",
+      "PARTIAL",
+      "ERROR",
+      "BLOCKED",
+      "NEEDS_ATTENTION",
+      "TIMEOUT",
+      "CANCELLED"
+    ],
+    "errors": {
+      "API_OPERATION_ERROR": "操作执行失败，详见报告。",
+      "API_IMPLEMENTATION_MISSING": "目录存在但没有本地实现。"
+    },
+    "recovery": [
+      "读取 api_help 获取参数、前置条件和输出。",
+      "失败时检查任务报告中的错误与恢复建议。"
+    ],
+    "help": {
+      "summary": "消费 blender_extract_materials 导出的 schema v3 Color/Alpha _materials.json，为 Maya 场景中的 mesh 按面新建共享 lambert 材质球并赋予。",
+      "usage": "execute_api(maya.asset.maya_apply_materials, params={...})",
+      "scenario": "消费 blender_extract_materials 导出的 schema v3 Color/Alpha _materials.json，为 Maya 场景中的 mesh 按面新建共享 lambert 材质球并赋予。",
+      "safety": "read API 只读；write/destructive API 仅写入任务沙盒。"
+    },
+    "tests": {
+      "contract": "api.registry loads this manifest and api.runner validates its receipt.",
+      "smoke": "代表性 workflow 统一验收。"
+    },
+    "handler": "cgi_pipeline.capabilities.maya.asset.maya_apply_materials.adapter:execute",
+    "manifest_path": "src/cgi_pipeline/capabilities/maya/asset/maya_apply_materials/capability.yaml"
+  },
+  {
+    "api_id": "maya.asset.maya_build_asset_info",
+    "version": "1.0.0",
+    "name": "Maya 资产信息采集",
+    "executor": "maya",
+    "capability": "asset.metadata",
+    "operation": "build",
+    "stages": [
+      "modeling"
+    ],
+    "targets": [
+      "asset",
+      "mesh"
+    ],
+    "access": "read",
+    "effects": {
+      "inspect": "只读取场景或标准数据，不改变资产。",
+      "apply": "按 API 实现对当前任务沙盒中的场景或数据执行操作。"
+    },
+    "execution_modes": [
+      "local",
+      "background",
+      "foreground"
+    ],
+    "surfaces": [
+      "maya",
+      "service"
+    ],
+    "modes": [
+      "inspect"
+    ],
+    "inputs": {
+      "info_path": {
+        "type": "string",
+        "default": "",
+        "description": "_info.json 输出完整路径。workflow 中必须传入任务沙盒 .info 路径；为空时从任务沙盒自动推导。"
+      },
+      "cache_group": {
+        "type": "string",
+        "description": "必填。要采集的 Maya 几何根组，由项目配置或 workflow 传入。",
+        "required": true
+      }
+    },
+    "preconditions": [
+      "项目配置通过统一 config/{project}_config.json 接口加载。",
+      "后台模式由 CGI Worker 打开或复用对应 DCC 场景。"
+    ],
+    "idempotent": true,
+    "outputs": [
+      {
+        "name": "info",
+        "type": "json_file",
+        "label": "_info.json"
+      }
+    ],
+    "statuses": [
+      "SUCCESS",
+      "PARTIAL",
+      "ERROR",
+      "BLOCKED",
+      "NEEDS_ATTENTION",
+      "TIMEOUT",
+      "CANCELLED"
+    ],
+    "errors": {
+      "API_OPERATION_ERROR": "操作执行失败，详见报告。",
+      "API_IMPLEMENTATION_MISSING": "目录存在但没有本地实现。"
+    },
+    "recovery": [
+      "读取 api_help 获取参数、前置条件和输出。",
+      "失败时检查任务报告中的错误与恢复建议。"
+    ],
+    "help": {
+      "summary": "遍历指定 Maya 几何根组下所有 mesh，从 Maya 图关系求出的原始几何采集拓扑指纹（顶点数+世界空间坐标），输出标准 _info.json。只负责几何信息，不采集贴图或面级材质。",
+      "usage": "execute_api(maya.asset.maya_build_asset_info, params={...})",
+      "scenario": "遍历指定 Maya 几何根组下所有 mesh，从 Maya 图关系求出的原始几何采集拓扑指纹（顶点数+世界空间坐标），输出标准 _info.json。只负责几何信息，不采集贴图或面级材质。",
+      "safety": "read API 只读；write/destructive API 仅写入任务沙盒。"
+    },
+    "tests": {
+      "contract": "api.registry loads this manifest and api.runner validates its receipt.",
+      "smoke": "代表性 workflow 统一验收。"
+    },
+    "handler": "cgi_pipeline.capabilities.maya.asset.maya_build_asset_info.adapter:execute",
+    "manifest_path": "src/cgi_pipeline/capabilities/maya/asset/maya_build_asset_info/capability.yaml"
+  },
+  {
+    "api_id": "maya.asset.maya_build_mesh_from_abc",
+    "version": "1.0.0",
+    "name": "PyAlembic → Maya Mesh 构建",
+    "executor": "maya",
+    "capability": "modeling.geometry",
+    "operation": "build",
+    "stages": [
+      "modeling",
+      "rigging"
+    ],
+    "targets": [
+      "mesh",
+      "alembic"
+    ],
+    "access": "write",
+    "effects": {
+      "inspect": "只读取场景或标准数据，不改变资产。",
+      "apply": "按 API 实现对当前任务沙盒中的场景或数据执行操作。"
+    },
+    "execution_modes": [
+      "local",
+      "background",
+      "foreground"
+    ],
+    "surfaces": [
+      "maya",
+      "service"
+    ],
+    "modes": [
+      "apply"
+    ],
+    "inputs": {
+      "abc_path": {
+        "type": "string",
+        "default": "",
+        "description": "ABC 文件绝对路径（必填）"
+      },
+      "mesh_filter": {
+        "type": "array",
+        "default": null,
+        "description": "DAG 路径列表，只构建匹配项。不传 = 全量构建"
+      },
+      "parent_group": {
+        "type": "string",
+        "default": "",
+        "description": "构建后的顶层组名。默认还原 ABC 原始层级"
+      }
+    },
+    "preconditions": [
+      "项目配置通过统一 config/{project}_config.json 接口加载。",
+      "后台模式由 CGI Worker 打开或复用对应 DCC 场景。"
+    ],
+    "idempotent": false,
+    "outputs": [
+      {
+        "name": "scene",
+        "type": "scene_file",
+        "label": "构建后的 Maya 场景"
+      }
+    ],
+    "statuses": [
+      "SUCCESS",
+      "PARTIAL",
+      "ERROR",
+      "BLOCKED",
+      "NEEDS_ATTENTION",
+      "TIMEOUT",
+      "CANCELLED"
+    ],
+    "errors": {
+      "API_OPERATION_ERROR": "操作执行失败，详见报告。",
+      "API_IMPLEMENTATION_MISSING": "目录存在但没有本地实现。"
+    },
+    "recovery": [
+      "读取 api_help 获取参数、前置条件和输出。",
+      "失败时检查任务报告中的错误与恢复建议。"
+    ],
+    "help": {
+      "summary": "使用 PyAlembic 读取 ABC 拓扑数据，在 Maya 中用 OpenMaya MFnMesh.create 纯数据构建 mesh（含 UV），还原 DAG 层级。不走 Maya import 命令。支持全量构建和按 mesh_filter 过滤构建。",
+      "usage": "execute_api(maya.asset.maya_build_mesh_from_abc, params={...})",
+      "scenario": "使用 PyAlembic 读取 ABC 拓扑数据，在 Maya 中用 OpenMaya MFnMesh.create 纯数据构建 mesh（含 UV），还原 DAG 层级。不走 Maya import 命令。支持全量构建和按 mesh_filter 过滤构建。",
+      "safety": "read API 只读；write/destructive API 仅写入任务沙盒。"
+    },
+    "tests": {
+      "contract": "api.registry loads this manifest and api.runner validates its receipt.",
+      "smoke": "代表性 workflow 统一验收。"
+    },
+    "handler": "cgi_pipeline.capabilities.maya.asset.maya_build_mesh_from_abc.adapter:execute",
+    "manifest_path": "src/cgi_pipeline/capabilities/maya/asset/maya_build_mesh_from_abc/capability.yaml"
+  },
+  {
+    "api_id": "maya.asset.maya_capture_viewport",
+    "version": "1.0.0",
+    "name": "Maya 视口截图",
+    "executor": "maya",
+    "capability": "viewport.capture",
+    "operation": "capture",
+    "stages": [
+      "modeling",
+      "rigging",
+      "animation"
+    ],
+    "targets": [
+      "viewport"
+    ],
+    "access": "read",
+    "effects": {
+      "inspect": "只读取场景或标准数据，不改变资产。",
+      "apply": "按 API 实现对当前任务沙盒中的场景或数据执行操作。"
+    },
+    "execution_modes": [
+      "local",
+      "background",
+      "foreground"
+    ],
+    "surfaces": [
+      "maya",
+      "service"
+    ],
+    "modes": [
+      "inspect"
+    ],
+    "inputs": {},
+    "preconditions": [
+      "项目配置通过统一 config/{project}_config.json 接口加载。",
+      "后台模式由 CGI Worker 打开或复用对应 DCC 场景。"
+    ],
+    "idempotent": true,
+    "outputs": [
+      {
+        "name": "output_path",
+        "type": "image_file",
+        "label": "PNG 截图"
+      }
+    ],
+    "statuses": [
+      "SUCCESS",
+      "PARTIAL",
+      "ERROR",
+      "BLOCKED",
+      "NEEDS_ATTENTION",
+      "TIMEOUT",
+      "CANCELLED"
+    ],
+    "errors": {
+      "API_OPERATION_ERROR": "操作执行失败，详见报告。",
+      "API_IMPLEMENTATION_MISSING": "目录存在但没有本地实现。"
+    },
+    "recovery": [
+      "读取 api_help 获取参数、前置条件和输出。",
+      "失败时检查任务报告中的错误与恢复建议。"
+    ],
+    "help": {
+      "summary": "获取 Maya 当前活动视口的截图，并保存为 PNG。",
+      "usage": "execute_api(maya.asset.maya_capture_viewport, params={...})",
+      "scenario": "获取 Maya 当前活动视口的截图，并保存为 PNG。",
+      "safety": "read API 只读；write/destructive API 仅写入任务沙盒。"
+    },
+    "tests": {
+      "contract": "api.registry loads this manifest and api.runner validates its receipt.",
+      "smoke": "代表性 workflow 统一验收。"
+    },
+    "handler": "cgi_pipeline.capabilities.maya.asset.maya_capture_viewport.adapter:execute",
+    "manifest_path": "src/cgi_pipeline/capabilities/maya/asset/maya_capture_viewport/capability.yaml"
+  },
+  {
+    "api_id": "maya.asset.maya_check_textures",
+    "version": "1.0.0",
+    "name": "贴图检查",
+    "executor": "maya",
+    "capability": "lookdev.texture",
+    "operation": "inspect",
+    "stages": [
+      "lookdev"
+    ],
+    "targets": [
+      "texture"
+    ],
+    "access": "read",
+    "effects": {
+      "inspect": "只读取场景或标准数据，不改变资产。",
+      "apply": "按 API 实现对当前任务沙盒中的场景或数据执行操作。"
+    },
+    "execution_modes": [
+      "local",
+      "background",
+      "foreground"
+    ],
+    "surfaces": [
+      "maya",
+      "service"
+    ],
+    "modes": [
+      "inspect"
+    ],
+    "inputs": {
+      "check_exists": {
+        "type": "boolean",
+        "default": true,
+        "description": "是否检查贴图文件在磁盘上是否存在"
+      }
+    },
+    "preconditions": [
+      "项目配置通过统一 config/{project}_config.json 接口加载。",
+      "后台模式由 CGI Worker 打开或复用对应 DCC 场景。"
+    ],
+    "idempotent": true,
+    "outputs": [
+      {
+        "name": "scene",
+        "type": "scene_file",
+        "label": "检查后场景"
+      },
+      {
+        "name": "report",
+        "type": "report",
+        "label": "检查报告 (.md)"
+      }
+    ],
+    "statuses": [
+      "SUCCESS",
+      "PARTIAL",
+      "ERROR",
+      "BLOCKED",
+      "NEEDS_ATTENTION",
+      "TIMEOUT",
+      "CANCELLED"
+    ],
+    "errors": {
+      "API_OPERATION_ERROR": "操作执行失败，详见报告。",
+      "API_IMPLEMENTATION_MISSING": "目录存在但没有本地实现。"
+    },
+    "recovery": [
+      "读取 api_help 获取参数、前置条件和输出。",
+      "失败时检查任务报告中的错误与恢复建议。"
+    ],
+    "help": {
+      "summary": "扫描 Maya 场景中所有 file 节点，检查贴图是否存在于磁盘（支持 UDIM），按目录分组汇总报告。",
+      "usage": "execute_api(maya.asset.maya_check_textures, params={...})",
+      "scenario": "扫描 Maya 场景中所有 file 节点，检查贴图是否存在于磁盘（支持 UDIM），按目录分组汇总报告。",
+      "safety": "read API 只读；write/destructive API 仅写入任务沙盒。"
+    },
+    "tests": {
+      "contract": "api.registry loads this manifest and api.runner validates its receipt.",
+      "smoke": "代表性 workflow 统一验收。"
+    },
+    "handler": "cgi_pipeline.capabilities.maya.asset.maya_check_textures.adapter:execute",
+    "manifest_path": "src/cgi_pipeline/capabilities/maya/asset/maya_check_textures/capability.yaml"
+  },
+  {
+    "api_id": "maya.asset.maya_compare_asset_in_scene",
+    "version": "1.0.0",
+    "name": "maya_compare_abc_to_scene_geometry",
+    "executor": "maya",
+    "capability": "asset.compare",
+    "operation": "compare",
+    "stages": [
+      "modeling",
+      "rigging"
+    ],
+    "targets": [
+      "asset",
+      "mesh"
+    ],
+    "access": "read",
+    "effects": {
+      "inspect": "只读取场景或标准数据，不改变资产。",
+      "apply": "按 API 实现对当前任务沙盒中的场景或数据执行操作。"
+    },
+    "execution_modes": [
+      "local",
+      "background",
+      "foreground"
+    ],
+    "surfaces": [
+      "maya",
+      "service"
+    ],
+    "modes": [
+      "inspect"
+    ],
+    "inputs": {
+      "input_source": {
+        "type": "string",
+        "default": "",
+        "description": "source 侧 ABC 或 _info.json。workflow 传 blender_export_abc 的 output_path。"
+      },
+      "cache_group": {
+        "type": "string",
+        "description": "必填。当前 Maya target rig 场景中的几何根组，由项目配置或 workflow 传入。",
+        "required": true
+      },
+      "output_path": {
+        "type": "string",
+        "default": "",
+        "description": "compare_result.json 输出路径。为空时从任务沙盒 .info 自动推导。"
+      },
+      "label_source": {
+        "type": "string",
+        "default": "",
+        "description": "source 标签，空值时从输入路径自动推断。"
+      },
+      "label_target": {
+        "type": "string",
+        "default": "rig",
+        "description": "target 标签，默认 rig。"
+      }
+    },
+    "preconditions": [
+      "项目配置通过统一 config/{project}_config.json 接口加载。",
+      "后台模式由 CGI Worker 打开或复用对应 DCC 场景。"
+    ],
+    "idempotent": true,
+    "outputs": [
+      {
+        "name": "compare_result",
+        "type": "json_file",
+        "label": "compare_result.json"
+      }
+    ],
+    "statuses": [
+      "SUCCESS",
+      "PARTIAL",
+      "ERROR",
+      "BLOCKED",
+      "NEEDS_ATTENTION",
+      "TIMEOUT",
+      "CANCELLED"
+    ],
+    "errors": {
+      "API_OPERATION_ERROR": "操作执行失败，详见报告。",
+      "API_IMPLEMENTATION_MISSING": "目录存在但没有本地实现。"
+    },
+    "recovery": [
+      "读取 api_help 获取参数、前置条件和输出。",
+      "失败时检查任务报告中的错误与恢复建议。"
+    ],
+    "help": {
+      "summary": "在当前已打开的 target rig Maya 场景内采集指定 cache_group 的 ShapeOrig 几何信息，读取 source 侧 ABC 或 _info.json，调用统一 compare 算法并写出 compare_result.json。用于只看差异或为后续 maya_sync_rig_incremental 提供拼装决策。",
+      "usage": "execute_api(maya.asset.maya_compare_asset_in_scene, params={...})",
+      "scenario": "在当前已打开的 target rig Maya 场景内采集指定 cache_group 的 ShapeOrig 几何信息，读取 source 侧 ABC 或 _info.json，调用统一 compare 算法并写出 compare_result.json。用于只看差异或为后续 maya_sync_rig_incremental 提供拼装决策。",
+      "safety": "read API 只读；write/destructive API 仅写入任务沙盒。"
+    },
+    "tests": {
+      "contract": "api.registry loads this manifest and api.runner validates its receipt.",
+      "smoke": "代表性 workflow 统一验收。"
+    },
+    "handler": "cgi_pipeline.capabilities.maya.asset.maya_compare_asset_in_scene.adapter:execute",
+    "manifest_path": "src/cgi_pipeline/capabilities/maya/asset/maya_compare_asset_in_scene/capability.yaml"
+  },
+  {
+    "api_id": "maya.asset.maya_conform_normals",
+    "version": "1.0.0",
+    "name": "统一法线并清零顶点偏移",
+    "executor": "maya",
+    "capability": "modeling.geometry",
+    "operation": "conform",
+    "stages": [
+      "modeling"
+    ],
+    "targets": [
+      "mesh",
+      "normal"
+    ],
+    "access": "destructive",
+    "effects": {
+      "inspect": "只读取场景或标准数据，不改变资产。",
+      "apply": "按 API 实现对当前任务沙盒中的场景或数据执行操作。"
+    },
+    "execution_modes": [
+      "local",
+      "background",
+      "foreground"
+    ],
+    "surfaces": [
+      "maya",
+      "service"
+    ],
+    "modes": [
+      "apply"
+    ],
+    "inputs": {
+      "geo_group": {
+        "type": "string",
+        "default": "",
+        "description": "目标组名（默认自动查找 geo/Group/cache）"
+      }
+    },
+    "preconditions": [
+      "项目配置通过统一 config/{project}_config.json 接口加载。",
+      "后台模式由 CGI Worker 打开或复用对应 DCC 场景。"
+    ],
+    "idempotent": false,
+    "outputs": [
+      {
+        "name": "scene",
+        "type": "scene_file",
+        "label": "处理后场景"
+      },
+      {
+        "name": "report",
+        "type": "report",
+        "label": "法线报告 (.md)"
+      }
+    ],
+    "statuses": [
+      "SUCCESS",
+      "PARTIAL",
+      "ERROR",
+      "BLOCKED",
+      "NEEDS_ATTENTION",
+      "TIMEOUT",
+      "CANCELLED"
+    ],
+    "errors": {
+      "API_OPERATION_ERROR": "操作执行失败，详见报告。",
+      "API_IMPLEMENTATION_MISSING": "目录存在但没有本地实现。"
+    },
+    "recovery": [
+      "读取 api_help 获取参数、前置条件和输出。",
+      "失败时检查任务报告中的错误与恢复建议。"
+    ],
+    "help": {
+      "summary": "对 cache/geo 组内所有 mesh 执行 polyNormal conform（normalMode=2, userNormalMode=0, ch=0），统一法线方向并清除顶点局部空间的 pnts 偏移值。",
+      "usage": "execute_api(maya.asset.maya_conform_normals, params={...})",
+      "scenario": "对 cache/geo 组内所有 mesh 执行 polyNormal conform（normalMode=2, userNormalMode=0, ch=0），统一法线方向并清除顶点局部空间的 pnts 偏移值。",
+      "safety": "read API 只读；write/destructive API 仅写入任务沙盒。"
+    },
+    "tests": {
+      "contract": "api.registry loads this manifest and api.runner validates its receipt.",
+      "smoke": "代表性 workflow 统一验收。"
+    },
+    "handler": "cgi_pipeline.capabilities.maya.asset.maya_conform_normals.adapter:execute",
+    "manifest_path": "src/cgi_pipeline/capabilities/maya/asset/maya_conform_normals/capability.yaml"
+  },
+  {
+    "api_id": "maya.asset.maya_create_primitive",
+    "version": "1.0.0",
+    "name": "maya_create_primitive",
+    "executor": "maya",
+    "capability": "modeling.geometry",
+    "operation": "create",
+    "stages": [
+      "modeling"
+    ],
+    "targets": [
+      "mesh"
+    ],
+    "access": "write",
+    "effects": {
+      "inspect": "只读取场景或标准数据，不改变资产。",
+      "apply": "按 API 实现对当前任务沙盒中的场景或数据执行操作。"
+    },
+    "execution_modes": [
+      "local",
+      "background",
+      "foreground"
+    ],
+    "surfaces": [
+      "maya",
+      "service"
+    ],
+    "modes": [
+      "apply"
+    ],
+    "inputs": {},
+    "preconditions": [
+      "项目配置通过统一 config/{project}_config.json 接口加载。",
+      "后台模式由 CGI Worker 打开或复用对应 DCC 场景。"
+    ],
+    "idempotent": false,
+    "outputs": {},
+    "statuses": [
+      "SUCCESS",
+      "PARTIAL",
+      "ERROR",
+      "BLOCKED",
+      "NEEDS_ATTENTION",
+      "TIMEOUT",
+      "CANCELLED"
+    ],
+    "errors": {
+      "API_OPERATION_ERROR": "操作执行失败，详见报告。",
+      "API_IMPLEMENTATION_MISSING": "目录存在但没有本地实现。"
+    },
+    "recovery": [
+      "读取 api_help 获取参数、前置条件和输出。",
+      "失败时检查任务报告中的错误与恢复建议。"
+    ],
+    "help": {
+      "summary": "maya_create_primitive",
+      "usage": "execute_api(maya.asset.maya_create_primitive, params={...})",
+      "scenario": "maya_create_primitive",
+      "safety": "read API 只读；write/destructive API 仅写入任务沙盒。"
+    },
+    "tests": {
+      "contract": "api.registry loads this manifest and api.runner validates its receipt.",
+      "smoke": "代表性 workflow 统一验收。"
+    },
+    "handler": "cgi_pipeline.capabilities.maya.asset.maya_create_primitive.adapter:execute",
+    "manifest_path": "src/cgi_pipeline/capabilities/maya/asset/maya_create_primitive/capability.yaml"
+  },
+  {
+    "api_id": "maya.asset.maya_export_abc",
+    "version": "1.0.0",
+    "name": "Maya 导出 ABC",
+    "executor": "maya",
+    "capability": "asset.exchange",
+    "operation": "export",
+    "stages": [
+      "modeling",
+      "rigging",
+      "animation"
+    ],
+    "targets": [
+      "asset",
+      "alembic"
+    ],
+    "access": "write",
+    "effects": {
+      "inspect": "只读取场景或标准数据，不改变资产。",
+      "apply": "按 API 实现对当前任务沙盒中的场景或数据执行操作。"
+    },
+    "execution_modes": [
+      "local",
+      "background",
+      "foreground"
+    ],
+    "surfaces": [
+      "maya",
+      "service"
+    ],
+    "modes": [
+      "apply"
+    ],
+    "inputs": {
+      "abc_path": {
+        "type": "string",
+        "default": "",
+        "description": "ABC 输出完整路径。workflow 中必须传入任务沙盒 .info 路径；为空时从任务沙盒自动推导。"
+      },
+      "frame_range": {
+        "type": "array",
+        "default": [
+          1,
+          1
+        ],
+        "description": "导出帧范围 [start, end]"
+      },
+      "root_nodes": {
+        "type": "string",
+        "default": "",
+        "description": "要导出的根节点列表。为空则导出全部顶层。"
+      }
+    },
+    "preconditions": [
+      "项目配置通过统一 config/{project}_config.json 接口加载。",
+      "后台模式由 CGI Worker 打开或复用对应 DCC 场景。"
+    ],
+    "idempotent": false,
+    "outputs": [
+      {
+        "name": "abc",
+        "type": "abc_file",
+        "label": "导出的 .abc"
+      }
+    ],
+    "statuses": [
+      "SUCCESS",
+      "PARTIAL",
+      "ERROR",
+      "BLOCKED",
+      "NEEDS_ATTENTION",
+      "TIMEOUT",
+      "CANCELLED"
+    ],
+    "errors": {
+      "API_OPERATION_ERROR": "操作执行失败，详见报告。",
+      "API_IMPLEMENTATION_MISSING": "目录存在但没有本地实现。"
+    },
+    "recovery": [
+      "读取 api_help 获取参数、前置条件和输出。",
+      "失败时检查任务报告中的错误与恢复建议。"
+    ],
+    "help": {
+      "summary": "将当前 Maya 场景导出为 Alembic (.abc)，含 UV、FaceSet、可见性，Ogawa 格式。不保留 skinCluster。",
+      "usage": "execute_api(maya.asset.maya_export_abc, params={...})",
+      "scenario": "将当前 Maya 场景导出为 Alembic (.abc)，含 UV、FaceSet、可见性，Ogawa 格式。不保留 skinCluster。",
+      "safety": "read API 只读；write/destructive API 仅写入任务沙盒。"
+    },
+    "tests": {
+      "contract": "api.registry loads this manifest and api.runner validates its receipt.",
+      "smoke": "代表性 workflow 统一验收。"
+    },
+    "handler": "cgi_pipeline.capabilities.maya.asset.maya_export_abc.adapter:execute",
+    "manifest_path": "src/cgi_pipeline/capabilities/maya/asset/maya_export_abc/capability.yaml"
+  },
+  {
+    "api_id": "maya.asset.maya_freeze_transforms",
+    "version": "1.0.0",
+    "name": "冻结变换",
+    "executor": "maya",
+    "capability": "scene.edit",
+    "operation": "freeze",
+    "stages": [
+      "modeling",
+      "rigging"
+    ],
+    "targets": [
+      "transform"
+    ],
+    "access": "destructive",
+    "effects": {
+      "inspect": "只读取场景或标准数据，不改变资产。",
+      "apply": "按 API 实现对当前任务沙盒中的场景或数据执行操作。"
+    },
+    "execution_modes": [
+      "local",
+      "background",
+      "foreground"
+    ],
+    "surfaces": [
+      "maya",
+      "service"
+    ],
+    "modes": [
+      "apply"
+    ],
+    "inputs": {
+      "target_nodes": {
+        "type": "array",
+        "default": [],
+        "description": "指定节点列表，为空则作用于所有 mesh/transform"
+      }
+    },
+    "preconditions": [
+      "项目配置通过统一 config/{project}_config.json 接口加载。",
+      "后台模式由 CGI Worker 打开或复用对应 DCC 场景。"
+    ],
+    "idempotent": false,
+    "outputs": [
+      {
+        "name": "scene",
+        "type": "scene_file",
+        "label": "处理后场景"
+      },
+      {
+        "name": "report",
+        "type": "report",
+        "label": "冻结报告 (.md)"
+      }
+    ],
+    "statuses": [
+      "SUCCESS",
+      "PARTIAL",
+      "ERROR",
+      "BLOCKED",
+      "NEEDS_ATTENTION",
+      "TIMEOUT",
+      "CANCELLED"
+    ],
+    "errors": {
+      "API_OPERATION_ERROR": "操作执行失败，详见报告。",
+      "API_IMPLEMENTATION_MISSING": "目录存在但没有本地实现。"
+    },
+    "recovery": [
+      "读取 api_help 获取参数、前置条件和输出。",
+      "失败时检查任务报告中的错误与恢复建议。"
+    ],
+    "help": {
+      "summary": "冻结场景中所有可变换节点的 Translate/Rotate/Scale，并清除构造历史。",
+      "usage": "execute_api(maya.asset.maya_freeze_transforms, params={...})",
+      "scenario": "冻结场景中所有可变换节点的 Translate/Rotate/Scale，并清除构造历史。",
+      "safety": "read API 只读；write/destructive API 仅写入任务沙盒。"
+    },
+    "tests": {
+      "contract": "api.registry loads this manifest and api.runner validates its receipt.",
+      "smoke": "代表性 workflow 统一验收。"
+    },
+    "handler": "cgi_pipeline.capabilities.maya.asset.maya_freeze_transforms.adapter:execute",
+    "manifest_path": "src/cgi_pipeline/capabilities/maya/asset/maya_freeze_transforms/capability.yaml"
+  },
+  {
+    "api_id": "maya.asset.maya_get_object_info",
+    "version": "1.0.0",
+    "name": "maya_get_object_info",
+    "executor": "maya",
+    "capability": "scene.inspect",
+    "operation": "inspect",
+    "stages": [
+      "modeling",
+      "rigging",
+      "animation"
+    ],
+    "targets": [
+      "scene_object"
+    ],
+    "access": "write",
+    "effects": {
+      "inspect": "只读取场景或标准数据，不改变资产。",
+      "apply": "按 API 实现对当前任务沙盒中的场景或数据执行操作。"
+    },
+    "execution_modes": [
+      "local",
+      "background",
+      "foreground"
+    ],
+    "surfaces": [
+      "maya",
+      "service"
+    ],
+    "modes": [
+      "apply"
+    ],
+    "inputs": {},
+    "preconditions": [
+      "项目配置通过统一 config/{project}_config.json 接口加载。",
+      "后台模式由 CGI Worker 打开或复用对应 DCC 场景。"
+    ],
+    "idempotent": false,
+    "outputs": {},
+    "statuses": [
+      "SUCCESS",
+      "PARTIAL",
+      "ERROR",
+      "BLOCKED",
+      "NEEDS_ATTENTION",
+      "TIMEOUT",
+      "CANCELLED"
+    ],
+    "errors": {
+      "API_OPERATION_ERROR": "操作执行失败，详见报告。",
+      "API_IMPLEMENTATION_MISSING": "目录存在但没有本地实现。"
+    },
+    "recovery": [
+      "读取 api_help 获取参数、前置条件和输出。",
+      "失败时检查任务报告中的错误与恢复建议。"
+    ],
+    "help": {
+      "summary": "maya_get_object_info",
+      "usage": "execute_api(maya.asset.maya_get_object_info, params={...})",
+      "scenario": "maya_get_object_info",
+      "safety": "read API 只读；write/destructive API 仅写入任务沙盒。"
+    },
+    "tests": {
+      "contract": "api.registry loads this manifest and api.runner validates its receipt.",
+      "smoke": "代表性 workflow 统一验收。"
+    },
+    "handler": "cgi_pipeline.capabilities.maya.asset.maya_get_object_info.adapter:execute",
+    "manifest_path": "src/cgi_pipeline/capabilities/maya/asset/maya_get_object_info/capability.yaml"
+  },
+  {
+    "api_id": "maya.asset.maya_get_scene_info",
+    "version": "1.0.0",
+    "name": "获取场景总览",
+    "executor": "maya",
+    "capability": "scene.inspect",
+    "operation": "inspect",
+    "stages": [
+      "modeling",
+      "rigging",
+      "animation"
+    ],
+    "targets": [
+      "scene"
+    ],
+    "access": "read",
+    "effects": {
+      "inspect": "只读取场景或标准数据，不改变资产。",
+      "apply": "按 API 实现对当前任务沙盒中的场景或数据执行操作。"
+    },
+    "execution_modes": [
+      "local",
+      "background",
+      "foreground"
+    ],
+    "surfaces": [
+      "maya",
+      "service"
+    ],
+    "modes": [
+      "inspect"
+    ],
+    "inputs": {},
+    "preconditions": [
+      "项目配置通过统一 config/{project}_config.json 接口加载。",
+      "后台模式由 CGI Worker 打开或复用对应 DCC 场景。"
+    ],
+    "idempotent": true,
+    "outputs": [
+      {
+        "name": "scene_info",
+        "type": "json",
+        "label": "场景信息 (JSON)"
+      }
+    ],
+    "statuses": [
+      "SUCCESS",
+      "PARTIAL",
+      "ERROR",
+      "BLOCKED",
+      "NEEDS_ATTENTION",
+      "TIMEOUT",
+      "CANCELLED"
+    ],
+    "errors": {
+      "API_OPERATION_ERROR": "操作执行失败，详见报告。",
+      "API_IMPLEMENTATION_MISSING": "目录存在但没有本地实现。"
+    },
+    "recovery": [
+      "读取 api_help 获取参数、前置条件和输出。",
+      "失败时检查任务报告中的错误与恢复建议。"
+    ],
+    "help": {
+      "summary": "获取 Maya 当前场景的全面信息，包括对象统计、面数、材质列表、时间轴、渲染器、引用文件、未知节点等。AI 理解场景全貌的基础能力。",
+      "usage": "execute_api(maya.asset.maya_get_scene_info, params={...})",
+      "scenario": "获取 Maya 当前场景的全面信息，包括对象统计、面数、材质列表、时间轴、渲染器、引用文件、未知节点等。AI 理解场景全貌的基础能力。",
+      "safety": "read API 只读；write/destructive API 仅写入任务沙盒。"
+    },
+    "tests": {
+      "contract": "api.registry loads this manifest and api.runner validates its receipt.",
+      "smoke": "代表性 workflow 统一验收。"
+    },
+    "handler": "cgi_pipeline.capabilities.maya.asset.maya_get_scene_info.adapter:execute",
+    "manifest_path": "src/cgi_pipeline/capabilities/maya/asset/maya_get_scene_info/capability.yaml"
+  },
+  {
+    "api_id": "maya.asset.maya_import_abc",
+    "version": "1.0.0",
+    "name": "导入 ABC 缓存",
+    "executor": "maya",
+    "capability": "asset.exchange",
+    "operation": "import",
+    "stages": [
+      "modeling",
+      "rigging",
+      "animation"
+    ],
+    "targets": [
+      "asset",
+      "alembic"
+    ],
+    "access": "write",
+    "effects": {
+      "inspect": "只读取场景或标准数据，不改变资产。",
+      "apply": "按 API 实现对当前任务沙盒中的场景或数据执行操作。"
+    },
+    "execution_modes": [
+      "local",
+      "background",
+      "foreground"
+    ],
+    "surfaces": [
+      "maya",
+      "service"
+    ],
+    "modes": [
+      "apply"
+    ],
+    "inputs": {
+      "abc_path": {
+        "type": "string",
+        "default": "",
+        "description": "ABC 文件的完整路径（必填）"
+      },
+      "scale_factor": {
+        "type": "number",
+        "default": 100.0,
+        "description": "导入后缩放系数，0 表示不缩放"
+      },
+      "new_scene": {
+        "type": "boolean",
+        "default": true,
+        "description": "是否先新建空场景再导入"
+      }
+    },
+    "preconditions": [
+      "项目配置通过统一 config/{project}_config.json 接口加载。",
+      "后台模式由 CGI Worker 打开或复用对应 DCC 场景。"
+    ],
+    "idempotent": false,
+    "outputs": [
+      {
+        "name": "scene",
+        "type": "scene_file",
+        "label": "导入后场景"
+      }
+    ],
+    "statuses": [
+      "SUCCESS",
+      "PARTIAL",
+      "ERROR",
+      "BLOCKED",
+      "NEEDS_ATTENTION",
+      "TIMEOUT",
+      "CANCELLED"
+    ],
+    "errors": {
+      "API_OPERATION_ERROR": "操作执行失败，详见报告。",
+      "API_IMPLEMENTATION_MISSING": "目录存在但没有本地实现。"
+    },
+    "recovery": [
+      "读取 api_help 获取参数、前置条件和输出。",
+      "失败时检查任务报告中的错误与恢复建议。"
+    ],
+    "help": {
+      "summary": "将 Alembic (.abc) 文件导入 Maya 场景，支持坐标系缩放对齐（默认 100x Blender→Maya）并冻结变换。",
+      "usage": "execute_api(maya.asset.maya_import_abc, params={...})",
+      "scenario": "将 Alembic (.abc) 文件导入 Maya 场景，支持坐标系缩放对齐（默认 100x Blender→Maya）并冻结变换。",
+      "safety": "read API 只读；write/destructive API 仅写入任务沙盒。"
+    },
+    "tests": {
+      "contract": "api.registry loads this manifest and api.runner validates its receipt.",
+      "smoke": "代表性 workflow 统一验收。"
+    },
+    "handler": "cgi_pipeline.capabilities.maya.asset.maya_import_abc.adapter:execute",
+    "manifest_path": "src/cgi_pipeline/capabilities/maya/asset/maya_import_abc/capability.yaml"
+  },
+  {
+    "api_id": "maya.asset.maya_master_cleanup",
+    "version": "1.0.0",
+    "name": "管线全自动清理与优化",
+    "executor": "maya",
+    "capability": "scene.cleanup",
+    "operation": "clean",
+    "stages": [
+      "modeling",
+      "rigging",
+      "animation"
+    ],
+    "targets": [
+      "scene"
+    ],
+    "access": "destructive",
+    "effects": {
+      "inspect": "只读取场景或标准数据，不改变资产。",
+      "apply": "按 API 实现对当前任务沙盒中的场景或数据执行操作。"
+    },
+    "execution_modes": [
+      "local",
+      "background",
+      "foreground"
+    ],
+    "surfaces": [
+      "maya",
+      "service"
+    ],
+    "modes": [
+      "apply"
+    ],
+    "inputs": {
+      "mode": {
+        "type": "string",
+        "default": "check",
+        "description": "操作模式：'check' 生成质检报告（只读安全），'fix' 会产生破坏性修复动作"
+      },
+      "save_path": {
+        "type": "string",
+        "default": "",
+        "description": "另存路径，清理后保存到此路径，MD报告自动输出在旁边"
+      }
+    },
+    "preconditions": [
+      "项目配置通过统一 config/{project}_config.json 接口加载。",
+      "后台模式由 CGI Worker 打开或复用对应 DCC 场景。"
+    ],
+    "idempotent": false,
+    "outputs": [
+      {
+        "name": "scene",
+        "type": "scene_file",
+        "label": "清理后场景"
+      },
+      {
+        "name": "report",
+        "type": "report",
+        "label": "清理报告 (.md)"
+      }
+    ],
+    "statuses": [
+      "SUCCESS",
+      "PARTIAL",
+      "ERROR",
+      "BLOCKED",
+      "NEEDS_ATTENTION",
+      "TIMEOUT",
+      "CANCELLED"
+    ],
+    "errors": {
+      "API_OPERATION_ERROR": "操作执行失败，详见报告。",
+      "API_IMPLEMENTATION_MISSING": "目录存在但没有本地实现。"
+    },
+    "recovery": [
+      "读取 api_help 获取参数、前置条件和输出。",
+      "失败时检查任务报告中的错误与恢复建议。"
+    ],
+    "help": {
+      "summary": "基于管线项目上下文，扫描或清理未知节点、插件残留、野生相机、多余UV集、死动画帧与空骨骼权重。支持 Check（只读诊断）和 Fix（执行清理）两种模式。",
+      "usage": "execute_api(maya.asset.maya_master_cleanup, params={...})",
+      "scenario": "基于管线项目上下文，扫描或清理未知节点、插件残留、野生相机、多余UV集、死动画帧与空骨骼权重。支持 Check（只读诊断）和 Fix（执行清理）两种模式。",
+      "safety": "read API 只读；write/destructive API 仅写入任务沙盒。"
+    },
+    "tests": {
+      "contract": "api.registry loads this manifest and api.runner validates its receipt.",
+      "smoke": "代表性 workflow 统一验收。"
+    },
+    "handler": "cgi_pipeline.capabilities.maya.asset.maya_master_cleanup.adapter:execute",
+    "manifest_path": "src/cgi_pipeline/capabilities/maya/asset/maya_master_cleanup/capability.yaml"
+  },
+  {
+    "api_id": "maya.asset.maya_open_scene",
+    "version": "1.0.0",
+    "name": "maya_open_scene",
+    "executor": "maya",
+    "capability": "scene.file",
+    "operation": "open",
+    "stages": [
+      "modeling",
+      "rigging",
+      "animation"
+    ],
+    "targets": [
+      "scene_file"
+    ],
+    "access": "write",
+    "effects": {
+      "inspect": "只读取场景或标准数据，不改变资产。",
+      "apply": "按 API 实现对当前任务沙盒中的场景或数据执行操作。"
+    },
+    "execution_modes": [
+      "local",
+      "background",
+      "foreground"
+    ],
+    "surfaces": [
+      "maya",
+      "service"
+    ],
+    "modes": [
+      "apply"
+    ],
+    "inputs": {},
+    "preconditions": [
+      "项目配置通过统一 config/{project}_config.json 接口加载。",
+      "后台模式由 CGI Worker 打开或复用对应 DCC 场景。"
+    ],
+    "idempotent": false,
+    "outputs": {},
+    "statuses": [
+      "SUCCESS",
+      "PARTIAL",
+      "ERROR",
+      "BLOCKED",
+      "NEEDS_ATTENTION",
+      "TIMEOUT",
+      "CANCELLED"
+    ],
+    "errors": {
+      "API_OPERATION_ERROR": "操作执行失败，详见报告。",
+      "API_IMPLEMENTATION_MISSING": "目录存在但没有本地实现。"
+    },
+    "recovery": [
+      "读取 api_help 获取参数、前置条件和输出。",
+      "失败时检查任务报告中的错误与恢复建议。"
+    ],
+    "help": {
+      "summary": "maya_open_scene",
+      "usage": "execute_api(maya.asset.maya_open_scene, params={...})",
+      "scenario": "maya_open_scene",
+      "safety": "read API 只读；write/destructive API 仅写入任务沙盒。"
+    },
+    "tests": {
+      "contract": "api.registry loads this manifest and api.runner validates its receipt.",
+      "smoke": "代表性 workflow 统一验收。"
+    },
+    "handler": "cgi_pipeline.capabilities.maya.asset.maya_open_scene.adapter:execute",
+    "manifest_path": "src/cgi_pipeline/capabilities/maya/asset/maya_open_scene/capability.yaml"
+  },
+  {
+    "api_id": "maya.asset.maya_select_objects",
+    "version": "1.0.0",
+    "name": "maya_select_objects",
+    "executor": "maya",
+    "capability": "scene.edit",
+    "operation": "select",
+    "stages": [
+      "modeling",
+      "rigging",
+      "animation"
+    ],
+    "targets": [
+      "scene_object"
+    ],
+    "access": "write",
+    "effects": {
+      "inspect": "只读取场景或标准数据，不改变资产。",
+      "apply": "按 API 实现对当前任务沙盒中的场景或数据执行操作。"
+    },
+    "execution_modes": [
+      "local",
+      "background",
+      "foreground"
+    ],
+    "surfaces": [
+      "maya",
+      "service"
+    ],
+    "modes": [
+      "apply"
+    ],
+    "inputs": {},
+    "preconditions": [
+      "项目配置通过统一 config/{project}_config.json 接口加载。",
+      "后台模式由 CGI Worker 打开或复用对应 DCC 场景。"
+    ],
+    "idempotent": false,
+    "outputs": {},
+    "statuses": [
+      "SUCCESS",
+      "PARTIAL",
+      "ERROR",
+      "BLOCKED",
+      "NEEDS_ATTENTION",
+      "TIMEOUT",
+      "CANCELLED"
+    ],
+    "errors": {
+      "API_OPERATION_ERROR": "操作执行失败，详见报告。",
+      "API_IMPLEMENTATION_MISSING": "目录存在但没有本地实现。"
+    },
+    "recovery": [
+      "读取 api_help 获取参数、前置条件和输出。",
+      "失败时检查任务报告中的错误与恢复建议。"
+    ],
+    "help": {
+      "summary": "maya_select_objects",
+      "usage": "execute_api(maya.asset.maya_select_objects, params={...})",
+      "scenario": "maya_select_objects",
+      "safety": "read API 只读；write/destructive API 仅写入任务沙盒。"
+    },
+    "tests": {
+      "contract": "api.registry loads this manifest and api.runner validates its receipt.",
+      "smoke": "代表性 workflow 统一验收。"
+    },
+    "handler": "cgi_pipeline.capabilities.maya.asset.maya_select_objects.adapter:execute",
+    "manifest_path": "src/cgi_pipeline/capabilities/maya/asset/maya_select_objects/capability.yaml"
+  },
+  {
+    "api_id": "maya.asset.maya_set_attribute",
+    "version": "1.0.0",
+    "name": "maya_set_attribute",
+    "executor": "maya",
+    "capability": "scene.edit",
+    "operation": "set",
+    "stages": [
+      "modeling",
+      "rigging",
+      "animation"
+    ],
+    "targets": [
+      "attribute"
+    ],
+    "access": "write",
+    "effects": {
+      "inspect": "只读取场景或标准数据，不改变资产。",
+      "apply": "按 API 实现对当前任务沙盒中的场景或数据执行操作。"
+    },
+    "execution_modes": [
+      "local",
+      "background",
+      "foreground"
+    ],
+    "surfaces": [
+      "maya",
+      "service"
+    ],
+    "modes": [
+      "apply"
+    ],
+    "inputs": {},
+    "preconditions": [
+      "项目配置通过统一 config/{project}_config.json 接口加载。",
+      "后台模式由 CGI Worker 打开或复用对应 DCC 场景。"
+    ],
+    "idempotent": false,
+    "outputs": {},
+    "statuses": [
+      "SUCCESS",
+      "PARTIAL",
+      "ERROR",
+      "BLOCKED",
+      "NEEDS_ATTENTION",
+      "TIMEOUT",
+      "CANCELLED"
+    ],
+    "errors": {
+      "API_OPERATION_ERROR": "操作执行失败，详见报告。",
+      "API_IMPLEMENTATION_MISSING": "目录存在但没有本地实现。"
+    },
+    "recovery": [
+      "读取 api_help 获取参数、前置条件和输出。",
+      "失败时检查任务报告中的错误与恢复建议。"
+    ],
+    "help": {
+      "summary": "maya_set_attribute",
+      "usage": "execute_api(maya.asset.maya_set_attribute, params={...})",
+      "scenario": "maya_set_attribute",
+      "safety": "read API 只读；write/destructive API 仅写入任务沙盒。"
+    },
+    "tests": {
+      "contract": "api.registry loads this manifest and api.runner validates its receipt.",
+      "smoke": "代表性 workflow 统一验收。"
+    },
+    "handler": "cgi_pipeline.capabilities.maya.asset.maya_set_attribute.adapter:execute",
+    "manifest_path": "src/cgi_pipeline/capabilities/maya/asset/maya_set_attribute/capability.yaml"
+  },
+  {
+    "api_id": "maya.asset.rename_asset",
+    "version": "1.0.0",
+    "name": "标准化资产重命名",
+    "executor": "maya",
+    "capability": "scene.file",
+    "operation": "rename",
+    "stages": [
+      "pipeline"
+    ],
+    "targets": [
+      "asset",
+      "scene_file"
+    ],
+    "access": "write",
+    "effects": {
+      "inspect": "只读取场景或标准数据，不改变资产。",
+      "apply": "按 API 实现对当前任务沙盒中的场景或数据执行操作。"
+    },
+    "execution_modes": [
+      "local",
+      "background",
+      "foreground"
+    ],
+    "surfaces": [
+      "maya",
+      "service"
+    ],
+    "modes": [
+      "apply"
+    ],
+    "inputs": {
+      "project": {
+        "type": "string",
+        "default": "",
+        "description": "项目代号，为空则从数据流推断"
+      },
+      "category": {
+        "type": "string",
+        "default": "",
+        "description": "资产分类，为空则从数据流推断"
+      },
+      "asset_name": {
+        "type": "string",
+        "default": "",
+        "description": "资产名称，为空则从数据流推断"
+      },
+      "stage": {
+        "type": "string",
+        "default": "",
+        "description": "制作阶段，为空则从数据流推断"
+      },
+      "task": {
+        "type": "string",
+        "default": "",
+        "description": "子任务名（可选）"
+      },
+      "output_dir": {
+        "type": "string",
+        "default": "",
+        "description": "输出目录（可选，默认与源文件同目录）"
+      }
+    },
+    "preconditions": [
+      "项目配置通过统一 config/{project}_config.json 接口加载。",
+      "后台模式由 CGI Worker 打开或复用对应 DCC 场景。"
+    ],
+    "idempotent": false,
+    "outputs": [
+      {
+        "name": "scene",
+        "type": "scene_file",
+        "label": "重命名后场景"
+      }
+    ],
+    "statuses": [
+      "SUCCESS",
+      "PARTIAL",
+      "ERROR",
+      "BLOCKED",
+      "NEEDS_ATTENTION",
+      "TIMEOUT",
+      "CANCELLED"
+    ],
+    "errors": {
+      "API_OPERATION_ERROR": "操作执行失败，详见报告。",
+      "API_IMPLEMENTATION_MISSING": "目录存在但没有本地实现。"
+    },
+    "recovery": [
+      "读取 api_help 获取参数、前置条件和输出。",
+      "失败时检查任务报告中的错误与恢复建议。"
+    ],
+    "help": {
+      "summary": "将当前场景按管线命名规范重命名并另存为。格式: {project}_{category}_{asset}_{stage}_{task}_v{version}.ma。不修改场景内容。",
+      "usage": "execute_api(maya.asset.rename_asset, params={...})",
+      "scenario": "将当前场景按管线命名规范重命名并另存为。格式: {project}_{category}_{asset}_{stage}_{task}_v{version}.ma。不修改场景内容。",
+      "safety": "read API 只读；write/destructive API 仅写入任务沙盒。"
+    },
+    "tests": {
+      "contract": "api.registry loads this manifest and api.runner validates its receipt.",
+      "smoke": "代表性 workflow 统一验收。"
+    },
+    "handler": "cgi_pipeline.capabilities.maya.asset.rename_asset.adapter:execute",
+    "manifest_path": "src/cgi_pipeline/capabilities/maya/asset/rename_asset/capability.yaml"
+  },
+  {
+    "api_id": "maya.asset.save_scene",
+    "version": "1.0.0",
+    "name": "maya_save_scene_as_next_version",
+    "executor": "maya",
+    "capability": "scene.file",
+    "operation": "save",
+    "stages": [
+      "modeling",
+      "rigging",
+      "animation"
+    ],
+    "targets": [
+      "scene_file"
+    ],
+    "access": "write",
+    "effects": {
+      "inspect": "只读取场景或标准数据，不改变资产。",
+      "apply": "按 API 实现对当前任务沙盒中的场景或数据执行操作。"
+    },
+    "execution_modes": [
+      "local",
+      "background",
+      "foreground"
+    ],
+    "surfaces": [
+      "maya",
+      "service"
+    ],
+    "modes": [
+      "apply"
+    ],
+    "inputs": {
+      "save_path": {
+        "type": "string",
+        "default": "",
+        "description": "可选。为空时保存当前已打开的沙盒场景；若填写，只允许任务沙盒内路径。"
+      }
+    },
+    "preconditions": [
+      "项目配置通过统一 config/{project}_config.json 接口加载。",
+      "后台模式由 CGI Worker 打开或复用对应 DCC 场景。"
+    ],
+    "idempotent": false,
+    "outputs": [
+      {
+        "name": "scene",
+        "type": "scene_file",
+        "label": "保存后场景"
+      }
+    ],
+    "statuses": [
+      "SUCCESS",
+      "PARTIAL",
+      "ERROR",
+      "BLOCKED",
+      "NEEDS_ATTENTION",
+      "TIMEOUT",
+      "CANCELLED"
+    ],
+    "errors": {
+      "API_OPERATION_ERROR": "操作执行失败，详见报告。",
+      "API_IMPLEMENTATION_MISSING": "目录存在但没有本地实现。"
+    },
+    "recovery": [
+      "读取 api_help 获取参数、前置条件和输出。",
+      "失败时检查任务报告中的错误与恢复建议。"
+    ],
+    "help": {
+      "summary": "保存当前任务沙盒中的 Maya 场景。后台 pipeline 默认保存当前已打开的沙盒副本，禁止写入沙盒外路径。",
+      "usage": "execute_api(maya.asset.save_scene, params={...})",
+      "scenario": "保存当前任务沙盒中的 Maya 场景。后台 pipeline 默认保存当前已打开的沙盒副本，禁止写入沙盒外路径。",
+      "safety": "read API 只读；write/destructive API 仅写入任务沙盒。"
+    },
+    "tests": {
+      "contract": "api.registry loads this manifest and api.runner validates its receipt.",
+      "smoke": "代表性 workflow 统一验收。"
+    },
+    "handler": "cgi_pipeline.capabilities.maya.asset.save_scene.adapter:execute",
+    "manifest_path": "src/cgi_pipeline/capabilities/maya/asset/save_scene/capability.yaml"
+  },
+  {
+    "api_id": "maya.asset.simplify_uvsets",
+    "version": "1.0.0",
+    "name": "UV Set 精简",
+    "executor": "maya",
+    "capability": "modeling.uv",
+    "operation": "simplify",
+    "stages": [
+      "modeling",
+      "rigging"
+    ],
+    "targets": [
+      "mesh",
+      "uv_set"
+    ],
+    "access": "destructive",
+    "effects": {
+      "inspect": "只读取场景或标准数据，不改变资产。",
+      "apply": "按 API 实现对当前任务沙盒中的场景或数据执行操作。"
+    },
+    "execution_modes": [
+      "local",
+      "background",
+      "foreground"
+    ],
+    "surfaces": [
+      "maya",
+      "service"
+    ],
+    "modes": [
+      "apply"
+    ],
+    "inputs": {
+      "cache_group": {
+        "type": "string",
+        "default": "cache",
+        "description": "操作的根组名称，默认 cache"
+      }
+    },
+    "preconditions": [
+      "项目配置通过统一 config/{project}_config.json 接口加载。",
+      "后台模式由 CGI Worker 打开或复用对应 DCC 场景。"
+    ],
+    "idempotent": false,
+    "outputs": [
+      {
+        "name": "result",
+        "type": "json",
+        "label": "UV 精简结构化结果"
+      }
+    ],
+    "statuses": [
+      "SUCCESS",
+      "PARTIAL",
+      "ERROR",
+      "BLOCKED",
+      "NEEDS_ATTENTION",
+      "TIMEOUT",
+      "CANCELLED"
+    ],
+    "errors": {
+      "API_OPERATION_ERROR": "操作执行失败，详见报告。",
+      "API_IMPLEMENTATION_MISSING": "目录存在但没有本地实现。"
+    },
+    "recovery": [
+      "读取 api_help 获取参数、前置条件和输出。",
+      "失败时检查任务报告中的错误与恢复建议。"
+    ],
+    "help": {
+      "summary": "清理多余 UV set。对 cache 组下每个 mesh（支持绑定体 ShapeOrig 与普通体 Shape）执行直捷 UV 规整，拷贝/覆盖有效数据到 index 0 并删去其余废弃集，确保最终只保留一个名为 map1 的 UV set。破坏性操作，已包裹 undo 块。建议先用 check_uvsets 查看再执行。",
+      "usage": "execute_api(maya.asset.simplify_uvsets, params={...})",
+      "scenario": "清理多余 UV set。对 cache 组下每个 mesh（支持绑定体 ShapeOrig 与普通体 Shape）执行直捷 UV 规整，拷贝/覆盖有效数据到 index 0 并删去其余废弃集，确保最终只保留一个名为 map1 的 UV set。破坏性操作，已包裹 undo 块。建议先用 check_uvsets 查看再执行。",
+      "safety": "read API 只读；write/destructive API 仅写入任务沙盒。"
+    },
+    "tests": {
+      "contract": "api.registry loads this manifest and api.runner validates its receipt.",
+      "smoke": "代表性 workflow 统一验收。"
+    },
+    "handler": "cgi_pipeline.capabilities.maya.asset.simplify_uvsets.adapter:execute",
+    "manifest_path": "src/cgi_pipeline/capabilities/maya/asset/simplify_uvsets/capability.yaml"
+  },
+  {
+    "api_id": "maya.asset.validate_publish",
+    "version": "1.0.0",
+    "name": "发布前质量门禁",
+    "executor": "maya",
+    "capability": "pipeline.quality",
+    "operation": "validate",
+    "stages": [
+      "pipeline"
+    ],
+    "targets": [
+      "asset",
+      "scene"
+    ],
+    "access": "read",
+    "effects": {
+      "inspect": "只读取场景或标准数据，不改变资产。",
+      "apply": "按 API 实现对当前任务沙盒中的场景或数据执行操作。"
+    },
+    "execution_modes": [
+      "local",
+      "background",
+      "foreground"
+    ],
+    "surfaces": [
+      "maya",
+      "service"
+    ],
+    "modes": [
+      "inspect"
+    ],
+    "inputs": {
+      "project": {
+        "type": "string",
+        "default": "",
+        "description": "项目代号，为空则从数据流推断"
+      },
+      "category": {
+        "type": "string",
+        "default": "",
+        "description": "资产分类，为空则从数据流推断"
+      },
+      "asset_name": {
+        "type": "string",
+        "default": "",
+        "description": "资产名称，为空则从数据流推断"
+      },
+      "stage": {
+        "type": "string",
+        "default": "",
+        "description": "制作阶段，为空则从数据流推断"
+      },
+      "cache_group": {
+        "type": "string",
+        "default": "",
+        "description": "cache 组名称，为空则自动查找"
+      }
+    },
+    "preconditions": [
+      "项目配置通过统一 config/{project}_config.json 接口加载。",
+      "后台模式由 CGI Worker 打开或复用对应 DCC 场景。"
+    ],
+    "idempotent": true,
+    "outputs": [
+      {
+        "name": "scene",
+        "type": "scene_file",
+        "label": "检查后场景"
+      },
+      {
+        "name": "report",
+        "type": "report",
+        "label": "QC 报告 (.md)"
+      }
+    ],
+    "statuses": [
+      "SUCCESS",
+      "PARTIAL",
+      "ERROR",
+      "BLOCKED",
+      "NEEDS_ATTENTION",
+      "TIMEOUT",
+      "CANCELLED"
+    ],
+    "errors": {
+      "API_OPERATION_ERROR": "操作执行失败，详见报告。",
+      "API_IMPLEMENTATION_MISSING": "目录存在但没有本地实现。"
+    },
+    "recovery": [
+      "读取 api_help 获取参数、前置条件和输出。",
+      "失败时检查任务报告中的错误与恢复建议。"
+    ],
+    "help": {
+      "summary": "发布前自动化 QC 检查：验证场景完整性、cache 组存在性、mesh 数量、未知节点、空组、命名规范。只读操作，输出 PASS/FAIL 报告。",
+      "usage": "execute_api(maya.asset.validate_publish, params={...})",
+      "scenario": "发布前自动化 QC 检查：验证场景完整性、cache 组存在性、mesh 数量、未知节点、空组、命名规范。只读操作，输出 PASS/FAIL 报告。",
+      "safety": "read API 只读；write/destructive API 仅写入任务沙盒。"
+    },
+    "tests": {
+      "contract": "api.registry loads this manifest and api.runner validates its receipt.",
+      "smoke": "代表性 workflow 统一验收。"
+    },
+    "handler": "cgi_pipeline.capabilities.maya.asset.validate_publish.adapter:execute",
+    "manifest_path": "src/cgi_pipeline/capabilities/maya/asset/validate_publish/capability.yaml"
+  },
+  {
+    "api_id": "maya.rig.maya_check_asset_hierarchy",
+    "version": "1.0.0",
+    "name": "maya_check_rig_geometry_layout",
+    "executor": "maya",
+    "capability": "rigging.hierarchy",
+    "operation": "inspect",
+    "stages": [
+      "rigging"
+    ],
+    "targets": [
+      "hierarchy",
+      "mesh"
+    ],
+    "access": "read",
+    "effects": {
+      "inspect": "只读取场景或标准数据，不改变资产。",
+      "apply": "按 API 实现对当前任务沙盒中的场景或数据执行操作。"
+    },
+    "execution_modes": [
+      "local",
+      "background",
+      "foreground"
+    ],
+    "surfaces": [
+      "maya",
+      "service"
+    ],
+    "modes": [
+      "inspect"
+    ],
+    "inputs": {
+      "stage": {
+        "type": "string",
+        "default": "rig",
+        "description": "项目阶段。用于读取 config/{project}_config.json 中 stages[stage].geom_roots[0] 作为标准根。"
+      },
+      "phase": {
+        "type": "string",
+        "default": "post_sync",
+        "description": "检查阶段。pre_sync 要求存在可供同步读取的旧绑定几何根；post_sync 要求标准 cache 根存在并有 mesh。"
+      },
+      "block_on_fail": {
+        "type": "boolean",
+        "default": true,
+        "description": "检查失败时是否返回 AUDIT_FAILED。false 时仍返回 SUCCESS，但 output.result.passed=false。"
+      },
+      "block_extra_top_nodes": {
+        "type": "boolean",
+        "default": false,
+        "description": "是否把非空额外顶层节点作为阻断项。默认 false，仅输出风险事实，避免误阻断或误删绑定系统。"
+      }
+    },
+    "preconditions": [
+      "项目配置通过统一 config/{project}_config.json 接口加载。",
+      "后台模式由 CGI Worker 打开或复用对应 DCC 场景。"
+    ],
+    "idempotent": true,
+    "outputs": [
+      {
+        "name": "result",
+        "type": "json",
+        "label": "层级 QC 结果"
+      }
+    ],
+    "statuses": [
+      "SUCCESS",
+      "PARTIAL",
+      "ERROR",
+      "BLOCKED",
+      "NEEDS_ATTENTION",
+      "TIMEOUT",
+      "CANCELLED"
+    ],
+    "errors": {
+      "API_OPERATION_ERROR": "操作执行失败，详见报告。",
+      "API_IMPLEMENTATION_MISSING": "目录存在但没有本地实现。"
+    },
+    "recovery": [
+      "读取 api_help 获取参数、前置条件和输出。",
+      "失败时检查任务报告中的错误与恢复建议。"
+    ],
+    "help": {
+      "summary": "纯 QC 检查：从项目配置读取当前 stage 的标准几何根，确认标准根存在、标准根下有有效 mesh，并输出层级修复节点需要消费的只读事实。",
+      "usage": "execute_api(maya.rig.maya_check_asset_hierarchy, params={...})",
+      "scenario": "纯 QC 检查：从项目配置读取当前 stage 的标准几何根，确认标准根存在、标准根下有有效 mesh，并输出层级修复节点需要消费的只读事实。",
+      "safety": "read API 只读；write/destructive API 仅写入任务沙盒。"
+    },
+    "tests": {
+      "contract": "api.registry loads this manifest and api.runner validates its receipt.",
+      "smoke": "代表性 workflow 统一验收。"
+    },
+    "handler": "cgi_pipeline.capabilities.maya.rig.maya_check_asset_hierarchy.adapter:execute",
+    "manifest_path": "src/cgi_pipeline/capabilities/maya/rig/maya_check_asset_hierarchy/capability.yaml"
+  },
+  {
+    "api_id": "maya.rig.maya_clean_skinweights",
+    "version": "1.0.0",
+    "name": "清理蒙皮权重",
+    "executor": "maya",
+    "capability": "rigging.skin",
+    "operation": "clean",
+    "stages": [
+      "rigging"
+    ],
+    "targets": [
+      "skin_weights"
+    ],
+    "access": "destructive",
+    "effects": {
+      "inspect": "只读取场景或标准数据，不改变资产。",
+      "apply": "按 API 实现对当前任务沙盒中的场景或数据执行操作。"
+    },
+    "execution_modes": [
+      "local",
+      "background",
+      "foreground"
+    ],
+    "surfaces": [
+      "maya",
+      "service"
+    ],
+    "modes": [
+      "apply"
+    ],
+    "inputs": {
+      "threshold": {
+        "type": "number",
+        "default": 0.001,
+        "description": "噪声阈值，低于此值的权重将被清零"
+      }
+    },
+    "preconditions": [
+      "项目配置通过统一 config/{project}_config.json 接口加载。",
+      "后台模式由 CGI Worker 打开或复用对应 DCC 场景。"
+    ],
+    "idempotent": false,
+    "outputs": [
+      {
+        "name": "scene",
+        "type": "scene_file",
+        "label": "处理后场景"
+      },
+      {
+        "name": "report",
+        "type": "report",
+        "label": "清理报告 (.md)"
+      }
+    ],
+    "statuses": [
+      "SUCCESS",
+      "PARTIAL",
+      "ERROR",
+      "BLOCKED",
+      "NEEDS_ATTENTION",
+      "TIMEOUT",
+      "CANCELLED"
+    ],
+    "errors": {
+      "API_OPERATION_ERROR": "操作执行失败，详见报告。",
+      "API_IMPLEMENTATION_MISSING": "目录存在但没有本地实现。"
+    },
+    "recovery": [
+      "读取 api_help 获取参数、前置条件和输出。",
+      "失败时检查任务报告中的错误与恢复建议。"
+    ],
+    "help": {
+      "summary": "移除蒙皮权重中的微量噪声（低于阈值），规范化权重总和为 1.0。需要提供包含蒙皮网格的源场景文件。",
+      "usage": "execute_api(maya.rig.maya_clean_skinweights, params={...})",
+      "scenario": "移除蒙皮权重中的微量噪声（低于阈值），规范化权重总和为 1.0。需要提供包含蒙皮网格的源场景文件。",
+      "safety": "read API 只读；write/destructive API 仅写入任务沙盒。"
+    },
+    "tests": {
+      "contract": "api.registry loads this manifest and api.runner validates its receipt.",
+      "smoke": "代表性 workflow 统一验收。"
+    },
+    "handler": "cgi_pipeline.capabilities.maya.rig.maya_clean_skinweights.adapter:execute",
+    "manifest_path": "src/cgi_pipeline/capabilities/maya/rig/maya_clean_skinweights/capability.yaml"
+  },
+  {
+    "api_id": "maya.rig.maya_deformation_inherit_skin",
+    "version": "1.0.0",
+    "name": "maya_deformation_inherit_skin",
+    "executor": "maya",
+    "capability": "rigging.deformation",
+    "operation": "inherit",
+    "stages": [
+      "rigging"
+    ],
+    "targets": [
+      "mesh",
+      "skin_weights"
+    ],
+    "access": "write",
+    "effects": {
+      "inspect": "只读取场景或标准数据，不改变资产。",
+      "apply": "按 API 实现对当前任务沙盒中的场景或数据执行操作。"
+    },
+    "execution_modes": [
+      "local",
+      "background",
+      "foreground"
+    ],
+    "surfaces": [
+      "maya",
+      "service"
+    ],
+    "modes": [
+      "apply"
+    ],
+    "inputs": {},
+    "preconditions": [
+      "项目配置通过统一 config/{project}_config.json 接口加载。",
+      "后台模式由 CGI Worker 打开或复用对应 DCC 场景。"
+    ],
+    "idempotent": false,
+    "outputs": {},
+    "statuses": [
+      "SUCCESS",
+      "PARTIAL",
+      "ERROR",
+      "BLOCKED",
+      "NEEDS_ATTENTION",
+      "TIMEOUT",
+      "CANCELLED"
+    ],
+    "errors": {
+      "API_OPERATION_ERROR": "操作执行失败，详见报告。",
+      "API_IMPLEMENTATION_MISSING": "目录存在但没有本地实现。"
+    },
+    "recovery": [
+      "读取 api_help 获取参数、前置条件和输出。",
+      "失败时检查任务报告中的错误与恢复建议。"
+    ],
+    "help": {
+      "summary": "maya_deformation_inherit_skin",
+      "usage": "execute_api(maya.rig.maya_deformation_inherit_skin, params={...})",
+      "scenario": "maya_deformation_inherit_skin",
+      "safety": "read API 只读；write/destructive API 仅写入任务沙盒。"
+    },
+    "tests": {
+      "contract": "api.registry loads this manifest and api.runner validates its receipt.",
+      "smoke": "代表性 workflow 统一验收。"
+    },
+    "handler": "cgi_pipeline.capabilities.maya.rig.maya_deformation_inherit_skin.adapter:execute",
+    "manifest_path": "src/cgi_pipeline/capabilities/maya/rig/maya_deformation_inherit_skin/capability.yaml"
+  },
+  {
+    "api_id": "maya.rig.maya_fix_asset_hierarchy",
+    "version": "1.0.0",
+    "name": "maya_fix_rig_geometry_layout",
+    "executor": "maya",
+    "capability": "rigging.hierarchy",
+    "operation": "fix",
+    "stages": [
+      "rigging"
+    ],
+    "targets": [
+      "hierarchy",
+      "mesh"
+    ],
+    "access": "destructive",
+    "effects": {
+      "inspect": "只读取场景或标准数据，不改变资产。",
+      "apply": "按 API 实现对当前任务沙盒中的场景或数据执行操作。"
+    },
+    "execution_modes": [
+      "local",
+      "background",
+      "foreground"
+    ],
+    "surfaces": [
+      "maya",
+      "service"
+    ],
+    "modes": [
+      "apply"
+    ],
+    "inputs": {
+      "check_result": {
+        "type": "object",
+        "description": "必填；maya_check_asset_hierarchy 的 output.result。fix 只消费其中 required_root、legacy_geo_roots、candidate_source_roots、safe_delete_top_nodes。workflow 模板中写 {{outputs.check_hierarchy_pre.result}}。",
+        "required": true
+      },
+      "remove_empty_source": {
+        "type": "boolean",
+        "default": true,
+        "description": "迁移后是否删除已经为空的源 cache 根。"
+      },
+      "delete_extra_top_nodes": {
+        "type": "boolean",
+        "default": false,
+        "description": "是否删除检查结果标记为 safe_delete_top_nodes 的空顶层节点；非空业务根永不自动删除。"
+      }
+    },
+    "preconditions": [
+      "项目配置通过统一 config/{project}_config.json 接口加载。",
+      "后台模式由 CGI Worker 打开或复用对应 DCC 场景。"
+    ],
+    "idempotent": false,
+    "outputs": [
+      {
+        "name": "result",
+        "type": "json",
+        "label": "层级修复结果"
+      }
+    ],
+    "statuses": [
+      "SUCCESS",
+      "PARTIAL",
+      "ERROR",
+      "BLOCKED",
+      "NEEDS_ATTENTION",
+      "TIMEOUT",
+      "CANCELLED"
+    ],
+    "errors": {
+      "API_OPERATION_ERROR": "操作执行失败，详见报告。",
+      "API_IMPLEMENTATION_MISSING": "目录存在但没有本地实现。"
+    },
+    "recovery": [
+      "读取 api_help 获取参数、前置条件和输出。",
+      "失败时检查任务报告中的错误与恢复建议。"
+    ],
+    "help": {
+      "summary": "消费 maya_check_asset_hierarchy 的检查结果，按检查结果把旧绑定几何根归一化为 |Group|Geometry|RIG_geo，并只删除安全空顶层节点。",
+      "usage": "execute_api(maya.rig.maya_fix_asset_hierarchy, params={...})",
+      "scenario": "消费 maya_check_asset_hierarchy 的检查结果，按检查结果把旧绑定几何根归一化为 |Group|Geometry|RIG_geo，并只删除安全空顶层节点。",
+      "safety": "read API 只读；write/destructive API 仅写入任务沙盒。"
+    },
+    "tests": {
+      "contract": "api.registry loads this manifest and api.runner validates its receipt.",
+      "smoke": "代表性 workflow 统一验收。"
+    },
+    "handler": "cgi_pipeline.capabilities.maya.rig.maya_fix_asset_hierarchy.adapter:execute",
+    "manifest_path": "src/cgi_pipeline/capabilities/maya/rig/maya_fix_asset_hierarchy/capability.yaml"
+  },
+  {
+    "api_id": "maya.rig.maya_fix_shape_names",
+    "version": "1.0.0",
+    "name": "maya_fix_cache_shape_names",
+    "executor": "maya",
+    "capability": "rigging.hierarchy",
+    "operation": "fix",
+    "stages": [
+      "rigging"
+    ],
+    "targets": [
+      "mesh",
+      "shape"
+    ],
+    "access": "destructive",
+    "effects": {
+      "inspect": "只读取场景或标准数据，不改变资产。",
+      "apply": "按 API 实现对当前任务沙盒中的场景或数据执行操作。"
+    },
+    "execution_modes": [
+      "local",
+      "background",
+      "foreground"
+    ],
+    "surfaces": [
+      "maya",
+      "service"
+    ],
+    "modes": [
+      "apply"
+    ],
+    "inputs": {
+      "target_group": {
+        "type": "string",
+        "default": "",
+        "description": "要限制检查的特定组名（如 |Group|Geometry），为空则强制检查全场景网格"
+      }
+    },
+    "preconditions": [
+      "项目配置通过统一 config/{project}_config.json 接口加载。",
+      "后台模式由 CGI Worker 打开或复用对应 DCC 场景。"
+    ],
+    "idempotent": false,
+    "outputs": [
+      {
+        "name": "scene",
+        "type": "scene_file",
+        "label": "处理后场景"
+      },
+      {
+        "name": "report",
+        "type": "report",
+        "label": "修复报告 (.md)"
+      }
+    ],
+    "statuses": [
+      "SUCCESS",
+      "PARTIAL",
+      "ERROR",
+      "BLOCKED",
+      "NEEDS_ATTENTION",
+      "TIMEOUT",
+      "CANCELLED"
+    ],
+    "errors": {
+      "API_OPERATION_ERROR": "操作执行失败，详见报告。",
+      "API_IMPLEMENTATION_MISSING": "目录存在但没有本地实现。"
+    },
+    "recovery": [
+      "读取 api_help 获取参数、前置条件和输出。",
+      "失败时检查任务报告中的错误与恢复建议。"
+    ],
+    "help": {
+      "summary": "规范化网格 Shape 的名称为 [模型名]Shape，将绑定或变形原始形重命名为 [模型名]ShapeOrig，并严格拔除没有任何连接的残渣死形节点。",
+      "usage": "execute_api(maya.rig.maya_fix_shape_names, params={...})",
+      "scenario": "规范化网格 Shape 的名称为 [模型名]Shape，将绑定或变形原始形重命名为 [模型名]ShapeOrig，并严格拔除没有任何连接的残渣死形节点。",
+      "safety": "read API 只读；write/destructive API 仅写入任务沙盒。"
+    },
+    "tests": {
+      "contract": "api.registry loads this manifest and api.runner validates its receipt.",
+      "smoke": "代表性 workflow 统一验收。"
+    },
+    "handler": "cgi_pipeline.capabilities.maya.rig.maya_fix_shape_names.adapter:execute",
+    "manifest_path": "src/cgi_pipeline/capabilities/maya/rig/maya_fix_shape_names/capability.yaml"
+  },
+  {
+    "api_id": "maya.rig.maya_get_hierarchy",
+    "version": "1.0.0",
+    "name": "maya_get_hierarchy",
+    "executor": "maya",
+    "capability": "rigging.hierarchy",
+    "operation": "inspect",
+    "stages": [
+      "rigging"
+    ],
+    "targets": [
+      "hierarchy"
+    ],
+    "access": "write",
+    "effects": {
+      "inspect": "只读取场景或标准数据，不改变资产。",
+      "apply": "按 API 实现对当前任务沙盒中的场景或数据执行操作。"
+    },
+    "execution_modes": [
+      "local",
+      "background",
+      "foreground"
+    ],
+    "surfaces": [
+      "maya",
+      "service"
+    ],
+    "modes": [
+      "apply"
+    ],
+    "inputs": {},
+    "preconditions": [
+      "项目配置通过统一 config/{project}_config.json 接口加载。",
+      "后台模式由 CGI Worker 打开或复用对应 DCC 场景。"
+    ],
+    "idempotent": false,
+    "outputs": {},
+    "statuses": [
+      "SUCCESS",
+      "PARTIAL",
+      "ERROR",
+      "BLOCKED",
+      "NEEDS_ATTENTION",
+      "TIMEOUT",
+      "CANCELLED"
+    ],
+    "errors": {
+      "API_OPERATION_ERROR": "操作执行失败，详见报告。",
+      "API_IMPLEMENTATION_MISSING": "目录存在但没有本地实现。"
+    },
+    "recovery": [
+      "读取 api_help 获取参数、前置条件和输出。",
+      "失败时检查任务报告中的错误与恢复建议。"
+    ],
+    "help": {
+      "summary": "maya_get_hierarchy",
+      "usage": "execute_api(maya.rig.maya_get_hierarchy, params={...})",
+      "scenario": "maya_get_hierarchy",
+      "safety": "read API 只读；write/destructive API 仅写入任务沙盒。"
+    },
+    "tests": {
+      "contract": "api.registry loads this manifest and api.runner validates its receipt.",
+      "smoke": "代表性 workflow 统一验收。"
+    },
+    "handler": "cgi_pipeline.capabilities.maya.rig.maya_get_hierarchy.adapter:execute",
+    "manifest_path": "src/cgi_pipeline/capabilities/maya/rig/maya_get_hierarchy/capability.yaml"
+  },
+  {
+    "api_id": "maya.rig.maya_sync_rig_incremental",
+    "version": "1.0.0",
+    "name": "maya_sync_abc_to_rig_cache",
+    "executor": "maya",
+    "capability": "rigging.sync",
+    "operation": "sync",
+    "stages": [
+      "rigging"
+    ],
+    "targets": [
+      "rig",
+      "mesh"
+    ],
+    "access": "destructive",
+    "effects": {
+      "inspect": "只读取场景或标准数据，不改变资产。",
+      "apply": "按 API 实现对当前任务沙盒中的场景或数据执行操作。"
+    },
+    "execution_modes": [
+      "local",
+      "background",
+      "foreground"
+    ],
+    "surfaces": [
+      "maya",
+      "service"
+    ],
+    "modes": [
+      "apply"
+    ],
+    "inputs": {
+      "compare_result": {
+        "type": "string",
+        "default": "",
+        "description": "必填。maya_compare_asset_in_scene 或 pipeline_compare_asset 输出的 compare_result.json 路径；workflow 内也可直接传 output.compare_result 字典。sync 只消费其中 pairing_groups，不重新对比。"
+      },
+      "source_abc": {
+        "type": "string",
+        "default": "",
+        "description": "source 侧 ABC 文件路径。source 独有 mesh 需要完整拓扑，推荐传 ABC。"
+      },
+      "source_info": {
+        "type": "string",
+        "default": "",
+        "description": "source 侧 _info.json 路径。无 ABC 时的降级路径，仅能更新已有 mesh，不能可靠创建 source 独有 mesh。"
+      },
+      "cache_group": {
+        "type": "string",
+        "default": "cache",
+        "description": "target rig 几何根组。workflow 应从项目配置传入。"
+      }
+    },
+    "preconditions": [
+      "项目配置通过统一 config/{project}_config.json 接口加载。",
+      "后台模式由 CGI Worker 打开或复用对应 DCC 场景。"
+    ],
+    "idempotent": false,
+    "outputs": [
+      {
+        "name": "scene",
+        "type": "scene_file",
+        "label": "同步后 rig 场景"
+      }
+    ],
+    "statuses": [
+      "SUCCESS",
+      "PARTIAL",
+      "ERROR",
+      "BLOCKED",
+      "NEEDS_ATTENTION",
+      "TIMEOUT",
+      "CANCELLED"
+    ],
+    "errors": {
+      "API_OPERATION_ERROR": "操作执行失败，详见报告。",
+      "API_IMPLEMENTATION_MISSING": "目录存在但没有本地实现。"
+    },
+    "recovery": [
+      "读取 api_help 获取参数、前置条件和输出。",
+      "失败时检查任务报告中的错误与恢复建议。"
+    ],
+    "help": {
+      "summary": "在 target rig 场景中，依据前置 compare_result 和 source ABC 增量重建/更新 mesh（纯几何）。注入/重建时传 UV 与可用显式法线，面序固定对齐 Maya AbcImport，不猜测几何外侧。",
+      "usage": "execute_api(maya.rig.maya_sync_rig_incremental, params={...})",
+      "scenario": "在 target rig 场景中，依据前置 compare_result 和 source ABC 增量重建/更新 mesh（纯几何）。注入/重建时传 UV 与可用显式法线，面序固定对齐 Maya AbcImport，不猜测几何外侧。",
+      "safety": "read API 只读；write/destructive API 仅写入任务沙盒。"
+    },
+    "tests": {
+      "contract": "api.registry loads this manifest and api.runner validates its receipt.",
+      "smoke": "代表性 workflow 统一验收。"
+    },
+    "handler": "cgi_pipeline.capabilities.maya.rig.maya_sync_rig_incremental.adapter:execute",
+    "manifest_path": "src/cgi_pipeline/capabilities/maya/rig/maya_sync_rig_incremental/capability.yaml"
+  },
+  {
+    "api_id": "maya.rig.reference.update",
+    "version": "1.0.0",
+    "executor": "maya",
+    "capability": "rigging.reference",
+    "operation": "update",
+    "stages": [
+      "rigging"
+    ],
+    "targets": [
+      "reference",
+      "rig"
+    ],
+    "access": "destructive",
+    "effects": {
+      "preview": "No scene mutation.",
+      "apply": "Replaces only references whose old_path is present in target_map."
+    },
+    "execution_modes": [
+      "local",
+      "foreground",
+      "background"
+    ],
+    "surfaces": [
+      "maya",
+      "service"
+    ],
+    "modes": [
+      "preview",
+      "apply"
+    ],
+    "inputs": {
+      "operation": {
+        "type": "string",
+        "required": true,
+        "choices": [
+          "preview",
+          "apply"
+        ]
+      },
+      "target_map": {
+        "type": "array",
+        "required": true,
+        "description": "Explicit old_path -> new_path mapping produced by a project resolver."
+      },
+      "skip_status": {
+        "type": "string",
+        "required": false,
+        "default": "SKIP_NOT_TARGET"
+      }
+    },
+    "preconditions": [
+      "A Maya scene is already open in the selected execution context.",
+      "Project-specific resolution has produced explicit target_map entries."
+    ],
+    "idempotent": false,
+    "outputs": {
+      "rows": "Per-reference plan or verification rows.",
+      "counts": "Status counts.",
+      "updated_count": "Number of verified reference replacements."
+    },
+    "statuses": [
+      "SUCCESS",
+      "PARTIAL",
+      "ERROR"
+    ],
+    "errors": {
+      "REFERENCE_PLAN_FAILED": "Preview could not build a valid plan.",
+      "REFERENCE_VERIFY_FAILED": "Apply completed with one or more verification failures."
+    },
+    "recovery": [
+      "Inspect output.rows and fix the project resolver mapping.",
+      "Retry preview before apply."
+    ],
+    "help": {
+      "summary": "Update Maya references from an explicit project-resolved mapping.",
+      "usage": "execute_api(maya.rig.reference.update, params={operation, target_map})",
+      "safety": "apply is destructive; preview is the default review step in workflows."
+    },
+    "tests": {
+      "unit": [
+        "tests/test_api_registry.py",
+        "tests/test_maya_reference_api.py"
+      ],
+      "smoke": "mayapy with a Maya scene containing one loaded reference."
+    },
+    "handler": "cgi_pipeline.capabilities.maya.rig.reference.update.handler:execute",
+    "manifest_path": "src/cgi_pipeline/capabilities/maya/rig/reference/update/capability.yaml"
+  },
+  {
+    "api_id": "maya.rig.skin.query_weights",
+    "version": "1.0.0",
+    "executor": "maya",
+    "capability": "rigging.skin",
+    "operation": "query",
+    "stages": [
+      "rigging"
+    ],
+    "targets": [
+      "skin_weights",
+      "mesh"
+    ],
+    "access": "read",
+    "effects": {
+      "inspect": "Reads Maya skinCluster weights only. No scene data is changed."
+    },
+    "execution_modes": [
+      "local",
+      "foreground",
+      "background"
+    ],
+    "surfaces": [
+      "maya",
+      "service"
+    ],
+    "modes": [
+      "inspect"
+    ],
+    "inputs": {
+      "mesh": {
+        "type": "string",
+        "required": true,
+        "description": "Mesh transform or non-intermediate mesh shape to inspect."
+      },
+      "vertices": {
+        "type": "array",
+        "default": [],
+        "description": "Optional vertex indices. Empty samples from vertex zero up to max_vertices."
+      },
+      "influence": {
+        "type": "string",
+        "default": "",
+        "description": "Optional exact influence name to filter returned weights."
+      },
+      "minimum_weight": {
+        "type": "number",
+        "default": 0.0001,
+        "description": "Weights below this value are omitted from each vertex row."
+      },
+      "max_vertices": {
+        "type": "integer",
+        "default": 50,
+        "description": "Safety bound for implicit or explicit vertex queries."
+      }
+    },
+    "preconditions": [
+      "The mesh belongs to the selected Maya execution context.",
+      "The mesh has one readable skinCluster."
+    ],
+    "idempotent": true,
+    "outputs": {
+      "shape": "Resolved non-intermediate Maya mesh shape.",
+      "skin_cluster": "Skin cluster used for the query.",
+      "rows": "Per-vertex sparse influence-to-weight maps.",
+      "truncated": "Whether max_vertices limited the requested result."
+    },
+    "statuses": [
+      "SUCCESS",
+      "ERROR"
+    ],
+    "errors": {
+      "MAYA_CONTEXT_MISSING": "The API was not dispatched through Maya.",
+      "SKIN_QUERY_FAILED": "The mesh, skinCluster, vertex range, or influence is invalid."
+    },
+    "recovery": [
+      "Use pipeline.session.discover to select an interactive Maya session, or provide a source_path for background mode.",
+      "Query fewer vertices or set influence to inspect one joint."
+    ],
+    "help": {
+      "summary": "Read bounded skinCluster weights from one Maya mesh without modifying the scene.",
+      "usage": "execute_api(maya.rig.skin.query_weights, params={mesh, vertices})",
+      "scenario": "Inspect selected vertices or a short mesh sample before changing skin weights.",
+      "safety": "Read-only. The handler runs on Maya's main thread through the existing adapter."
+    },
+    "tests": {
+      "contract": "tests/test_api_catalog_additions.py",
+      "smoke": "Read-only query against a skinned test mesh in the final Maya integration check."
+    },
+    "handler": "cgi_pipeline.capabilities.maya.rig.skin.query_weights.handler:execute",
+    "manifest_path": "src/cgi_pipeline/capabilities/maya/rig/skin/query_weights/capability.yaml"
+  },
+  {
+    "api_id": "pipeline.pipeline.copy_files",
+    "version": "1.0.0",
+    "name": "pipeline_stage_file_to_sandbox",
+    "executor": "pipeline",
+    "capability": "pipeline.file",
+    "operation": "copy",
+    "stages": [
+      "pipeline"
+    ],
+    "targets": [
+      "file"
+    ],
+    "access": "write",
+    "effects": {
+      "inspect": "只读取场景或标准数据，不改变资产。",
+      "apply": "按 API 实现对当前任务沙盒中的场景或数据执行操作。"
+    },
+    "execution_modes": [
+      "background"
+    ],
+    "surfaces": [
+      "python",
+      "service"
+    ],
+    "modes": [
+      "apply"
+    ],
+    "inputs": {
+      "source": {
+        "type": "string",
+        "default": "",
+        "description": "源路径（文件或目录的完整路径）"
+      },
+      "destination": {
+        "type": "string",
+        "default": "",
+        "description": "目标路径（文件或目录的完整路径）"
+      },
+      "overwrite": {
+        "type": "boolean",
+        "default": false,
+        "description": "目标已存在时是否覆盖"
+      }
+    },
+    "preconditions": [
+      "项目配置通过统一 config/{project}_config.json 接口加载。",
+      "后台模式由 CGI Worker 打开或复用对应 DCC 场景。"
+    ],
+    "idempotent": false,
+    "outputs": [
+      {
+        "name": "destination",
+        "type": "any_file",
+        "label": "目标路径"
+      }
+    ],
+    "statuses": [
+      "SUCCESS",
+      "PARTIAL",
+      "ERROR",
+      "BLOCKED",
+      "NEEDS_ATTENTION",
+      "TIMEOUT",
+      "CANCELLED"
+    ],
+    "errors": {
+      "API_OPERATION_ERROR": "操作执行失败，详见报告。",
+      "API_IMPLEMENTATION_MISSING": "目录存在但没有本地实现。"
+    },
+    "recovery": [
+      "读取 api_help 获取参数、前置条件和输出。",
+      "失败时检查任务报告中的错误与恢复建议。"
+    ],
+    "help": {
+      "summary": "通用文件拷贝：source → destination，文件或目录均可。纯文件系统操作，不启动任何 DCC。",
+      "usage": "execute_api(pipeline.pipeline.copy_files, params={...})",
+      "scenario": "通用文件拷贝：source → destination，文件或目录均可。纯文件系统操作，不启动任何 DCC。",
+      "safety": "read API 只读；write/destructive API 仅写入任务沙盒。"
+    },
+    "tests": {
+      "contract": "api.registry loads this manifest and api.runner validates its receipt.",
+      "smoke": "代表性 workflow 统一验收。"
+    },
+    "handler": "cgi_pipeline.capabilities.pipeline.pipeline.copy_files.adapter:execute",
+    "manifest_path": "src/cgi_pipeline/capabilities/pipeline/pipeline/copy_files/capability.yaml"
+  },
+  {
+    "api_id": "pipeline.pipeline.pipeline_compare_asset",
+    "version": "1.0.0",
+    "name": "资产对比（统一入口）",
+    "executor": "pipeline",
+    "capability": "asset.compare",
+    "operation": "compare",
+    "stages": [
+      "pipeline"
+    ],
+    "targets": [
+      "asset",
+      "metadata"
+    ],
+    "access": "read",
+    "effects": {
+      "inspect": "只读取场景或标准数据，不改变资产。",
+      "apply": "按 API 实现对当前任务沙盒中的场景或数据执行操作。"
+    },
+    "execution_modes": [
+      "background"
+    ],
+    "surfaces": [
+      "python",
+      "service"
+    ],
+    "modes": [
+      "inspect"
+    ],
+    "inputs": {
+      "input_source": {
+        "type": "string",
+        "default": "",
+        "description": "source 侧 _info.json 或 .abc 路径"
+      },
+      "input_target": {
+        "type": "string",
+        "default": "",
+        "description": "target 侧 _info.json 或 .abc 路径"
+      },
+      "label_source": {
+        "type": "string",
+        "default": "",
+        "description": "source 标签（自动推断: rig/tex/uv/model/anim 等）"
+      },
+      "label_target": {
+        "type": "string",
+        "default": "",
+        "description": "target 标签"
+      },
+      "output_path": {
+        "type": "string",
+        "default": "",
+        "description": "compare_result.json 输出路径。workflow/单API调用必须传入任务沙盒 .info 路径或可推导 info_dir。"
+      }
+    },
+    "preconditions": [
+      "项目配置通过统一 config/{project}_config.json 接口加载。",
+      "后台模式由 CGI Worker 打开或复用对应 DCC 场景。"
+    ],
+    "idempotent": true,
+    "outputs": [
+      {
+        "name": "compare_result",
+        "type": "json_file",
+        "label": "对比结果 JSON"
+      },
+      {
+        "name": "report",
+        "type": "report",
+        "label": "对比报告 (.md)"
+      }
+    ],
+    "statuses": [
+      "SUCCESS",
+      "PARTIAL",
+      "ERROR",
+      "BLOCKED",
+      "NEEDS_ATTENTION",
+      "TIMEOUT",
+      "CANCELLED"
+    ],
+    "errors": {
+      "API_OPERATION_ERROR": "操作执行失败，详见报告。",
+      "API_IMPLEMENTATION_MISSING": "目录存在但没有本地实现。"
+    },
+    "recovery": [
+      "读取 api_help 获取参数、前置条件和输出。",
+      "失败时检查任务报告中的错误与恢复建议。"
+    ],
+    "help": {
+      "summary": "纯 JSON/ABC 数据对比。三步漏斗（路径→等点数→空间）配对，输出 source 侧每个 mesh 相对 target 的 4 种事实归属 + 算法层 7 标签细分。",
+      "usage": "execute_api(pipeline.pipeline.pipeline_compare_asset, params={...})",
+      "scenario": "纯 JSON/ABC 数据对比。三步漏斗（路径→等点数→空间）配对，输出 source 侧每个 mesh 相对 target 的 4 种事实归属 + 算法层 7 标签细分。",
+      "safety": "read API 只读；write/destructive API 仅写入任务沙盒。"
+    },
+    "tests": {
+      "contract": "api.registry loads this manifest and api.runner validates its receipt.",
+      "smoke": "代表性 workflow 统一验收。"
+    },
+    "handler": "cgi_pipeline.capabilities.pipeline.pipeline.pipeline_compare_asset.adapter:execute",
+    "manifest_path": "src/cgi_pipeline/capabilities/pipeline/pipeline/pipeline_compare_asset/capability.yaml"
+  },
+  {
+    "api_id": "pipeline.pipeline.resolve_asset_files",
+    "version": "1.0.0",
+    "name": "pipeline_resolve_tex_rig_paths",
+    "executor": "pipeline",
+    "capability": "pipeline.resolve",
+    "operation": "resolve",
+    "stages": [
+      "pipeline"
+    ],
+    "targets": [
+      "asset",
+      "file"
+    ],
+    "access": "read",
+    "effects": {
+      "inspect": "只读取场景或标准数据，不改变资产。",
+      "apply": "按 API 实现对当前任务沙盒中的场景或数据执行操作。"
+    },
+    "execution_modes": [
+      "background"
+    ],
+    "surfaces": [
+      "python",
+      "service"
+    ],
+    "modes": [
+      "inspect"
+    ],
+    "inputs": {
+      "category": {
+        "type": "string",
+        "default": "chr",
+        "description": "资产类型，如 chr/prp/env。为空时优先读取 input.category，最后回退 chr。"
+      },
+      "source_stage": {
+        "type": "string",
+        "default": "tex",
+        "description": "source 侧阶段，默认 tex。"
+      },
+      "source_task": {
+        "type": "string",
+        "default": "",
+        "description": "source 侧 task；为空时使用项目配置中的 primary_task。"
+      },
+      "source_extensions": {
+        "type": "string",
+        "default": ".blend",
+        "description": "source 侧允许扩展名，逗号分隔。"
+      },
+      "rig_stage": {
+        "type": "string",
+        "default": "rig",
+        "description": "target rig 阶段，默认 rig。"
+      },
+      "rig_task": {
+        "type": "string",
+        "default": "",
+        "description": "target rig task；为空时使用项目配置中的 primary_task。"
+      },
+      "rig_extensions": {
+        "type": "string",
+        "default": ".ma,.mb",
+        "description": "target rig 允许扩展名，逗号分隔。"
+      }
+    },
+    "preconditions": [
+      "项目配置通过统一 config/{project}_config.json 接口加载。",
+      "后台模式由 CGI Worker 打开或复用对应 DCC 场景。"
+    ],
+    "idempotent": true,
+    "outputs": [
+      {
+        "name": "result",
+        "type": "any_file",
+        "label": "解析结果字典"
+      }
+    ],
+    "statuses": [
+      "SUCCESS",
+      "PARTIAL",
+      "ERROR",
+      "BLOCKED",
+      "NEEDS_ATTENTION",
+      "TIMEOUT",
+      "CANCELLED"
+    ],
+    "errors": {
+      "API_OPERATION_ERROR": "操作执行失败，详见报告。",
+      "API_IMPLEMENTATION_MISSING": "目录存在但没有本地实现。"
+    },
+    "recovery": [
+      "读取 api_help 获取参数、前置条件和输出。",
+      "失败时检查任务报告中的错误与恢复建议。"
+    ],
+    "help": {
+      "summary": "根据项目配置解析资产 source tex 文件与 target rig 文件。支持只传资产名自动查服务器最新版本，也支持传入明确文件路径直接透传。",
+      "usage": "execute_api(pipeline.pipeline.resolve_asset_files, params={...})",
+      "scenario": "根据项目配置解析资产 source tex 文件与 target rig 文件。支持只传资产名自动查服务器最新版本，也支持传入明确文件路径直接透传。",
+      "safety": "read API 只读；write/destructive API 仅写入任务沙盒。"
+    },
+    "tests": {
+      "contract": "api.registry loads this manifest and api.runner validates its receipt.",
+      "smoke": "代表性 workflow 统一验收。"
+    },
+    "handler": "cgi_pipeline.capabilities.pipeline.pipeline.resolve_asset_files.adapter:execute",
+    "manifest_path": "src/cgi_pipeline/capabilities/pipeline/pipeline/resolve_asset_files/capability.yaml"
+  },
+  {
+    "api_id": "pipeline.pipeline.write_task_report",
+    "version": "1.0.0",
+    "name": "任务汇总报告",
+    "executor": "pipeline",
+    "capability": "pipeline.report",
+    "operation": "write",
+    "stages": [
+      "pipeline"
+    ],
+    "targets": [
+      "report",
+      "audit"
+    ],
+    "access": "write",
+    "effects": {
+      "inspect": "只读取场景或标准数据，不改变资产。",
+      "apply": "按 API 实现对当前任务沙盒中的场景或数据执行操作。"
+    },
+    "execution_modes": [
+      "background"
+    ],
+    "surfaces": [
+      "python",
+      "service"
+    ],
+    "modes": [
+      "apply"
+    ],
+    "inputs": {
+      "task_id": {
+        "type": "string",
+        "default": "",
+        "description": "任务 ID。为空时从 payload 顶层读。"
+      },
+      "audit_path": {
+        "type": "string",
+        "default": "",
+        "description": "audit JSONL 路径。为空时自动推导为 audit/{task_id}.json。"
+      },
+      "run_dir": {
+        "type": "string",
+        "default": "",
+        "description": "沙盒目录绝对路径。为空时从 Redis 读 wf:{task_id}:state.sandbox_dir。"
+      },
+      "mode": {
+        "type": "string",
+        "default": "normal",
+        "description": "normal / workflow。"
+      },
+      "source_path": {
+        "type": "string",
+        "default": "",
+        "description": "主源文件路径（仅用于报告头展示）。"
+      }
+    },
+    "preconditions": [
+      "项目配置通过统一 config/{project}_config.json 接口加载。",
+      "后台模式由 CGI Worker 打开或复用对应 DCC 场景。"
+    ],
+    "idempotent": false,
+    "outputs": [
+      {
+        "name": "report",
+        "type": "report",
+        "label": "任务汇总 .md"
+      }
+    ],
+    "statuses": [
+      "SUCCESS",
+      "PARTIAL",
+      "ERROR",
+      "BLOCKED",
+      "NEEDS_ATTENTION",
+      "TIMEOUT",
+      "CANCELLED"
+    ],
+    "errors": {
+      "API_OPERATION_ERROR": "操作执行失败，详见报告。",
+      "API_IMPLEMENTATION_MISSING": "目录存在但没有本地实现。"
+    },
+    "recovery": [
+      "读取 api_help 获取参数、前置条件和输出。",
+      "失败时检查任务报告中的错误与恢复建议。"
+    ],
+    "help": {
+      "summary": "从 audit JSONL 重建/修复统一 REPORT.md。pipeline API 不开 DCC，主进程内直接执行。运行中报告由 cgi_pipeline.core.task_report_writer 负责。",
+      "usage": "execute_api(pipeline.pipeline.write_task_report, params={...})",
+      "scenario": "从 audit JSONL 重建/修复统一 REPORT.md。pipeline API 不开 DCC，主进程内直接执行。运行中报告由 cgi_pipeline.core.task_report_writer 负责。",
+      "safety": "read API 只读；write/destructive API 仅写入任务沙盒。"
+    },
+    "tests": {
+      "contract": "api.registry loads this manifest and api.runner validates its receipt.",
+      "smoke": "代表性 workflow 统一验收。"
+    },
+    "handler": "cgi_pipeline.capabilities.pipeline.pipeline.write_task_report.adapter:execute",
+    "manifest_path": "src/cgi_pipeline/capabilities/pipeline/pipeline/write_task_report/capability.yaml"
+  },
+  {
+    "api_id": "pipeline.session.discover",
+    "version": "1.0.0",
+    "executor": "pipeline",
+    "capability": "pipeline.session",
+    "operation": "discover",
+    "stages": [
+      "pipeline"
+    ],
+    "targets": [
+      "host_session"
+    ],
+    "access": "read",
+    "effects": {
+      "inspect": "Reads local CGI transport endpoints only; no DCC scene is opened or changed."
+    },
+    "execution_modes": [
+      "background"
+    ],
+    "surfaces": [
+      "service"
+    ],
+    "modes": [
+      "inspect"
+    ],
+    "inputs": {
+      "dcc": {
+        "type": "string",
+        "default": "all",
+        "choices": [
+          "maya",
+          "blender",
+          "ue",
+          "all"
+        ],
+        "description": "DCC transport to probe. all returns every currently reachable session."
+      }
+    },
+    "preconditions": [],
+    "idempotent": true,
+    "outputs": {
+      "sessions": "Reachable sessions with a stable dcc:port identity.",
+      "selected_session": "Present only when exactly one session matches."
+    },
+    "statuses": [
+      "SUCCESS",
+      "NEEDS_ATTENTION",
+      "ERROR"
+    ],
+    "errors": {
+      "NO_UNIQUE_SESSION": "The requested DCC has zero or more than one active session."
+    },
+    "recovery": [
+      "Start the requested DCC or pass an explicit returned port to the next API."
+    ],
+    "help": {
+      "summary": "Discover one or more currently reachable Maya, Blender, or Unreal sessions.",
+      "usage": "execute_api(pipeline.session.discover, params={dcc: maya})",
+      "scenario": "Call before foreground inspection or UE editor control when the target session is not explicit.",
+      "safety": "Read-only transport discovery; it never opens or changes a scene."
+    },
+    "tests": {
+      "contract": "tests/test_api_catalog_additions.py",
+      "smoke": "One live session per DCC during the final integration workflow."
+    },
+    "handler": "cgi_pipeline.capabilities.pipeline.session.discover.handler:execute",
+    "manifest_path": "src/cgi_pipeline/capabilities/pipeline/session/discover/capability.yaml"
+  },
+  {
+    "api_id": "ue.editor.action.invoke",
+    "version": "1.0.0",
+    "executor": "ue",
+    "capability": "editor.automation",
+    "operation": "invoke",
+    "stages": [
+      "editor"
+    ],
+    "targets": [
+      "ue_editor"
+    ],
+    "access": "destructive",
+    "effects": {
+      "apply": "Invokes one named UE_MCP_Bridge editor method."
+    },
+    "execution_modes": [
+      "background"
+    ],
+    "surfaces": [
+      "service"
+    ],
+    "modes": [
+      "apply"
+    ],
+    "inputs": {
+      "port": {
+        "type": "integer",
+        "required": true,
+        "description": "UE port returned by pipeline.session.discover."
+      },
+      "method": {
+        "type": "string",
+        "required": true,
+        "description": "Native UE_MCP_Bridge method name."
+      },
+      "arguments": {
+        "type": "object",
+        "default": {},
+        "description": "Native method arguments using the upstream bridge's parameter names."
+      },
+      "timeout_seconds": {
+        "type": "number",
+        "default": 120,
+        "description": "WebSocket execution timeout in seconds."
+      }
+    },
+    "preconditions": [
+      "The target UE Editor is open with the canonical UE_MCP_Bridge plugin enabled.",
+      "method and arguments match the upstream bridge contract for that editor version."
+    ],
+    "idempotent": false,
+    "outputs": {
+      "result": "Native method result from UE_MCP_Bridge.",
+      "session": "Connected UE Editor metadata."
+    },
+    "statuses": [
+      "SUCCESS",
+      "ERROR",
+      "NEEDS_ATTENTION",
+      "TIMEOUT"
+    ],
+    "errors": {
+      "InvalidArguments": "Native method arguments are invalid.",
+      "JsonRpcError": "The target bridge rejected the native method."
+    },
+    "recovery": [
+      "Read the upstream method contract and retry with native parameter names.",
+      "Use pipeline.session.discover to verify the selected editor bridge."
+    ],
+    "help": {
+      "summary": "Invoke one native UE_MCP_Bridge method through CGI's unified API catalog.",
+      "usage": "execute_api(ue.editor.action.invoke, params={port, method, arguments})",
+      "scenario": "Use for a known UE editor action, including bridge-only Blueprint and Sequencer operations.",
+      "safety": "May mutate the selected editor according to the native method."
+    },
+    "tests": {
+      "contract": "tests/test_api_catalog_additions.py",
+      "smoke": "Read-only get_build_status action in the final integration workflow."
+    },
+    "handler": "cgi_pipeline.capabilities.ue.editor.action_invoke.handler:execute",
+    "manifest_path": "src/cgi_pipeline/capabilities/ue/editor/action_invoke/capability.yaml"
+  },
+  {
+    "api_id": "ue.editor.python.execute",
+    "version": "1.0.0",
+    "executor": "ue",
+    "capability": "editor.automation",
+    "operation": "execute",
+    "stages": [
+      "editor"
+    ],
+    "targets": [
+      "ue_editor",
+      "python"
+    ],
+    "access": "destructive",
+    "effects": {
+      "apply": "Executes editor-only Unreal Python in the selected open editor."
+    },
+    "execution_modes": [
+      "background"
+    ],
+    "surfaces": [
+      "service"
+    ],
+    "modes": [
+      "apply"
+    ],
+    "inputs": {
+      "port": {
+        "type": "integer",
+        "required": true,
+        "description": "UE port returned by pipeline.session.discover."
+      },
+      "code": {
+        "type": "string",
+        "required": true,
+        "description": "Unreal Editor Python code. Assign result for structured output when useful."
+      },
+      "description": {
+        "type": "string",
+        "default": "",
+        "description": "Short audit description for the operation."
+      },
+      "timeout_seconds": {
+        "type": "number",
+        "default": 120,
+        "description": "WebSocket execution timeout in seconds."
+      }
+    },
+    "preconditions": [
+      "The target UE Editor is open with the canonical UE_MCP_Bridge plugin enabled.",
+      "port was returned by pipeline.session.discover for that editor."
+    ],
+    "idempotent": false,
+    "outputs": {
+      "result": "JSON result assigned or emitted by the UE bridge.",
+      "stdout": "Captured editor output.",
+      "stderr": "Captured editor errors.",
+      "session": "Connected UE Editor metadata."
+    },
+    "statuses": [
+      "SUCCESS",
+      "ERROR",
+      "NEEDS_ATTENTION",
+      "TIMEOUT"
+    ],
+    "errors": {
+      "ConnectionError": "The selected UE bridge is not reachable.",
+      "PythonError": "Unreal Editor rejected the supplied Python code."
+    },
+    "recovery": [
+      "Use pipeline.session.discover and retry with a currently reachable port.",
+      "Inspect output.traceback for UE Python failures."
+    ],
+    "help": {
+      "summary": "Execute editor-only Python in one selected Unreal Editor through UE_MCP_Bridge.",
+      "usage": "execute_api(ue.editor.python.execute, params={port, code})",
+      "scenario": "Use for a small UE editor operation not already provided as a named native bridge method.",
+      "safety": "Can mutate the selected editor. Prefer ue.editor.action.invoke for known native actions."
+    },
+    "tests": {
+      "contract": "tests/test_api_catalog_additions.py",
+      "smoke": "Non-destructive UE Python query in the final integration workflow."
+    },
+    "handler": "cgi_pipeline.capabilities.ue.editor.python_execute.handler:execute",
+    "manifest_path": "src/cgi_pipeline/capabilities/ue/editor/python_execute/capability.yaml"
+  }
+]

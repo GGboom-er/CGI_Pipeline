@@ -6,8 +6,8 @@
 
 ## 前置准备
 
-1. **Miniconda / Anaconda**；CGI 使用 Notes 受管的通用 Python 3.11 基座：`Tools/_managed/conda_envs/cgi_pipeline`。该基座也供大脑和兼容工具复用。
-2. 已安装 **Autodesk Maya**（推荐 2024+）。
+1. **Miniconda / Anaconda**；CGI 使用 Notes 受管 Python 3.11 运行时：`Y:/GGbommer/scripts/.conda_envs/brain`。
+2. 已安装 **Autodesk Maya 2025**（Python 3.11 / PySide6）。
 3. *无需额外安装 Redis；Notes 已统一管理唯一的 CGI Redis 运行时。*
 
 ---
@@ -18,12 +18,24 @@
 
 ### 方式一：Conda 部署（推荐标准流程）
 在根目录下运行 `bin\setup.bat`。该脚本将自动：
-- 在 `Tools/_managed/conda_envs/cgi_pipeline` 创建/更新 Notes 通用 Python 基座。
+- 在 `Y:/GGbommer/scripts/.conda_envs/brain` 创建/更新共享大脑 Python 基座。
 - 安装所有必要依赖。
 - 生成 `.env` 配置文件模板。
 
 ### 启动脚本
 `deploy/install_and_run.ps1` 只接受上述 Notes 受管 Python 3.11 prefix，不读取用户目录或当前激活环境；缺少该环境时先运行 `bin\setup.bat`。
+
+### Maya 宿主 SDK
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File deploy/maya/install.ps1 Install
+$env:MAYA_MODULE_PATH = [Environment]::GetEnvironmentVariable('MAYA_MODULE_PATH', 'User')
+& 'C:\Program Files\Autodesk\Maya2025\bin\mayapy.exe' deploy/maya/doctor.py
+```
+
+安装器只管理用户级 `MAYA_MODULE_PATH` 中的 CGI module 目录，不写全局 `PYTHONPATH`。安装后重启 Maya；doctor 应返回 `status=PASS`。
+
+HTTP 服务入口在仓库内移动后，使用 `bin/manage_mcp_http.ps1 restart` 接管并切换。管理器只在端口、PID、创建时间、命令行、仓库路径和规范 Python 全部匹配时替换原入口；普通 `stop` 仍拒绝路径不匹配的进程。
 
 ---
 

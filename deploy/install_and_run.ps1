@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-CGI Pipeline v2 One-Click Installer & Runner
+CGI Pipeline One-Click Installer & Runner
 .DESCRIPTION
 This script uses the Notes-managed Python 3.11 Conda environment, installs dependencies,
 scans for Autodesk Maya installations to generate the .env file, and automatically 
@@ -11,9 +11,12 @@ $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Definition)
 Set-Location $ProjectRoot
 $env:PYTHONNOUSERSITE = "1"
-$PythonExe = Join-Path (Split-Path $ProjectRoot -Parent) "conda_envs\cgi_pipeline\python.exe"
+$SourceRoot = Join-Path $ProjectRoot "src"
+$env:PYTHONPATH = ((@($SourceRoot) + @($env:PYTHONPATH -split [IO.Path]::PathSeparator)) |
+    Where-Object { $_ } | Select-Object -Unique) -join [IO.Path]::PathSeparator
+$PythonExe = Join-Path (Split-Path $ProjectRoot -Parent) "..\..\..\.conda_envs\brain\python.exe"
 if (-not (Test-Path -LiteralPath $PythonExe -PathType Leaf)) {
-    throw "Canonical CGI Python not found: $PythonExe. Run bin\setup.bat first."
+    throw "Canonical brain Python not found: $PythonExe. Run bin\setup.bat first."
 }
 $PythonExe = (Resolve-Path -LiteralPath $PythonExe).Path
 $NotesPythonPrefix = Split-Path $PythonExe -Parent
@@ -99,7 +102,7 @@ else {
 Write-Host "`n[4/5] Starting Celery Worker (Background)..." -ForegroundColor Yellow
 $WorkerLog = Join-Path $ProjectRoot "celery_worker.log"
 $WorkerErrLog = Join-Path $ProjectRoot "celery_worker_err.log"
-Start-Process -FilePath $PythonExe -ArgumentList @("-s", "-m", "celery", "-A", "core.tasks", "worker", "-P", "solo", "--loglevel=info") -WindowStyle Minimized -RedirectStandardOutput $WorkerLog -RedirectStandardError $WorkerErrLog
+Start-Process -FilePath $PythonExe -ArgumentList @("-s", "-m", "celery", "-A", "cgi_pipeline.core.tasks", "worker", "-P", "solo", "--loglevel=info") -WindowStyle Hidden -RedirectStandardOutput $WorkerLog -RedirectStandardError $WorkerErrLog
 Write-Host "Celery Worker started. Logs are being written to celery_worker.log" -ForegroundColor Green
 
 # 5. Start MCP Server
@@ -108,4 +111,4 @@ Write-Host "=============================================" -ForegroundColor Cyan
 Write-Host "Pipeline is now ONLINE! Keep this window open." -ForegroundColor Cyan
 Write-Host "=============================================" -ForegroundColor Cyan
 
-& $PythonExe -s mcp_server/server.py --http
+& $PythonExe -s -m cgi_pipeline.server.server --http

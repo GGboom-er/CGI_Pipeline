@@ -1,0 +1,50 @@
+api_id: pipeline.session.discover
+version: 1.0.0
+executor: pipeline
+capability: pipeline.session
+operation: discover
+stages:
+- pipeline
+targets:
+- host_session
+access: read
+effects:
+  inspect: Reads local CGI transport endpoints only; no DCC scene is opened or changed.
+execution_modes:
+- background
+surfaces:
+- service
+modes:
+- inspect
+inputs:
+  dcc:
+    type: string
+    default: all
+    choices:
+    - maya
+    - blender
+    - ue
+    - all
+    description: DCC transport to probe. all returns every currently reachable session.
+preconditions: []
+idempotent: true
+outputs:
+  sessions: Reachable sessions with a stable dcc:port identity.
+  selected_session: Present only when exactly one session matches.
+statuses:
+- SUCCESS
+- NEEDS_ATTENTION
+- ERROR
+errors:
+  NO_UNIQUE_SESSION: The requested DCC has zero or more than one active session.
+recovery:
+- Start the requested DCC or pass an explicit returned port to the next API.
+help:
+  summary: Discover one or more currently reachable Maya, Blender, or Unreal sessions.
+  usage: 'execute_api(pipeline.session.discover, params={dcc: maya})'
+  scenario: Call before foreground inspection or UE editor control when the target session is not explicit.
+  safety: Read-only transport discovery; it never opens or changes a scene.
+tests:
+  contract: tests/test_api_catalog_additions.py
+  smoke: One live session per DCC during the final integration workflow.
+handler: cgi_pipeline.capabilities.pipeline.session.discover.handler:execute

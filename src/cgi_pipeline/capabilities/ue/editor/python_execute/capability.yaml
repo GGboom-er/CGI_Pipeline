@@ -1,0 +1,65 @@
+api_id: ue.editor.python.execute
+version: 1.0.0
+executor: ue
+capability: editor.automation
+operation: execute
+stages:
+- editor
+targets:
+- ue_editor
+- python
+access: destructive
+effects:
+  apply: Executes editor-only Unreal Python in the selected open editor.
+execution_modes:
+- background
+surfaces:
+- service
+modes:
+- apply
+inputs:
+  port:
+    type: integer
+    required: true
+    description: UE port returned by pipeline.session.discover.
+  code:
+    type: string
+    required: true
+    description: Unreal Editor Python code. Assign result for structured output when useful.
+  description:
+    type: string
+    default: ''
+    description: Short audit description for the operation.
+  timeout_seconds:
+    type: number
+    default: 120
+    description: WebSocket execution timeout in seconds.
+preconditions:
+- The target UE Editor is open with the canonical UE_MCP_Bridge plugin enabled.
+- port was returned by pipeline.session.discover for that editor.
+idempotent: false
+outputs:
+  result: JSON result assigned or emitted by the UE bridge.
+  stdout: Captured editor output.
+  stderr: Captured editor errors.
+  session: Connected UE Editor metadata.
+statuses:
+- SUCCESS
+- ERROR
+- NEEDS_ATTENTION
+- TIMEOUT
+errors:
+  ConnectionError: The selected UE bridge is not reachable.
+  PythonError: Unreal Editor rejected the supplied Python code.
+recovery:
+- Use pipeline.session.discover and retry with a currently reachable port.
+- Inspect output.traceback for UE Python failures.
+help:
+  summary: Execute editor-only Python in one selected Unreal Editor through UE_MCP_Bridge.
+  usage: execute_api(ue.editor.python.execute, params={port, code})
+  scenario: Use for a small UE editor operation not already provided as a named native bridge method.
+  safety: Can mutate the selected editor. Prefer ue.editor.action.invoke for known native actions.
+tests:
+  contract: tests/test_api_catalog_additions.py
+  smoke: Non-destructive UE Python query in the final integration workflow.
+handler: cgi_pipeline.capabilities.ue.editor.python_execute.handler:execute

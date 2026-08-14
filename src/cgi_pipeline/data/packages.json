@@ -1,0 +1,21 @@
+[
+  {
+    "package_id": "adpose",
+    "name": "adPose",
+    "category": "rigging",
+    "stages": [
+      "rigging",
+      "animation"
+    ],
+    "hosts": [
+      "maya"
+    ],
+    "source": {
+      "type": "workspace",
+      "path": "Y:/GGbommer/scripts/adPose"
+    },
+    "entrypoints": {
+      "maya": "adPose.ui:show_in_maya"
+    }
+  }
+]

@@ -1,0 +1,74 @@
+api_id: pipeline.pipeline.write_task_report
+version: 1.0.0
+name: 任务汇总报告
+executor: pipeline
+capability: pipeline.report
+operation: write
+stages:
+- pipeline
+targets:
+- report
+- audit
+access: write
+effects:
+  inspect: 只读取场景或标准数据，不改变资产。
+  apply: 按 API 实现对当前任务沙盒中的场景或数据执行操作。
+execution_modes:
+- background
+surfaces:
+- python
+- service
+modes:
+- apply
+inputs:
+  task_id:
+    type: string
+    default: ''
+    description: 任务 ID。为空时从 payload 顶层读。
+  audit_path:
+    type: string
+    default: ''
+    description: audit JSONL 路径。为空时自动推导为 audit/{task_id}.json。
+  run_dir:
+    type: string
+    default: ''
+    description: 沙盒目录绝对路径。为空时从 Redis 读 wf:{task_id}:state.sandbox_dir。
+  mode:
+    type: string
+    default: normal
+    description: normal / workflow。
+  source_path:
+    type: string
+    default: ''
+    description: 主源文件路径（仅用于报告头展示）。
+preconditions:
+- 项目配置通过统一 config/{project}_config.json 接口加载。
+- 后台模式由 CGI Worker 打开或复用对应 DCC 场景。
+idempotent: false
+outputs:
+- name: report
+  type: report
+  label: 任务汇总 .md
+statuses:
+- SUCCESS
+- PARTIAL
+- ERROR
+- BLOCKED
+- NEEDS_ATTENTION
+- TIMEOUT
+- CANCELLED
+errors:
+  API_OPERATION_ERROR: 操作执行失败，详见报告。
+  API_IMPLEMENTATION_MISSING: 目录存在但没有本地实现。
+recovery:
+- 读取 api_help 获取参数、前置条件和输出。
+- 失败时检查任务报告中的错误与恢复建议。
+help:
+  summary: 从 audit JSONL 重建/修复统一 REPORT.md。pipeline API 不开 DCC，主进程内直接执行。运行中报告由 cgi_pipeline.core.task_report_writer 负责。
+  usage: execute_api(pipeline.pipeline.write_task_report, params={...})
+  scenario: 从 audit JSONL 重建/修复统一 REPORT.md。pipeline API 不开 DCC，主进程内直接执行。运行中报告由 cgi_pipeline.core.task_report_writer 负责。
+  safety: read API 只读；write/destructive API 仅写入任务沙盒。
+tests:
+  contract: api.registry loads this manifest and api.runner validates its receipt.
+  smoke: 代表性 workflow 统一验收。
+handler: cgi_pipeline.capabilities.pipeline.pipeline.write_task_report.adapter:execute

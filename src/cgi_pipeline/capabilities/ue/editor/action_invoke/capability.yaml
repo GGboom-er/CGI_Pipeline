@@ -1,0 +1,62 @@
+api_id: ue.editor.action.invoke
+version: 1.0.0
+executor: ue
+capability: editor.automation
+operation: invoke
+stages:
+- editor
+targets:
+- ue_editor
+access: destructive
+effects:
+  apply: Invokes one named UE_MCP_Bridge editor method.
+execution_modes:
+- background
+surfaces:
+- service
+modes:
+- apply
+inputs:
+  port:
+    type: integer
+    required: true
+    description: UE port returned by pipeline.session.discover.
+  method:
+    type: string
+    required: true
+    description: Native UE_MCP_Bridge method name.
+  arguments:
+    type: object
+    default: {}
+    description: Native method arguments using the upstream bridge's parameter names.
+  timeout_seconds:
+    type: number
+    default: 120
+    description: WebSocket execution timeout in seconds.
+preconditions:
+- The target UE Editor is open with the canonical UE_MCP_Bridge plugin enabled.
+- method and arguments match the upstream bridge contract for that editor version.
+idempotent: false
+outputs:
+  result: Native method result from UE_MCP_Bridge.
+  session: Connected UE Editor metadata.
+statuses:
+- SUCCESS
+- ERROR
+- NEEDS_ATTENTION
+- TIMEOUT
+errors:
+  InvalidArguments: Native method arguments are invalid.
+  JsonRpcError: The target bridge rejected the native method.
+recovery:
+- Read the upstream method contract and retry with native parameter names.
+- Use pipeline.session.discover to verify the selected editor bridge.
+help:
+  summary: Invoke one native UE_MCP_Bridge method through CGI's unified API catalog.
+  usage: execute_api(ue.editor.action.invoke, params={port, method, arguments})
+  scenario: Use for a known UE editor action, including bridge-only Blueprint and Sequencer operations.
+  safety: May mutate the selected editor according to the native method.
+tests:
+  contract: tests/test_api_catalog_additions.py
+  smoke: Read-only get_build_status action in the final integration workflow.
+handler: cgi_pipeline.capabilities.ue.editor.action_invoke.handler:execute

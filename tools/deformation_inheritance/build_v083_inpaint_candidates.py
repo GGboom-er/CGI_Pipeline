@@ -133,7 +133,7 @@ def main() -> int:
             "p95_threshold": p95,
             "high_error_vertices": int(high_error.sum()),
             "strict_error_vertices": int(strict_error.sum()),
-            "core_vertices": int(core.sum()),
+            "core_vertices": int(cgi_pipeline.core.sum()),
             "domain_1ring_vertices": int(domain.sum()),
             "base_core_error": _stat(err[core]),
             "base_domain_error": _stat(err[domain]),
@@ -148,7 +148,7 @@ def main() -> int:
         candidate = _topk_normalize(candidate)
         output[name] = candidate
         output[name + "_domain_mask"] = domain.astype(np.bool_)
-        output[name + "_core_mask"] = core.astype(np.bool_)
+        output[name + "_core_mask"] = cgi_pipeline.core.astype(np.bool_)
         row_delta = np.abs(candidate - base).sum(axis=1)
         summaries["variants"][name] = {
             "alpha": float(alpha),

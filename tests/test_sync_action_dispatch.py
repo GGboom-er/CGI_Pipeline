@@ -13,12 +13,13 @@ maya_sync_rig_incremental 依赖 maya.cmds 无法在 mayapy 外直接跑，但�
 """
 import sys, os, re
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from core.asset_info_schema import compare, make_empty_info, make_mesh_entry
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'src')))
+from cgi_pipeline.core.asset_info_schema import compare, make_empty_info, make_mesh_entry
 
 SYNC_PATH = os.path.join(
     os.path.dirname(__file__), '..',
-    'api', 'operations', 'maya_sync_rig_incremental', 'maya_sync_rig_incremental.py'
+    'src', 'cgi_pipeline', 'capabilities', 'maya', 'rig',
+    'maya_sync_rig_incremental', 'maya_sync_rig_incremental.py'
 )
 
 GROUP_ACTIONS = {"IDENTICAL", "ORIG_INJECT", "PAIRED", "UNPAIRED"}
@@ -40,7 +41,7 @@ def test_sync_consumes_pairing_groups():
     """sync 应消费 pairing_groups 字段（从 compare report 读取），而不是旧 instructions。"""
     print("\n=== Test 1: sync 消费 pairing_groups ===")
     source = _read_sync_source()
-    _ok('from api.operations.maya_sync_rig_incremental.sync_contract import' in source,
+    _ok('from cgi_pipeline.capabilities.maya.rig.maya_sync_rig_incremental.sync_contract import' in source,
         'sync 使用纯契约层')
     _ok('pairing_groups = report["pairing_groups"]' in source,
         'sync 从契约校验后的 report 读取 pairing_groups')

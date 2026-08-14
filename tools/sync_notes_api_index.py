@@ -16,14 +16,14 @@ DEFAULT_NOTES_ROOT = Path("Y:/GGbommer/scripts/Notes")
 START = "<!-- CGI_PROJECT_API_SUMMARY:START -->"
 END = "<!-- CGI_PROJECT_API_SUMMARY:END -->"
 if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+    sys.path.insert(0, str(ROOT / "src"))
 
 
 def load_api_specs() -> list[dict[str, Any]]:
     """Load API metadata from the CGI API Catalog."""
-    from api.registry import list_apis
+    from cgi_pipeline.catalog import list_capabilities
 
-    return list_apis()
+    return list_capabilities()
 
 
 def _md_list(values: list[str]) -> str:
@@ -33,18 +33,20 @@ def _md_list(values: list[str]) -> str:
 def render_catalog(apis: list[dict[str, Any]], today: str) -> str:
     counts = {}
     for api in apis:
-        tier = api.get("tier", "")
-        counts[tier] = counts.get(tier, 0) + 1
+        access = api.get("access", "")
+        counts[access] = counts.get(access, 0) + 1
     api_rows = []
     for api in sorted(apis, key=lambda item: item.get("api_id", "")):
         api_rows.append(
-            "| {api_id} | {dcc} | {domain} | {action} | {tier} | {modes} | {summary} |".format(
+            "| {api_id} | {executor} | {capability} | {operation} | {stages} | {targets} | {access} | {surfaces} | {summary} |".format(
                 api_id=api.get("api_id", ""),
-                dcc=api.get("dcc", ""),
-                domain=api.get("domain", ""),
-                action=api.get("action", ""),
-                tier=api.get("tier", ""),
-                modes=_md_list(api.get("execution_modes") or []),
+                executor=api.get("executor", ""),
+                capability=api.get("capability", ""),
+                operation=api.get("operation", ""),
+                stages=_md_list(api.get("stages") or []),
+                targets=_md_list(api.get("targets") or []),
+                access=api.get("access", ""),
+                surfaces=_md_list(api.get("surfaces") or []),
                 summary=str((api.get("help") or {}).get("summary", "")).replace("\n", " "),
             )
         )
@@ -57,7 +59,7 @@ def render_catalog(apis: list[dict[str, Any]], today: str) -> str:
             "status: active",
             f"updated: {today}",
             "purpose: CGI Pipeline 项目 API 能力目录；由 API manifest 生成。",
-            "source: Y:/GGbommer/scripts/Notes/Tools/_managed/cgi_pipeline/api/**/api.yaml",
+            "source: Y:/GGbommer/scripts/Notes/Tools/_managed/cgi_pipeline/src/cgi_pipeline/capabilities/**/capability.yaml",
             "---",
             "",
             "# CGI Pipeline 能力目录",
@@ -74,8 +76,8 @@ def render_catalog(apis: list[dict[str, Any]], today: str) -> str:
             "",
             "## API 明细",
             "",
-            "| api_id | dcc | domain | action | tier | execution_modes | 用途 |",
-            "|---|---|---|---|---|---|---|",
+            "| api_id | executor | capability | operation | stages | targets | access | surfaces | 用途 |",
+            "|---|---|---|---|---|---|---|---|---|",
             *api_rows,
             "",
         ]
@@ -85,8 +87,8 @@ def render_catalog(apis: list[dict[str, Any]], today: str) -> str:
 def render_project_block(apis: list[dict[str, Any]], today: str) -> str:
     counts = {}
     for api in apis:
-        tier = api.get("tier", "")
-        counts[tier] = counts.get(tier, 0) + 1
+        access = api.get("access", "")
+        counts[access] = counts.get(access, 0) + 1
     return "\n".join(
         [
             START,

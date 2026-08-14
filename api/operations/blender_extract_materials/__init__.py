@@ -1,1 +1,0 @@
-from api.operations.blender_extract_materials.blender_extract_materials import execute

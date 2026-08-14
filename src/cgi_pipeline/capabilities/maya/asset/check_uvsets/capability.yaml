@@ -1,0 +1,61 @@
+api_id: maya.asset.check_uvsets
+version: 1.0.0
+name: UV Set 检查
+executor: maya
+capability: modeling.uv
+operation: inspect
+stages:
+- modeling
+- rigging
+targets:
+- mesh
+- uv_set
+access: read
+effects:
+  inspect: 只读取场景或标准数据，不改变资产。
+  apply: 按 API 实现对当前任务沙盒中的场景或数据执行操作。
+execution_modes:
+- local
+- background
+- foreground
+surfaces:
+- maya
+- service
+modes:
+- inspect
+inputs:
+  cache_group:
+    type: string
+    default: cache
+    description: 扫描的根组名称，默认 cache
+preconditions:
+- 项目配置通过统一 config/{project}_config.json 接口加载。
+- 后台模式由 CGI Worker 打开或复用对应 DCC 场景。
+idempotent: true
+outputs:
+- name: result
+  type: json
+  label: UV 检查结构化结果
+statuses:
+- SUCCESS
+- PARTIAL
+- ERROR
+- BLOCKED
+- NEEDS_ATTENTION
+- TIMEOUT
+- CANCELLED
+errors:
+  API_OPERATION_ERROR: 操作执行失败，详见报告。
+  API_IMPLEMENTATION_MISSING: 目录存在但没有本地实现。
+recovery:
+- 读取 api_help 获取参数、前置条件和输出。
+- 失败时检查任务报告中的错误与恢复建议。
+help:
+  summary: 只读扫描 cache 组下所有 mesh 的 UV set 状况，并标记需要清理的 mesh；建议在执行 simplify_uvsets 之前先运行此 API。
+  usage: execute_api(maya.asset.check_uvsets, params={...})
+  scenario: 在清理 UV set 前确认每个 mesh 的 UV 集数量、有效性和空壳集。
+  safety: read API 只读；write/destructive API 仅写入任务沙盒。
+tests:
+  contract: api.registry loads this manifest and api.runner validates its receipt.
+  smoke: 代表性 workflow 统一验收。
+handler: cgi_pipeline.capabilities.maya.asset.check_uvsets.adapter:execute

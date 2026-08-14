@@ -1,7 +1,7 @@
 @echo off
 chcp 65001 >nul
 echo ============================================
-echo   CGI Pipeline v2.0 — 一键部署脚本
+echo   CGI Pipeline — 一键部署脚本
 echo ============================================
 echo.
 
@@ -19,12 +19,12 @@ if errorlevel 1 (
 )
 echo [PASS] conda 已安装
 
-REM ── 使用 Notes 受管 prefix 创建/更新通用 Python 基座（CGI 兼容）──
-for %%I in ("%~dp0..\..\conda_envs\cgi_pipeline") do set "CGI_ENV=%%~fI"
+REM ── 使用 Notes 受管 brain prefix 创建/更新 CGI Python 运行时──
+for %%I in ("%~dp0..\..\..\..\..\.conda_envs\brain") do set "CGI_ENV=%%~fI"
 set "PATH=%CGI_ENV%;%CGI_ENV%\Library\mingw-w64\bin;%CGI_ENV%\Library\usr\bin;%CGI_ENV%\Library\bin;%CGI_ENV%\Scripts;%PATH%"
 set "PYTHONNOUSERSITE=1"
 echo.
-echo [STEP 1] 创建/更新 Notes 通用 Python 3.11 基座...
+echo [STEP 1] 创建/更新共享 brain Python 3.11 基座...
 conda env create --prefix "%CGI_ENV%" -f environment.yml -y 2>nul
 if errorlevel 1 (
     echo [INFO] 环境已存在，执行更新...
@@ -75,7 +75,8 @@ echo   2. 安装并启动 Memurai (Redis)
 echo   3. 确认 Maya 2025 已安装
 echo.
 echo   启动命令：
-echo   "%CGI_ENV%\python.exe" -m mcp_server.server --http
+echo   set PYTHONPATH=%PROJECT_ROOT%\src
+echo   "%CGI_ENV%\python.exe" -m cgi_pipeline.server.server --http
 echo ============================================
 popd
 pause

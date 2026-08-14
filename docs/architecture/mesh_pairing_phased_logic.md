@@ -2,7 +2,7 @@
 
 更新时间: 2026-05-14
 
-本文只说明 mesh 如何配对和分类。运行时 Workflow 看 `compare_and_assembly_pipeline_plan.md`；输出契约看对应 API 的 `api_help.md` 和 `core.receipt`。
+本文只说明 mesh 如何配对和分类。运行时 Workflow 看 `compare_and_assembly_pipeline_plan.md`；输出契约看对应 API 的 manifest 和 `core.receipt`。
 
 ## 1. 核心原则
 
@@ -120,7 +120,7 @@ step3.new_threshold = 0.30
 
 ## 6. 已落地状态
 
-- 三步漏斗已进入 `core/asset_info_schema.py` 和 compare/sync 测试。
+- 三步漏斗已进入 `cgi_pipeline.core.asset_info_schema` 和 compare/sync 测试。
 - `pairing_report.py` 负责把算法结果聚合成报告和审计可用的 source 侧事实。
 - `maya_sync_rig_incremental` 消费 compare_result，不在同步阶段重算配对。
 - 多源 PAIRED displayLayer 命名已按 source mesh 组合，过长时退到 `A_GRP_Layer`。

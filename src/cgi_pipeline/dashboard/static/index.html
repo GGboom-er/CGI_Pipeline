@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CGI Pipeline Dashboard</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #0a0a0f;
+            --surface: #12121a;
+            --surface-2: #1a1a26;
+            --border: #2a2a3a;
+            --text: #e4e4f0;
+            --text-dim: #8888a0;
+            --accent: #6c5ce7;
+            --accent-glow: #6c5ce740;
+            --success: #00d2a0;
+            --warning: #ffa726;
+            --error: #ff5252;
+            --info: #42a5f5;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Inter', -apple-system, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+        }
+
+        /* ── Header ── */
+        .header {
+            padding: 24px 32px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: linear-gradient(180deg, #12121a 0%, #0a0a0f 100%);
+        }
+        .header h1 {
+            font-size: 20px;
+            font-weight: 600;
+            background: linear-gradient(135deg, #6c5ce7, #a29bfe);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .header .status-dot {
+            width: 8px; height: 8px;
+            border-radius: 50%;
+            background: var(--success);
+            box-shadow: 0 0 12px var(--success);
+            animation: pulse 2s infinite;
+            margin-right: 8px;
+        }
+        .header .status-bar {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            font-size: 13px;
+            color: var(--text-dim);
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+
+        /* ── Stats Cards ── */
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            padding: 24px 32px;
+        }
+        .stat-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 20px;
+            transition: border-color 0.2s;
+        }
+        .stat-card:hover { border-color: var(--accent); }
+        .stat-card .label { font-size: 12px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 1px; }
+        .stat-card .value { font-size: 28px; font-weight: 700; margin-top: 8px; }
+
+        /* ── Tabs ── */
+        .tabs {
+            display: flex;
+            gap: 0;
+            padding: 0 32px;
+            border-bottom: 1px solid var(--border);
+        }
+        .tab {
+            padding: 12px 24px;
+            cursor: pointer;
+            font-size: 14px;
+            color: var(--text-dim);
+            border-bottom: 2px solid transparent;
+            transition: all 0.2s;
+        }
+        .tab:hover { color: var(--text); }
+        .tab.active {
+            color: var(--accent);
+            border-bottom-color: var(--accent);
+        }
+
+        /* ── Content ── */
+        .content { padding: 24px 32px; }
+        .panel { display: none; }
+        .panel.active { display: block; }
+
+        /* ── Task Table ── */
+        .task-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        .task-table th {
+            text-align: left;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-dim);
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border);
+        }
+        .task-table td {
+            padding: 14px 16px;
+            border-bottom: 1px solid var(--border);
+            font-size: 13px;
+        }
+        .task-table tr:hover { background: var(--surface-2); }
+
+        /* ── Status Badge ── */
+        .badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 6px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .badge.SUCCESS { background: #00d2a020; color: var(--success); }
+        .badge.STARTED { background: #42a5f520; color: var(--info); }
+        .badge.FAILED { background: #ff525220; color: var(--error); }
+        .badge.TIMEOUT { background: #ffa72620; color: var(--warning); }
+        .badge.DEGRADED { background: #ffa72620; color: var(--warning); }
+        .badge.UNKNOWN { background: #8888a020; color: var(--text-dim); }
+
+        /* ── API Cards ── */
+        .api-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 16px;
+        }
+        .api-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 20px;
+            transition: all 0.3s;
+        }
+        .api-card:hover {
+            border-color: var(--accent);
+            box-shadow: 0 4px 24px var(--accent-glow);
+            transform: translateY(-2px);
+        }
+        .api-card .name { font-weight: 600; font-size: 15px; margin-bottom: 6px; }
+        .api-card .desc { font-size: 12px; color: var(--text-dim); line-height: 1.5; }
+        .api-card .dcc-tag {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: 600;
+            margin-top: 10px;
+            text-transform: uppercase;
+        }
+        .dcc-maya { background: #00bcd420; color: #00bcd4; }
+        .dcc-blender { background: #ff980020; color: #ff9800; }
+        .dcc-ue { background: #9c27b020; color: #ce93d8; }
+
+        /* ── Live Feed ── */
+        .feed {
+            max-height: 500px;
+            overflow-y: auto;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+        }
+        .feed-item {
+            padding: 8px 12px;
+            border-left: 3px solid var(--border);
+            margin-bottom: 4px;
+            background: var(--surface);
+            border-radius: 0 8px 8px 0;
+            animation: fadeIn 0.3s ease;
+        }
+        .feed-item.SUCCESS { border-left-color: var(--success); }
+        .feed-item.STARTED { border-left-color: var(--info); }
+        .feed-item.FAILED { border-left-color: var(--error); }
+        @keyframes fadeIn { from { opacity: 0; transform: translateX(-10px); } to { opacity: 1; } }
+
+        /* ── Empty State ── */
+        .empty {
+            text-align: center;
+            padding: 60px;
+            color: var(--text-dim);
+        }
+        .empty-icon { font-size: 48px; margin-bottom: 16px; }
+
+        /* ── Scrollbar ── */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+    </style>
+</head>
+<body>
+
+<header class="header">
+    <h1>⚡ CGI Pipeline Dashboard</h1>
+    <div class="status-bar">
+        <div style="display:flex;align-items:center;"><div class="status-dot"></div>LIVE</div>
+        <span id="sys-workers">Workers: —</span>
+        <span id="sys-tasks">Tasks: —</span>
+    </div>
+</header>
+
+<div class="stats" id="stats-row">
+    <div class="stat-card"><div class="label">任务总数</div><div class="value" id="stat-total">—</div></div>
+    <div class="stat-card"><div class="label">成功</div><div class="value" style="color:var(--success)" id="stat-success">—</div></div>
+    <div class="stat-card"><div class="label">失败</div><div class="value" style="color:var(--error)" id="stat-failed">—</div></div>
+    <div class="stat-card"><div class="label">进行中</div><div class="value" style="color:var(--info)" id="stat-running">—</div></div>
+</div>
+
+<div class="tabs">
+    <div class="tab active" onclick="switchTab('tasks')">📋 任务列表</div>
+    <div class="tab" onclick="switchTab('apis')">🔧 API 目录</div>
+    <div class="tab" onclick="switchTab('feed')">📡 实时事件流</div>
+</div>
+
+<div class="content">
+    <!-- Tasks Panel -->
+    <div class="panel active" id="panel-tasks">
+        <table class="task-table">
+            <thead><tr>
+                <th>Task ID</th><th>API</th><th>状态</th><th>重试</th><th>时间</th><th>详情</th>
+            </tr></thead>
+            <tbody id="task-tbody"></tbody>
+        </table>
+        <div class="empty" id="tasks-empty"><div class="empty-icon">📭</div>暂无任务记录<br><small>执行API后，任务将在此显示</small></div>
+    </div>
+
+    <!-- API Panel -->
+    <div class="panel" id="panel-apis">
+        <div class="api-grid" id="api-grid"></div>
+    </div>
+
+    <!-- Feed Panel -->
+    <div class="panel" id="panel-feed">
+        <div class="feed" id="feed-container">
+            <div class="empty"><div class="empty-icon">📡</div>等待实时事件...<br><small>SSE 连接已建立</small></div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // ── Tab switching ──
+    function switchTab(name) {
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+        event.target.classList.add('active');
+        document.getElementById('panel-' + name).classList.add('active');
+    }
+
+    // ── Format timestamp ──
+    function fmtTime(ts) {
+        if (!ts) return '—';
+        const d = new Date(ts * 1000);
+        return d.toLocaleTimeString('zh-CN', {hour12: false}) + '.' + String(d.getMilliseconds()).padStart(3, '0');
+    }
+
+    // ── Load tasks ──
+    async function loadTasks() {
+        try {
+            const r = await fetch('/api/tasks');
+            const data = await r.json();
+            const tbody = document.getElementById('task-tbody');
+            const empty = document.getElementById('tasks-empty');
+
+            if (!data.tasks || data.tasks.length === 0) {
+                tbody.innerHTML = '';
+                empty.style.display = 'block';
+                return;
+            }
+            empty.style.display = 'none';
+
+            let successCount = 0, failedCount = 0, runningCount = 0;
+            tbody.innerHTML = data.tasks.map(t => {
+                if (t.status === 'SUCCESS') successCount++;
+                else if (t.status === 'FAILED' || t.status === 'ERROR') failedCount++;
+                else if (t.status === 'STARTED') runningCount++;
+                return `<tr>
+                    <td><code>${t.task_id}</code></td>
+                    <td>${t.api_id}</td>
+                    <td><span class="badge ${t.status}">${t.status}</span></td>
+                    <td>${t.attempt}</td>
+                    <td>${fmtTime(t.timestamp)}</td>
+                    <td style="color:var(--text-dim);max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${t.detail || '—'}</td>
+                </tr>`;
+            }).join('');
+
+            document.getElementById('stat-total').textContent = data.total;
+            document.getElementById('stat-success').textContent = successCount;
+            document.getElementById('stat-failed').textContent = failedCount;
+            document.getElementById('stat-running').textContent = runningCount;
+            document.getElementById('sys-tasks').textContent = `Tasks: ${data.total}`;
+        } catch (e) { console.error('loadTasks error:', e); }
+    }
+
+    // ── Load APIs ──
+    async function loadApis() {
+        try {
+            const r = await fetch('/api/apis');
+            const data = await r.json();
+            const grid = document.getElementById('api-grid');
+            if (!data.apis) return;
+
+            grid.innerHTML = data.apis.map(s => {
+                const dcc = s.dcc || 'maya';
+                return `<div class="api-card">
+                    <div class="name"><code>${s.api_id}</code></div>
+                    <div class="desc">${s.help?.summary || s.help?.scenario || ''}</div>
+                    <span class="dcc-tag dcc-${dcc}">${dcc}</span>
+                </div>`;
+            }).join('');
+        } catch (e) { console.error('loadApis error:', e); }
+    }
+
+    // ── Load system status ──
+    async function loadStatus() {
+        try {
+            const r = await fetch('/api/status');
+            const data = await r.json();
+            document.getElementById('sys-workers').textContent = `Workers: ${data.worker_count}`;
+        } catch (e) {}
+    }
+
+    // ── SSE live feed ──
+    function startSSE() {
+        const evtSource = new EventSource('/api/events');
+        const container = document.getElementById('feed-container');
+
+        evtSource.onmessage = function(e) {
+            try {
+                const data = JSON.parse(e.data);
+                // 清除空状态提示
+                if (container.querySelector('.empty')) container.innerHTML = '';
+
+                const item = document.createElement('div');
+                item.className = `feed-item ${data.status}`;
+                item.innerHTML = `<strong>[${fmtTime(data.timestamp)}]</strong> ${data.api_id} → <span class="badge ${data.status}">${data.status}</span> <span style="color:var(--text-dim)">${data.task_id}</span>`;
+                container.insertBefore(item, container.firstChild);
+
+                // 刷新任务列表
+                loadTasks();
+            } catch (err) {}
+        };
+    }
+
+    // ── Init ──
+    loadTasks();
+    loadApis();
+    loadStatus();
+    startSSE();
+    setInterval(loadTasks, 5000);
+    setInterval(loadStatus, 10000);
+</script>
+</body>
+</html>

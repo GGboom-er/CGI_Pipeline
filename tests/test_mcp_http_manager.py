@@ -16,7 +16,7 @@ from typing import TextIO
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 MANAGER = PROJECT_ROOT / "bin" / "manage_mcp_http.ps1"
-SERVER_PATH = PROJECT_ROOT / "mcp_server" / "server.py"
+SERVER_PATH = PROJECT_ROOT / "src" / "cgi_pipeline" / "server" / "server.py"
 RUNTIME_DIR = PROJECT_ROOT / "runtime"
 LOG_DIR = PROJECT_ROOT / "logs"
 POWERSHELL = shutil.which("pwsh") or shutil.which("powershell")
@@ -25,7 +25,7 @@ CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 def _manager_python() -> Path:
     candidates = [
-        str(PROJECT_ROOT.parent / "conda_envs" / "cgi_pipeline" / "python.exe"),
+        str(PROJECT_ROOT.parents[3] / ".conda_envs" / "brain" / "python.exe"),
     ]
     for candidate in candidates:
         if candidate and Path(candidate).is_file():
@@ -45,6 +45,7 @@ class McpHttpManagerTests(unittest.TestCase):
     def setUp(self) -> None:
         self.ports: set[int] = set()
         self.children: list[subprocess.Popen[str]] = []
+        self.runtime_entries: list[Path] = []
         self.command_output = tempfile.TemporaryDirectory(prefix="mcp_http_manager_test_")
         self.command_index = 0
 
@@ -73,6 +74,8 @@ class McpHttpManagerTests(unittest.TestCase):
                 LOG_DIR / f"mcp_http_{port}.stderr.log",
             ):
                 path.unlink(missing_ok=True)
+        for path in self.runtime_entries:
+            path.unlink(missing_ok=True)
         self.command_output.cleanup()
 
     def _free_port(self) -> int:
@@ -328,6 +331,53 @@ class McpHttpManagerTests(unittest.TestCase):
         self.assertEqual(stopped_source.returncode, 0, stopped_source.stderr)
         self.assertTrue(stopped_source_payload["managed"])
         self.assertEqual(stopped_source_payload["shutdown_cleanup"], "COMPLETED")
+
+    def test_restart_replaces_verified_repository_entry_after_relocation(self) -> None:
+        port = self._free_port()
+        relocated_entry = RUNTIME_DIR / f"relocated_http_entry_{port}.py"
+        RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+        relocated_entry.write_text(
+            "import socket,time\n"
+            "sock=socket.socket()\n"
+            "sock.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)\n"
+            f"sock.bind(('127.0.0.1',{port}))\n"
+            "sock.listen()\n"
+            "print('ready',flush=True)\n"
+            "time.sleep(60)\n",
+            encoding="utf-8",
+        )
+        self.runtime_entries.append(relocated_entry)
+        child = subprocess.Popen(
+            [str(self.python), "-s", str(relocated_entry), "--http"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            creationflags=CREATE_NO_WINDOW,
+        )
+        self.children.append(child)
+        self.assertEqual(child.stdout.readline().strip(), "ready")
+        self._write_metadata(
+            port,
+            {
+                "pid": child.pid,
+                "creation_time": self._creation_time(child.pid),
+                "port": port,
+                "server_path": str(relocated_entry),
+            },
+        )
+
+        completed, payload = self._run_manager("restart", port, timeout=60)
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(payload["status"], "RUNNING")
+        self.assertTrue(payload["managed"])
+        self.assertTrue(payload["replaced_repository_entry"])
+        self.assertEqual(Path(payload["previous_server_path"]), relocated_entry)
+        self.assertIsNotNone(child.poll())
+        self.assertNotEqual(int(payload["pid"]), child.pid)
+        metadata = json.loads(self._pid_file(port).read_text("utf-8"))
+        self.assertEqual(Path(metadata["server_path"]), SERVER_PATH)
+        self.assertEqual(self._listener_pid(port), int(payload["pid"]))
 
     def test_concurrent_starts_and_stops_are_serialized(self) -> None:
         port = self._free_port()

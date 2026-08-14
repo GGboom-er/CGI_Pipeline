@@ -8,35 +8,52 @@ import json
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
-from core.api_registry import get_all_apis
+SRC = ROOT / 'src'
+sys.path.insert(0, str(SRC))
+from cgi_pipeline.catalog import list_capabilities
 
 TOOL_COUNT_LIMIT = 40
 
 issues = []
 warns = []
 
-apis = get_all_apis()
+apis = list_capabilities()
 api_ids = {item['api_id'] for item in apis if item.get('api_id')}
 
 
-from mcp_server.tools_operations import EXPOSED_TOOLS
+from cgi_pipeline.server.tools_operations import EXPOSED_TOOLS
 
-# 1. API manifest 必须有对应 api_help.md；API help 只作为渐进式阅读入口。
+# 1. API manifest 是唯一参数契约；其 handler 必须与 manifest 同目录可解析。
 for spec in apis:
     api_id = spec['api_id']
-    handler_module = str(spec.get('handler', '')).split(':', 1)[0]
-    parts = handler_module.split('.')
-    try:
-        operation_dir = parts[parts.index('operations') + 1]
-    except (ValueError, IndexError):
-        operation_dir = parts[-1] if parts else ''
-    help_path = ROOT / 'api' / 'operations' / operation_dir / 'api_help.md'
-    if not help_path.exists():
-        issues.append(f"API 缺少 api_help.md: {api_id}")
+    handler_module, _, handler_name = str(spec.get('handler', '')).partition(':')
+    handler_parts = handler_module.split('.')
+    handler_path = SRC.joinpath(*handler_parts).with_suffix('.py')
+    manifest_path = ROOT / spec.get('manifest_path', '')
+    if not manifest_path.is_file():
+        issues.append(f"capability manifest 不可解析: {api_id} -> {manifest_path}")
+        continue
+    if not handler_name or not handler_path.exists():
+        issues.append(f"API handler 不可解析: {api_id} -> {spec.get('handler', '')}")
+    elif handler_path.parent != manifest_path.parent:
+        issues.append(f"API handler 不在 manifest 目录: {api_id}")
 
-# 2. MCP 只保留 API 目录、API 执行和 workflow 入口。
-allowed = {'list_apis', 'api_help', 'execute_api', 'list_workflows', 'pipeline_execute_workflow'}
+# 2. 派生 catalog 必须与 manifest 和 package registry 一致。
+import subprocess
+catalog_check = subprocess.run(
+    [sys.executable, str(ROOT / 'tools' / 'build_catalogs.py'), '--check'],
+    cwd=ROOT,
+    capture_output=True,
+    text=True,
+)
+if catalog_check.returncode:
+    issues.append('派生 catalog 已漂移；运行 tools/build_catalogs.py 重新生成')
+
+# 3. MCP 只保留 API 目录、API 执行和 workflow 入口。
+allowed = {
+    'list_apis', 'api_help', 'execute_api', 'get_task_result',
+    'list_workflows', 'pipeline_execute_workflow',
+}
 unexpected = EXPOSED_TOOLS - allowed
 missing = allowed - EXPOSED_TOOLS
 if unexpected:

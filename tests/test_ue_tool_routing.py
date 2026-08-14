@@ -1,88 +1,70 @@
-import asyncio
-import sys
-import unittest
-from pathlib import Path
+"""UE is reached through catalog APIs, never a second named MCP tool path."""
+
 from unittest.mock import patch
 
-
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
-
-from mcp_server import tools_operations
-from mcp_server import server
+from cgi_pipeline.contracts import ApiContext
+from cgi_pipeline.capabilities.ue.editor.action_invoke import handler as action_handler
+from cgi_pipeline.capabilities.ue.editor.python_execute import handler as python_handler
+from cgi_pipeline.server.tools_operations import EXPOSED_TOOLS
 
 
-class UEToolRoutingTests(unittest.IsolatedAsyncioTestCase):
-    async def test_server_lifespan_is_empty(self):
-        """UE 已经是单层直连，MCP lifespan 不管理额外 sidecar。"""
-        async with server._server_lifespan(server.mcp):
-            pass
+def _context(api_id: str) -> ApiContext:
+    return ApiContext.from_mapping(
+        {"_api_id": api_id, "_api_version": "1.0.0"}, "ue"
+    )
 
-    async def test_native_session_goes_straight_to_websocket(self):
-        """不论 bridge_protocol，一律直连 WebSocket 原生 method。"""
-        session = {
-            "port": 59201,
-            "bridge_protocol": "native",
-            "project_path": "S:/Project/Test/Test.uproject",
-        }
-        native_result = {"status": "SUCCESS", "result": {"editorConnected": True}}
 
-        with patch(
-            "dccs.ue.foreground_client.get_bridge_session", return_value=session
-        ) as get_session, patch(
-            "dccs.ue.foreground_client.execute_action",
-            return_value=native_result,
-        ) as native_call:
-            result = await tools_operations._execute_ue_action(
-                59201,
-                "get_project_status",
-                {"detailed": True},
-                10,
-            )
+def test_only_generic_mcp_tools_are_public():
+    assert EXPOSED_TOOLS == {
+        "list_apis",
+        "api_help",
+        "execute_api",
+        "get_task_result",
+        "list_workflows",
+        "pipeline_execute_workflow",
+    }
 
-        get_session.assert_not_called()
-        native_call.assert_called_once_with(
-            59201,
-            "get_project_status",
-            {"detailed": True},
-            10,
+
+def test_native_ue_action_becomes_a_standard_api_receipt():
+    bridge_result = {
+        "status": "SUCCESS",
+        "bridge_protocol": "jsonrpc",
+        "session": {"port": 59201, "project_path": "S:/Test.uproject"},
+        "result": {"status": "idle"},
+        "progress": [],
+        "error": "",
+    }
+    with patch("cgi_pipeline.hosts.ue.foreground_client.execute_action", return_value=bridge_result) as call:
+        receipt = action_handler.execute(
+            {"port": 59201, "method": "get_build_status", "arguments": {}, "timeout_seconds": 10},
+            _context("ue.editor.action.invoke"),
         )
-        self.assertEqual(result, native_result)
 
-    async def test_result_is_returned_undecorated(self):
-        """结果原样返回，键由插件侧决定；_execute_ue_action 只做透传。"""
-        native_result = {"status": "SUCCESS", "result": {"status": "idle"}}
-
-        with patch(
-            "dccs.ue.foreground_client.execute_action", return_value=native_result
-        ) as native_call:
-            result = await tools_operations._execute_ue_action(
-                59201,
-                "get_build_status",
-                {},
-                10,
-            )
-
-        native_call.assert_called_once_with(59201, "get_build_status", {}, 10)
-        self.assertEqual(result, native_result)
-        self.assertNotIn("bridge_protocol", result)
-        self.assertNotIn("session", result)
-
-    async def test_legacy_session_uses_native_socket(self):
-        native_result = {"status": "SUCCESS", "result": {"nodeCount": 3}}
-
-        with patch(
-            "dccs.ue.foreground_client.execute_action", return_value=native_result
-        ):
-            result = await tools_operations._execute_ue_action(
-                8091,
-                "manage_blueprint",
-                {"action": "get_nodes"},
-                10,
-            )
-
-        self.assertEqual(result, native_result)
+    call.assert_called_once_with(59201, "get_build_status", {}, 10)
+    assert receipt["status"] == "SUCCESS"
+    assert receipt["output"]["result"] == {"status": "idle"}
+    assert receipt["output"]["session"]["port"] == 59201
 
 
-if __name__ == "__main__":
-    unittest.main()
+def test_ue_python_error_preserves_structured_diagnostics():
+    bridge_result = {
+        "status": "ERROR",
+        "bridge_protocol": "jsonrpc",
+        "session": {"port": 59201},
+        "result": None,
+        "stdout": "before failure",
+        "stderr": "Traceback: boom",
+        "traceback": "Traceback: boom",
+        "progress": [],
+        "error_type": "PythonError",
+        "error": "boom",
+    }
+    with patch("cgi_pipeline.hosts.ue.foreground_client.execute_python", return_value=bridge_result):
+        receipt = python_handler.execute(
+            {"port": 59201, "code": "raise RuntimeError('boom')", "description": "test", "timeout_seconds": 10},
+            _context("ue.editor.python.execute"),
+        )
+
+    assert receipt["status"] == "ERROR"
+    assert receipt["error_code"] == "PythonError"
+    assert receipt["output"]["traceback"] == "Traceback: boom"

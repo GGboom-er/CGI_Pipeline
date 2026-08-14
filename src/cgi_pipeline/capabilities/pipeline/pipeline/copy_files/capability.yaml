@@ -1,0 +1,65 @@
+api_id: pipeline.pipeline.copy_files
+version: 1.0.0
+name: pipeline_stage_file_to_sandbox
+executor: pipeline
+capability: pipeline.file
+operation: copy
+stages:
+- pipeline
+targets:
+- file
+access: write
+effects:
+  inspect: 只读取场景或标准数据，不改变资产。
+  apply: 按 API 实现对当前任务沙盒中的场景或数据执行操作。
+execution_modes:
+- background
+surfaces:
+- python
+- service
+modes:
+- apply
+inputs:
+  source:
+    type: string
+    default: ''
+    description: 源路径（文件或目录的完整路径）
+  destination:
+    type: string
+    default: ''
+    description: 目标路径（文件或目录的完整路径）
+  overwrite:
+    type: boolean
+    default: false
+    description: 目标已存在时是否覆盖
+preconditions:
+- 项目配置通过统一 config/{project}_config.json 接口加载。
+- 后台模式由 CGI Worker 打开或复用对应 DCC 场景。
+idempotent: false
+outputs:
+- name: destination
+  type: any_file
+  label: 目标路径
+statuses:
+- SUCCESS
+- PARTIAL
+- ERROR
+- BLOCKED
+- NEEDS_ATTENTION
+- TIMEOUT
+- CANCELLED
+errors:
+  API_OPERATION_ERROR: 操作执行失败，详见报告。
+  API_IMPLEMENTATION_MISSING: 目录存在但没有本地实现。
+recovery:
+- 读取 api_help 获取参数、前置条件和输出。
+- 失败时检查任务报告中的错误与恢复建议。
+help:
+  summary: 通用文件拷贝：source → destination，文件或目录均可。纯文件系统操作，不启动任何 DCC。
+  usage: execute_api(pipeline.pipeline.copy_files, params={...})
+  scenario: 通用文件拷贝：source → destination，文件或目录均可。纯文件系统操作，不启动任何 DCC。
+  safety: read API 只读；write/destructive API 仅写入任务沙盒。
+tests:
+  contract: api.registry loads this manifest and api.runner validates its receipt.
+  smoke: 代表性 workflow 统一验收。
+handler: cgi_pipeline.capabilities.pipeline.pipeline.copy_files.adapter:execute

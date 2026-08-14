@@ -2,8 +2,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from api.operations.blender_extract_materials import blender_extract_materials as material_module
-from api.operations.blender_extract_materials.blender_extract_materials import (
+from cgi_pipeline.capabilities.blender.asset.blender_extract_materials import blender_extract_materials as material_module
+from cgi_pipeline.capabilities.blender.asset.blender_extract_materials.blender_extract_materials import (
     _extract_material_alpha,
     _extract_material_color,
     _material_requires_tiles,

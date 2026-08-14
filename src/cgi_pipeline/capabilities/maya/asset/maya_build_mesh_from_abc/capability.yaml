@@ -1,0 +1,69 @@
+api_id: maya.asset.maya_build_mesh_from_abc
+version: 1.0.0
+name: PyAlembic → Maya Mesh 构建
+executor: maya
+capability: modeling.geometry
+operation: build
+stages:
+- modeling
+- rigging
+targets:
+- mesh
+- alembic
+access: write
+effects:
+  inspect: 只读取场景或标准数据，不改变资产。
+  apply: 按 API 实现对当前任务沙盒中的场景或数据执行操作。
+execution_modes:
+- local
+- background
+- foreground
+surfaces:
+- maya
+- service
+modes:
+- apply
+inputs:
+  abc_path:
+    type: string
+    default: ''
+    description: ABC 文件绝对路径（必填）
+  mesh_filter:
+    type: array
+    default: null
+    description: DAG 路径列表，只构建匹配项。不传 = 全量构建
+  parent_group:
+    type: string
+    default: ''
+    description: 构建后的顶层组名。默认还原 ABC 原始层级
+preconditions:
+- 项目配置通过统一 config/{project}_config.json 接口加载。
+- 后台模式由 CGI Worker 打开或复用对应 DCC 场景。
+idempotent: false
+outputs:
+- name: scene
+  type: scene_file
+  label: 构建后的 Maya 场景
+statuses:
+- SUCCESS
+- PARTIAL
+- ERROR
+- BLOCKED
+- NEEDS_ATTENTION
+- TIMEOUT
+- CANCELLED
+errors:
+  API_OPERATION_ERROR: 操作执行失败，详见报告。
+  API_IMPLEMENTATION_MISSING: 目录存在但没有本地实现。
+recovery:
+- 读取 api_help 获取参数、前置条件和输出。
+- 失败时检查任务报告中的错误与恢复建议。
+help:
+  summary: 使用 PyAlembic 读取 ABC 拓扑数据，在 Maya 中用 OpenMaya MFnMesh.create 纯数据构建 mesh（含 UV），还原 DAG 层级。不走 Maya import 命令。支持全量构建和按 mesh_filter 过滤构建。
+  usage: execute_api(maya.asset.maya_build_mesh_from_abc, params={...})
+  scenario: 使用 PyAlembic 读取 ABC 拓扑数据，在 Maya 中用 OpenMaya MFnMesh.create 纯数据构建 mesh（含 UV），还原 DAG 层级。不走 Maya import 命令。支持全量构建和按 mesh_filter 过滤构建。
+  safety: read API 只读；write/destructive API 仅写入任务沙盒。
+tests:
+  contract: api.registry loads this manifest and api.runner validates its receipt.
+  smoke: 代表性 workflow 统一验收。
+handler: cgi_pipeline.capabilities.maya.asset.maya_build_mesh_from_abc.adapter:execute

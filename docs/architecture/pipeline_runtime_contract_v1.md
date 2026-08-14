@@ -1,6 +1,6 @@
 # CGI Pipeline 运行时契约
 
-本文是当前 API/Workflow 运行链的边界说明。单个 API 的参数不在这里重复，读取对应 `api_help.md`。
+本文是当前 API/Workflow 运行链的边界说明。单个 API 的参数不在这里重复，调用 `api_help(api_id)` 读取对应 manifest。
 
 ## 入口与队列
 
@@ -49,4 +49,4 @@ Workflow 节点使用 canonical `api_id`；执行前由 `api.contract` 校验必
 - 写入只能进入任务沙盒，`path_guard` 拦截只读盘、发布源和 UNC 保护路径。
 - `save_scene` 是破坏性 API 链的最后一步。
 - 前台模式必须显式 `foreground_port`；后台模式由 Worker 打开或复用 DCC。
-- 服务由 `core/service_manager.py` 管理；Worker 常驻，不按任务自停。
+- 服务由 `cgi_pipeline.core.service_manager` 管理；Worker 常驻，不按任务自停。

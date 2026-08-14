@@ -1,0 +1,57 @@
+api_id: maya.asset.maya_capture_viewport
+version: 1.0.0
+name: Maya 视口截图
+executor: maya
+capability: viewport.capture
+operation: capture
+stages:
+- modeling
+- rigging
+- animation
+targets:
+- viewport
+access: read
+effects:
+  inspect: 只读取场景或标准数据，不改变资产。
+  apply: 按 API 实现对当前任务沙盒中的场景或数据执行操作。
+execution_modes:
+- local
+- background
+- foreground
+surfaces:
+- maya
+- service
+modes:
+- inspect
+inputs: {}
+preconditions:
+- 项目配置通过统一 config/{project}_config.json 接口加载。
+- 后台模式由 CGI Worker 打开或复用对应 DCC 场景。
+idempotent: true
+outputs:
+- name: output_path
+  type: image_file
+  label: PNG 截图
+statuses:
+- SUCCESS
+- PARTIAL
+- ERROR
+- BLOCKED
+- NEEDS_ATTENTION
+- TIMEOUT
+- CANCELLED
+errors:
+  API_OPERATION_ERROR: 操作执行失败，详见报告。
+  API_IMPLEMENTATION_MISSING: 目录存在但没有本地实现。
+recovery:
+- 读取 api_help 获取参数、前置条件和输出。
+- 失败时检查任务报告中的错误与恢复建议。
+help:
+  summary: 获取 Maya 当前活动视口的截图，并保存为 PNG。
+  usage: execute_api(maya.asset.maya_capture_viewport, params={...})
+  scenario: 获取 Maya 当前活动视口的截图，并保存为 PNG。
+  safety: read API 只读；write/destructive API 仅写入任务沙盒。
+tests:
+  contract: api.registry loads this manifest and api.runner validates its receipt.
+  smoke: 代表性 workflow 统一验收。
+handler: cgi_pipeline.capabilities.maya.asset.maya_capture_viewport.adapter:execute
