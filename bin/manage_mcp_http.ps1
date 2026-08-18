@@ -7,7 +7,7 @@ param(
     [int]$Port = 8000,
     [string]$PythonPath = "",
     [ValidateRange(1, 120)]
-    [int]$StartupTimeoutSeconds = 20
+    [int]$StartupTimeoutSeconds = 120
 )
 
 $ErrorActionPreference = "Stop"

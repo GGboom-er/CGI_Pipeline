@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -48,6 +49,15 @@ class McpHttpManagerTests(unittest.TestCase):
         self.runtime_entries: list[Path] = []
         self.command_output = tempfile.TemporaryDirectory(prefix="mcp_http_manager_test_")
         self.command_index = 0
+
+    def test_default_startup_timeout_covers_cold_worker_boot(self) -> None:
+        source = MANAGER.read_text(encoding="utf-8")
+        match = re.search(
+            r"\[int\]\$StartupTimeoutSeconds\s*=\s*(\d+)", source
+        )
+
+        self.assertIsNotNone(match)
+        self.assertGreaterEqual(int(match.group(1)), 120)
 
     def tearDown(self) -> None:
         for port in self.ports:
