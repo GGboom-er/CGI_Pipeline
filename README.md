@@ -2,6 +2,14 @@
 
 CGI Pipeline 是通过唯一 FastMCP 后台连接 Maya、Blender、UE 并执行 API/Workflow 的本地管线。
 
+## Blender 原生前台接入
+
+Blender GUI 使用 CGI 自有桥接，无需第三方 MCP 插件。将 `BLENDER_SYSTEM_SCRIPTS` 指向本仓的 `deploy/blender/scripts`，启动模块会接入共享 SDK，并仅在 GUI 中自动启动监听；后台模式不启动 GUI 监听。
+
+已开启且能导入 CGI SDK 的 GUI，可在 Python Console 执行 `from cgi_pipeline.hosts.blender.native_bridge import start; start()`。默认自动选择 `9876..9885` 的空闲端口；显式端口用 `start(9877)`。常用 CGI MCP 的 `execute_api` 继续传 `execution_mode="foreground"` 和实际 `foreground_port`。客户端先检查 CGI 协议身份，再提交代码；只有主线程定时器访问 bpy。
+
+修改前台框架后，常驻 MCP 客户端需重新连接以加载新代码。GUI 的 `register/unregister` 对称启动/停止桥接，重复启动不会创建第二监听；不改变当前场景或保存文件。
+
 ## 调用层级
 
 ```text

@@ -1,35 +1,23 @@
-"""CGI adapter for Blender Lab's official MCP addon transport."""
+"""Foreground API client for CGI's native Blender bridge."""
 
 from __future__ import annotations
 
 import json
 import os
-import sys
-import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
-from pathlib import Path
 from typing import Any
 
 from cgi_pipeline.contracts import ApiContractError, validate_receipt
-from cgi_pipeline.paths import INTEGRATIONS_ROOT, REPOSITORY_ROOT, SOURCE_ROOT
+from cgi_pipeline.hosts.blender import native_bridge
+from cgi_pipeline.paths import REPOSITORY_ROOT, SOURCE_ROOT
 
 
 PROJECT_ROOT = REPOSITORY_ROOT
 AUDIT_DIR = PROJECT_ROOT / "audit"
-UPSTREAM_MCP_ROOT = INTEGRATIONS_ROOT / "blender" / "extensions" / "blender_mcp" / "mcp"
-HOST = "127.0.0.1"
-_REQUEST_LOCK = threading.Lock()
-_HEALTH_CODE = """import bpy, os
-result = {
-    'bridge': 'blender_mcp',
-    'pid': os.getpid(),
-    'blender_version': bpy.app.version_string,
-    'file': bpy.data.filepath,
-}
-"""
+DEFAULT_DISCOVERY_TIMEOUT = 0.5
 
 
 class BlenderBridgeError(RuntimeError):
@@ -39,84 +27,70 @@ class BlenderBridgeError(RuntimeError):
         self.response = response or {}
 
 
+def _port(value: Any) -> int:
+    try:
+        if isinstance(value, bool) or not isinstance(value, (int, str)):
+            raise ValueError
+        port = int(value)
+        if not 1 <= port <= 65535:
+            raise ValueError
+        return port
+    except (TypeError, ValueError) as exc:
+        raise BlenderBridgeError(f"Invalid Blender foreground port: {value!r}", "InvalidPort") from exc
+
+
 def blender_port_range() -> range:
-    start = int(os.getenv("BLENDER_FOREGROUND_PORT_START", "9876"))
-    end = int(os.getenv("BLENDER_FOREGROUND_PORT_END", "9885"))
+    start = _port(os.getenv("BLENDER_FOREGROUND_PORT_START", "9876"))
+    end = _port(os.getenv("BLENDER_FOREGROUND_PORT_END", "9885"))
     if end < start:
         start, end = end, start
     return range(start, end + 1)
 
 
-def _connection_module():
-    if not UPSTREAM_MCP_ROOT.is_dir():
-        raise BlenderBridgeError(
-            f"Official Blender MCP support library is missing: {UPSTREAM_MCP_ROOT}",
-            "UpstreamMissing",
-        )
-    upstream_path = str(UPSTREAM_MCP_ROOT)
-    if upstream_path not in sys.path:
-        sys.path.insert(0, upstream_path)
+def blender_ports() -> list[int]:
+    """Scan the configured range plus explicitly registered custom ports."""
+    extra = os.getenv("BLENDER_FOREGROUND_PORTS", "")
+    ports = set(blender_port_range())
+    ports.update(_port(value.strip()) for value in extra.split(",") if value.strip())
+    return sorted(ports)
+
+
+def _send_message(port: int, message: dict[str, Any], timeout: float) -> dict[str, Any]:
     try:
-        from blmcp.tools_helpers import connection
-    except ImportError as exc:
-        raise BlenderBridgeError(str(exc), "UpstreamImportError") from exc
-    return connection
-
-
-def _send_code(port: int, code: str, timeout: float) -> dict[str, Any]:
-    """Call the upstream client with an explicit port and bounded timeout."""
-    connection = _connection_module()
-    with _REQUEST_LOCK:
-        old_host = os.environ.get("BLENDER_MCP_HOST")
-        old_port = os.environ.get("BLENDER_MCP_PORT")
-        old_timeout = connection._TIMEOUT
-        os.environ["BLENDER_MCP_HOST"] = HOST
-        os.environ["BLENDER_MCP_PORT"] = str(port)
-        connection._TIMEOUT = max(float(timeout), 0.05)
-        try:
-            response = connection.send_code(code, strict_json=False)
-        except ConnectionError as exc:
-            raise BlenderBridgeError(str(exc), "ConnectionError") from exc
-        finally:
-            connection._TIMEOUT = old_timeout
-            if old_host is None:
-                os.environ.pop("BLENDER_MCP_HOST", None)
-            else:
-                os.environ["BLENDER_MCP_HOST"] = old_host
-            if old_port is None:
-                os.environ.pop("BLENDER_MCP_PORT", None)
-            else:
-                os.environ["BLENDER_MCP_PORT"] = old_port
+        response = native_bridge.send_request(port, message, timeout=timeout)
+    except (native_bridge.NativeBridgeError, OSError, ValueError) as exc:
+        raise BlenderBridgeError(str(exc), "ConnectionError") from exc
     if not isinstance(response, dict):
-        raise BlenderBridgeError("Official Blender MCP returned a non-object response", "InvalidResponse")
+        raise BlenderBridgeError("CGI Blender bridge returned a non-object response", "InvalidResponse")
     return response
 
 
+def _health(port: int, timeout: float) -> dict[str, Any]:
+    response = _send_message(port, {"type": "health"}, timeout)
+    result = response.get("result")
+    if (response.get("status") != "ok" or not isinstance(result, dict)
+            or result.get("bridge") != "cgi_pipeline"
+            or result.get("protocol_version") != 1 or result.get("dcc") != "blender"):
+        raise BlenderBridgeError(f"Port {port} is not a compatible CGI Blender bridge", "IncompatibleBridge", response)
+    return {**result, "port": port}
+
+
 def request(port: int, code: str, timeout: float = 30.0) -> dict[str, Any]:
-    """Execute Blender Python through the official addon transport."""
-    return _send_code(int(port), code, timeout)
+    """Confirm CGI identity without executing code before submitting Python."""
+    port = _port(port)
+    _health(port, min(float(timeout), DEFAULT_DISCOVERY_TIMEOUT))
+    return _send_message(port, {"type": "execute", "code": code}, timeout)
 
 
-# The official Extension services an idle socket on a 1 s timer. Leave a small
-# scheduling margin so a healthy foreground session is not reported as absent.
-OFFICIAL_DISCOVERY_TIMEOUT = 1.5
-
-
-def discover_blender_sessions(timeout: float = OFFICIAL_DISCOVERY_TIMEOUT) -> list[dict[str, Any]]:
+def discover_blender_sessions(timeout: float = DEFAULT_DISCOVERY_TIMEOUT) -> list[dict[str, Any]]:
     def probe(port: int) -> dict[str, Any] | None:
         try:
-            response = request(port, _HEALTH_CODE, timeout=timeout)
+            return _health(port, timeout)
         except BlenderBridgeError:
             return None
-        result = response.get("result")
-        if response.get("status") != "ok" or not isinstance(result, dict):
-            return None
-        if result.get("bridge") != "blender_mcp":
-            return None
-        return {**result, "port": port}
 
-    ports = list(blender_port_range())
-    with ThreadPoolExecutor(max_workers=len(ports)) as executor:
+    ports = blender_ports()
+    with ThreadPoolExecutor(max_workers=min(32, len(ports))) as executor:
         sessions = [session for session in executor.map(probe, ports) if session]
     return sorted(sessions, key=lambda item: item["port"])
 
@@ -140,11 +114,11 @@ def _write_audit(task_id: str, status: str, api_id: str, detail: str) -> None:
 def _resolve_port(context: dict[str, Any]) -> int:
     port = context.get("foreground_port")
     if port is not None:
-        return int(port)
+        return _port(port)
     sessions = discover_blender_sessions()
     if not sessions:
         raise BlenderBridgeError(
-            "No active official Blender MCP addon found in ports 9876-9885",
+            "No CGI Blender foreground bridge found in the configured ports",
             "NoForegroundSession",
         )
     if len(sessions) > 1:
@@ -162,14 +136,17 @@ def _api_code(payload: dict[str, Any], port: int) -> str:
     context["foreground_port"] = port
     return "\n".join((
         "import sys",
+        "import bpy",
         f"source_root = {str(SOURCE_ROOT)!r}",
         "if source_root not in sys.path:",
         "    sys.path.insert(0, source_root)",
         "from cgi_pipeline.execution import execute_api",
+        f"api_context = {context!r}",
+        "api_context['bpy_module'] = bpy",
         "result = execute_api(",
         f"    {payload.get('api_id', 'blender_exec_code')!r},",
         f"    params={payload.get('api_params') or {}!r},",
-        f"    context={context!r},",
+        "    context=api_context,",
         ")",
     ))
 
@@ -191,7 +168,7 @@ def _receipt_from_response(
     stdout = str(response.get("stdout") or "")
     stderr = str(response.get("stderr") or "")
     if response.get("status") != "ok":
-        traceback_text = str(response.get("message") or "Official Blender MCP execution failed")
+        traceback_text = str(response.get("message") or "CGI Blender execution failed")
         error_type, error = _traceback_details(traceback_text)
         return {
             "api_id": api_id,
@@ -268,7 +245,7 @@ def submit_foreground_task(payload: dict[str, Any], sync: bool = False) -> dict[
     context = dict(payload.get("api_context") or {})
     try:
         port = _resolve_port(context)
-        _write_audit(task_id, "STARTED", api_id, f"Official Blender MCP execution started on port {port}")
+        _write_audit(task_id, "STARTED", api_id, f"CGI Blender execution started on port {port}")
         started = time.perf_counter()
         response = request(
             port,
@@ -285,7 +262,7 @@ def submit_foreground_task(payload: dict[str, Any], sync: bool = False) -> dict[
             "status": status,
             "error_type": exc.error_type,
             "error": str(exc),
-            "recovery_hint": "Enable the official Blender MCP addon and pass foreground_port.",
+            "recovery_hint": "Start CGI's native_bridge in Blender and pass foreground_port.",
         }
         _write_audit(task_id, status, api_id, json.dumps(receipt, ensure_ascii=False, default=repr))
 
