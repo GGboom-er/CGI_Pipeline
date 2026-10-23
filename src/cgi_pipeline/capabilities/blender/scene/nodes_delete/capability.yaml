@@ -1,0 +1,33 @@
+api_id: blender.scene.nodes.delete
+version: 1.0.1
+name: nodes_delete
+executor: blender
+capability: scene.nodes
+operation: delete
+stages: [modeling, rigging, animation]
+targets: [scene_object]
+access: destructive
+effects:
+  scene_write: Removes and unlinks bounded Blender objects.
+execution_modes: [local, foreground, background]
+surfaces: [blender, service]
+modes: [apply]
+inputs:
+  nodes: {type: array, required: true, description: Object names to remove.}
+  max_items: {type: integer, default: 100, description: Maximum deletes; hard limit 2000.}
+preconditions: [Objects exist and deletion is authorized.]
+idempotent: false
+outputs:
+  items: Per-object before and null after values.
+  count: Number of returned or processed items for this action.
+  succeeded: Number of successful per-item operations.
+  failed: Number of failed per-item operations.
+  truncated: Whether the operation reached its configured result or input bound.
+statuses: [SUCCESS, PARTIAL, ERROR]
+errors: {BLENDER_SCENE_CORE_OPERATION_FAILED: Invalid object or Blender context.}
+recovery: [Undo the host transaction or restore the scene.]
+help: {summary: Delete bounded Blender objects., usage: "execute_api(blender.scene.nodes.delete, params={nodes})", scenario: Remove known scene objects., safety: Destructive and should run inside the host transaction.}
+tests: {contract: tests/test_blender_scene_core_apis.py}
+handler: cgi_pipeline.capabilities.blender.scene_core:delete_nodes
+implementation: {status: implemented}
+verification: {level: contract_tested, evidence: [tests/test_blender_scene_core_apis.py]}

@@ -34,6 +34,8 @@ def execute(payload: dict) -> dict:
     namespace = {
         '__builtins__': builtins,
         'open': _make_guarded_open(builtins.open),
+        'context': {key: str(payload.get(key) or '') for key in
+                    ('task_id', 'workspace_id', 'run_dir', 'source_path', 'project', 'asset_name')},
     }
 
     try:

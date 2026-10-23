@@ -1,0 +1,55 @@
+{
+    "project_name": "f3cgt",
+    "description": "F3CGT 项目配置",
+    "server_root": "X:/Project/F3CGT",
+    "path_pattern_asset": "{category}/{asset}/{task}",
+    "path_pattern_shot": "{sequence}/{shot}/{stage}/{task}",
+    "path_roots": {
+        "assets": "publish/asset",
+        "asset_lib": "publish/asset",
+        "shots": "publish/shot",
+        "sourceimages": "sourceimages",
+        "efx_asset": "publish/asset",
+        "work_assets": "publish/asset",
+        "lgt": "lgt",
+        "lgt_comp": "publish/lgt_comp"
+    },
+    "protected_roots": [
+        "X:/Project/",
+        "//server/",
+        "\\\\server\\"
+    ],
+    "categories": {
+        "chr": {
+            "label": "assets-chr",
+            "path_root": "assets",
+            "stages": ["tex", "rig"]
+        }
+    },
+    "stages": {
+        "tex": {
+            "description": "材质贴图阶段",
+            "primary_task": "texMaster",
+            "sub_tasks": {},
+            "geom_roots": ["geo", "|*|geo", "|Group|cache"],
+            "rules": {
+                "require_orig": false,
+                "allow_orig": false,
+                "allow_rig_data": false,
+                "report_level_if_orig_exists": "ERROR"
+            }
+        },
+        "rig": {
+            "description": "绑定阶段",
+            "primary_task": "rigMaster",
+            "sub_tasks": {},
+            "geom_roots": ["|Group|Geometry|cache", "|*|geo"],
+            "rules": {
+                "require_orig": false,
+                "allow_orig": true,
+                "report_level_if_orig_missing": "WARNING",
+                "require_skin": true
+            }
+        }
+    }
+}

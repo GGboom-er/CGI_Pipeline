@@ -8,6 +8,8 @@
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/jerosoler/Drawflow@0.0.60/dist/drawflow.min.css" />
     <script src="https://cdn.jsdelivr.net/gh/jerosoler/Drawflow@0.0.60/dist/drawflow.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <link rel="stylesheet" href="/static/workflow_presets.css" />
+    <script src="/static/workflow_presets.js"></script>
     <style>
         * {
             margin: 0;
@@ -1229,7 +1231,7 @@
         <div class="sep"></div>
         <select id="preset-select"
             style="padding:4px 8px;border:1px solid var(--border);border-radius:6px;background:var(--card);color:var(--text);font-size:12px;cursor:pointer">
-            <option value="">📌 预设工作流...</option>
+            <option value="">手工节点图 / 选择预设工作流...</option>
         </select>
         <div class="service-status" id="svc-status">
             <div class="svc-item"><span class="svc-dot" id="svc-redis"></span>Redis</div>
@@ -1254,6 +1256,7 @@
         </div>
 
         <div id="editor-wrap" class="spa-panel active">
+            <section id="workflow-settings" hidden aria-label="注册工作流参数"></section>
             <div id="drawflow">
                 <div id="canvas-guide">
                     <div class="guide-icon">🔗</div>
@@ -1360,7 +1363,7 @@
             any_file: '任意文件路径，连接后自动识别类型',
         };
 
-        let editor, apis = [];
+        let editor, apis = [], workflowPresets;
 
         function normalizeApi(spec) {
             const inputs = spec.inputs || {};
@@ -1372,10 +1375,15 @@
                 return 'any_file';
             };
             const ioInputs = Object.entries(inputs).map(([name, schema]) => ({ name, label: name, type: typeOf(name, schema) }));
-            const ioOutputs = (spec.outputs || []).map(out => ({ name: out.name || 'output', label: out.label || out.name || 'output', type: out.type === 'json_file' ? 'json_file' : 'any_file' }));
+            const outputs = Array.isArray(spec.outputs) ? spec.outputs
+                : Object.entries(spec.outputs || {}).map(([name, schema]) => ({ name,
+                    ...(typeof schema === 'string' ? { description: schema } : schema || {}) }));
+            const ioOutputs = outputs.map(out => ({ name: out.name || 'output', label: out.label || out.name || 'output',
+                description: out.description || '', type: out.type === 'json_file' ? 'json_file' : 'any_file' }));
             return {
                 ...spec,
                 name: spec.name || spec.api_id,
+                dcc: spec.executor || spec.dcc || 'pipeline',
                 description: spec.help?.summary || spec.help?.scenario || '',
                 category: spec.domain || 'process',
                 parameters,
@@ -1642,6 +1650,7 @@
 
         function onDrop(ev) {
             ev.preventDefault();
+            if (workflowPresets?.active) { log('warning', '预设编译结果只读；选择手工节点图后可编辑。'); return; }
             const raw = ev.dataTransfer.getData('application/json'); if (!raw) return;
             const { type, apiId } = JSON.parse(raw);
             const rect = document.getElementById('drawflow').getBoundingClientRect();
@@ -1935,6 +1944,7 @@
         }
 
         async function doExecute() {
+            if (workflowPresets?.active) { await workflowPresets.execute(); return; }
             // ── Worker 健康检查 ──
             try {
                 const ws = await fetch('/api/worker_status');
@@ -1981,7 +1991,7 @@
                 }
             }
 
-            if (!sourcePath) { log('error', '未设置输入路径（需要资产解析或自定义路径节点）'); showToast('warning', '未设置输入路径 — 需要添加资产解析或路径节点'); return }
+            // The shared submission owner validates scene/file requirements per API.
             if (!chain.length) { log('error', '无API节点'); showToast('warning', '画布中没有API节点'); return }
 
             log('info', `源: ${sourcePath}`);
@@ -2028,6 +2038,7 @@
                 btnStop.classList.remove('visible');
                 badge.classList.remove('visible');
             }
+            if (workflowPresets?.active) workflowPresets.setRunning(running);
         }
 
         async function doCancel() {
@@ -2039,13 +2050,15 @@
                 if (d.cancelled) {
                     log('success', '✅ 任务已取消');
                     showToast('info', '任务已取消');
+                    showExecState(false);
+                } else if (d.requested) {
+                    log('warning', d.message || '取消请求已发送，尚未确认停止；运行中的操作可能继续。');
                 } else {
-                    log('warning', '取消请求已发送，等待 Worker 响应...');
+                    log('error', d.error || `任务当前状态: ${d.status || '未知'}`);
                 }
             } catch (e) {
                 log('error', '取消失败: ' + e.message);
             }
-            showExecState(false);
         }
 
         // ════════════ 轮询 ════════════
@@ -2088,6 +2101,9 @@
                     return `⚠️ 链中止于 ${step}${sk ? ' (' + sk + ')' : ''}${reason ? ': ' + reason : ''}`;
                 }
                 case 'NEEDS_ATTENTION': return `⚠️ ${d.api_id || '?'} 需要注意 — ${(d.detail || '').slice(0, 100)}`;
+                case 'TASK_RUNNING': return '▶ 任务执行中';
+                case 'CANCEL_REQUESTED': return '⏳ 已请求取消，等待执行器确认；当前操作可能继续';
+                case 'WATCH_TIMEOUT': return '⏰ 观察超时，任务可能仍在执行，请从任务页查看结果';
                 case 'CANCELLED': return `⏹ 任务已取消`;
                 default: return `[${s}] ${sk} ${d.detail || ''}`;
             }
@@ -2096,6 +2112,7 @@
         function pollTask(taskId, chain, sourcePath, assetName) {
             log('info', '📡 监控任务进度...');
             const results = [];
+            const finishedSteps = new Set();
             let seenCount = 0;  // 跟踪已处理的 audit 条目数
             const es = new EventSource(`/api/tasks/${taskId}/poll`);
 
@@ -2120,6 +2137,7 @@
                             setStatus(chain[entry.step]._dfId, 'running');
                         }
                         if (status === 'STEP_SUCCESS' && entry.step >= 0 && entry.step < chain.length) {
+                            finishedSteps.add(entry.step);
                             let elapsed, summary;
                             try {
                                 const det = JSON.parse(entry.detail || '{}');
@@ -2135,7 +2153,8 @@
                             setStatus(chain[entry.step]._dfId, 'success', { elapsed, summary: `✅ ${summary}` });
                             results.push(entry);
                         }
-                        if (status === 'STEP_ERROR' && entry.step >= 0 && entry.step < chain.length) {
+                        if (['STEP_ERROR', 'STEP_BLOCKED', 'STEP_AUDIT_FAILED', 'STEP_NEEDS_ATTENTION'].includes(status) && entry.step >= 0 && entry.step < chain.length) {
+                            finishedSteps.add(entry.step);
                             let elapsed;
                             try { const det = JSON.parse(entry.detail || '{}'); elapsed = det.elapsed_min; } catch (_) { }
                             const errMsg = (entry.detail || '').slice(0, 60);
@@ -2150,24 +2169,28 @@
                         }
 
                         // 终止条件
-                        if (['SUCCESS', 'ERROR', 'TIMEOUT', 'CHAIN_SUCCESS', 'CHAIN_ERROR', 'CHAIN_ABORTED', 'NEEDS_ATTENTION', 'CHAIN_BLOCKED', 'CANCELLED'].includes(status)) {
+                        if (entry.terminal === true) {
                             es.close();
-                            if (status === 'CHAIN_SUCCESS' || status === 'SUCCESS') {
+                            if (entry.successful === true) {
                                 setProgress(100);
                                 genReport(taskId, results, sourcePath, assetName);
                             } else {
                                 // 标记所有后续未执行节点为 skipped
                                 const failedStep = entry.step >= 0 ? entry.step : -1;
                                 chain.forEach((s, idx) => {
-                                    if (idx > failedStep) {
-                                        setStatus(s._dfId, 'skipped', { summary: '⏭ 已跳过（前置失败）' });
+                                    if (!finishedSteps.has(idx)) {
+                                        setStatus(s._dfId, 'skipped', { summary: status === 'CANCELLED' ? '⏹ 未执行（任务取消）' : '⏭ 未完成（任务中止）' });
                                     }
                                 });
                                 setProgress(-1);
                                 // Toast 错误通知
                                 const failApi = failedStep >= 0 && failedStep < chain.length ? chain[failedStep].api_id : '';
                                 const reason = (entry.detail || '').slice(0, 120);
-                                showToast('error', `⛔ 链在步骤 ${failedStep + 1} 中止${failApi ? ` (${failApi})` : ''}${reason ? '\n' + reason : ''}`);
+                                if (status === 'CANCELLED') {
+                                    showToast('info', '任务已取消，已完成步骤的结果保留');
+                                } else {
+                                    showToast('error', `⛔ ${failedStep >= 0 ? `链在步骤 ${failedStep + 1} 中止` : '任务中止'}${failApi ? ` (${failApi})` : ''}${reason ? '\n' + reason : ''}`);
+                                }
                             }
                             showExecState(false);
                             return;
@@ -2229,86 +2252,20 @@
         }
 
         // ════════════ 保存/加载/清空 ════════════
-        function doSave() { const j = editor.export(); const b = new Blob([JSON.stringify(j, null, 2)], { type: 'application/json' }); const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = `pipeline_${Date.now()}.json`; a.click(); log('success', '💾 已保存') }
-        function doLoad() { const i = document.createElement('input'); i.type = 'file'; i.accept = '.json'; i.onchange = async e => { const f = e.target.files[0]; if (!f) return; try { const t = await f.text(); editor.import(JSON.parse(t)); log('success', '📂 已加载: ' + f.name) } catch (err) { log('error', '加载失败: ' + err.message) } }; i.click() }
-        function doClear() { if (confirm('确定清空？')) { editor.clear(); log('info', '🗑 已清空') } }
+        function doSave() { if (workflowPresets?.active) { log('info', '预设保存在注册工作流目录；当前画布是只读编译结果。'); return; } const j = editor.export(); const b = new Blob([JSON.stringify(j, null, 2)], { type: 'application/json' }); const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = `pipeline_${Date.now()}.json`; a.click(); log('success', '💾 已保存') }
+        function doLoad() { if (_currentTaskId) return; const i = document.createElement('input'); i.type = 'file'; i.accept = '.json'; i.onchange = async e => { const f = e.target.files[0]; if (!f) return; try { const t = await f.text(); const data = JSON.parse(t); workflowPresets?.reset(); editor.import(data); log('success', '📂 已加载: ' + f.name) } catch (err) { log('error', '加载失败: ' + err.message) } }; i.click() }
+        function doClear() { if (_currentTaskId) return; if (confirm('确定清空？')) { workflowPresets?.reset(); editor.clear(); log('info', '🗑 已清空') } }
 
         // ════════════ 预设工作流 ════════════
         async function loadPresets() {
-            const sel = document.getElementById('preset-select');
-            try {
-                const r = await fetch('/api/browse?path=workflows');
-                const d = await r.json();
-                (d.files || []).filter(f => f.name.endsWith('.json')).forEach(f => {
-                    const opt = document.createElement('option'); opt.value = f.name; opt.textContent = '📌 ' + f.name.replace('.json', ''); sel.appendChild(opt);
-                });
-            } catch (e) {/* 无预设目录也不报错 */ }
-            sel.addEventListener('change', async () => {
-                if (!sel.value) return;
-                try {
-                    const r = await fetch(`/static/load_workflow?name=${sel.value}`);
-                    if (!r.ok) throw new Error('API 不可用');
-                    const wf = await r.json();
-                    applyPresetWorkflow(wf);
-                } catch (e) {
-                    // 回退：直接读文件内容
-                    try {
-                        const r2 = await fetch(`/api/read_file?path=workflows/${sel.value}`);
-                        if (r2.ok) {
-                            const wf = await r2.json();
-                            applyPresetWorkflow(wf.content ? JSON.parse(wf.content) : wf);
-                        } else {
-                            log('info', `预设 "${sel.value.replace('.json','')}" 已选中 — 请手动搭建对应节点链`);
-                            showToast('info', `预设 ${sel.value.replace('.json','')} 的节点链：${sel.value}`);
-                        }
-                    } catch (e2) {
-                        log('info', `预设 "${sel.value.replace('.json','')}" 已选中`);
-                    }
-                }
-                sel.value = '';
-            });
-        }
-
-        function applyPresetWorkflow(wf) {
-            if (!wf || !wf.steps || !wf.steps.length) {
-                log('warning', '预设工作流为空'); return;
-            }
-            editor.clear();
-            const name = wf.name || wf.workflow_id || '预设';
-            log('info', `📌 加载预设: ${name}`);
-            log('info', `   ${wf.description || ''}`);
-
-            // 1. 创建输入节点（API: resolve_asset_files）
-            const startX = 80, startY = 120, gapX = 300;
-            const inputId = editor.addNode('resolve_asset', 0, 1, startX, startY,
-                'resolve_asset', { project: '', category: '', asset_name: '' },
-                'resolve_asset', 'vue');
-
-            // 2. 为每个 step 创建API节点
-            const nodeIds = [];
-            wf.steps.forEach((step, i) => {
-                const sk = apis.find(s => s.api_id === step.api_id);
-                if (!sk) { log('warning', `跳过未登记 API: ${step.api_id}`); return; }
-                const inCount = (sk.io?.inputs || []).length || 1;
-                const outCount = (sk.io?.outputs || []).length || 1;
-                const x = startX + (i + 1) * gapX;
-                const y = startY;
-                const data = { ...step.parameters };
-                const nid = editor.addNode(step.api_id, inCount, outCount, x, y,
-                    step.api_id, data, step.api_id, 'vue');
-                nodeIds.push(nid);
-            });
-
-            // 3. 连线：input → first API → ... → last API
-            if (nodeIds.length > 0) {
-                try { editor.addConnection(inputId, nodeIds[0], 'output_1', 'input_1'); } catch (_) {}
-                for (let i = 1; i < nodeIds.length; i++) {
-                    try { editor.addConnection(nodeIds[i-1], nodeIds[i], 'output_1', 'input_1'); } catch (_) {}
-                }
-            }
-
-            log('success', `✅ 预设已加载: ${nodeIds.length} 个API节点`);
-            showToast('success', `已加载预设 "${name}"，请配置输入参数后执行`);
+            workflowPresets = createWorkflowPresets({ getEditor: () => editor, log,
+                submitted(result, steps, payload) {
+                    log('success', `已提交正式工作流 ${result.task_id}（${steps.length} 步）`);
+                    totalSteps = steps.length; setProgress(0);
+                    showExecState(true, result.task_id);
+                    pollTask(result.task_id, steps, payload.source_path || '', payload.asset_name || 'workflow');
+                } });
+            await workflowPresets.init();
         }
 
         // ════════════ SPA 面板切换 ════════════
@@ -2339,7 +2296,10 @@
             return d.toLocaleTimeString('zh-CN', { hour12: false }) + '.' + String(d.getMilliseconds()).padStart(3, '0');
         }
 
+        let tasksRefreshInFlight = false;
         async function loadTasks() {
+            if (tasksRefreshInFlight || !document.getElementById('panel-tasks').classList.contains('active')) return;
+            tasksRefreshInFlight = true;
             try {
                 const r = await fetch('/api/tasks');
                 const data = await r.json();
@@ -2415,6 +2375,7 @@
                 el('stat-failed').textContent = fc;
                 el('stat-running').textContent = rc;
             } catch (e) { console.error('loadTasks:', e); }
+            finally { tasksRefreshInFlight = false; }
         }
 
         // ════════════ 报告面板 ════════════

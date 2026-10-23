@@ -1,0 +1,31 @@
+api_id: ue.scene.properties.set_many
+version: 1.0.1
+executor: ue
+capability: scene.properties
+operation: set_many
+stages: [editor]
+targets: [level_actor]
+access: write
+effects:
+  scene_write: Sets explicit actor editor properties in one transaction.
+execution_modes: [foreground]
+surfaces: [ue, service]
+modes: [apply]
+inputs:
+  items: {type: array, required: true, description: actor and property values entries.}
+  max_items: {type: integer, default: 200, description: "Maximum actors, hard limit 1000."}
+preconditions: [Runs in UE5 Editor with a loaded writable level.]
+idempotent: true
+outputs:
+  items: Per-actor before and after property values.
+  count: Number of returned or processed items for this action.
+  error_count: Number of failed per-item operations.
+  truncated: Whether input exceeded max_items.
+statuses: [SUCCESS, PARTIAL, ERROR]
+errors: {UE_SCENE_CORE_OPERATION_FAILED: "Invalid actor, property, or value."}
+recovery: [Use valid editor property names and values; undo if needed.]
+help: {summary: Set UE actor editor properties., usage: "execute_api(ue.scene.properties.set_many, params={items})", scenario: Apply bounded typed property changes., safety: Undoable editor write.}
+tests: {contract: tests/test_ue_scene_core_apis.py, smoke: UE5 Editor property set and undo.}
+handler: cgi_pipeline.capabilities.ue.scene_core:set_properties_many
+implementation: {status: implemented}
+verification: {level: contract_tested, evidence: [tests/test_ue_scene_core_apis.py]}

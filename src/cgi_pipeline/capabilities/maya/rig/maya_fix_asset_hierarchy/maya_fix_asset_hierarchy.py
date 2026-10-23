@@ -165,7 +165,7 @@ def _rename_top_to_group_if_needed(legacy_root):
     return _long_path(new_legacy), top, group_top
 
 
-def _normalize_legacy_geo_roots(legacy_roots):
+def _normalize_legacy_geo_roots(legacy_roots, required_root=None):
     normalized = []
     created = []
     renamed_tops = []
@@ -184,19 +184,29 @@ def _normalize_legacy_geo_roots(legacy_roots):
         elif old_top:
             preserved_tops.append(old_top)
 
-        group_root, made = _ensure_transform_path("|Group")
-        created.extend(made)
-        geometry_root, made = _ensure_child(group_root, "Geometry")
-        created.extend(made)
+        if required_root:
+            target_parent = _path_parent(required_root)
+            desired_name = _short_name(required_root)
+            if target_parent:
+                geometry_root, made = _ensure_transform_path(target_parent)
+                created.extend(made)
+            else:
+                geometry_root = ""
+        else:
+            group_root, made = _ensure_transform_path("|Group")
+            created.extend(made)
+            geometry_root, made = _ensure_child(group_root, "Geometry")
+            created.extend(made)
+            desired_name = "cache"
 
         if not cmds.objExists(legacy_root):
             continue
         _unlock_hierarchy(legacy_root)
-        parent_now = cmds.listRelatives(legacy_root, parent=True, fullPath=True) or []
-        if not parent_now or _long_path(parent_now[0]) != geometry_root:
-            legacy_root = _long_path((cmds.parent(legacy_root, geometry_root) or [legacy_root])[0])
+        if geometry_root:
+            parent_now = cmds.listRelatives(legacy_root, parent=True, fullPath=True) or []
+            if not parent_now or _long_path(parent_now[0]) != geometry_root:
+                legacy_root = _long_path((cmds.parent(legacy_root, geometry_root) or [legacy_root])[0])
 
-        desired_name = "RIG_geo"
         if _short_name(legacy_root) != desired_name:
             desired_name = _unique_child_name(geometry_root, desired_name, current_node=legacy_root)
             legacy_root = _long_path(cmds.rename(legacy_root, desired_name))
@@ -321,7 +331,8 @@ def _run_fix(params):
         raise ValueError("check_result.required_root 缺失或不是绝对 DAG 路径")
 
     normalized_roots, normalized_created, renamed_tops, preserved_tops = _normalize_legacy_geo_roots(
-        check_result.get("legacy_geo_roots") or []
+        check_result.get("legacy_geo_roots") or [],
+        required_root=required_root
     )
     rename_map = {
         str(item.get("from")): str(item.get("to"))

@@ -1,0 +1,7 @@
+#workflow-settings { padding: 12px 16px; border-bottom: 1px solid var(--border); background: var(--panel); max-height: 40vh; overflow: auto; }
+#workflow-settings[hidden] { display: none; }
+.workflow-fields { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 8px; }
+.workflow-fields label { display: flex; align-items: center; gap: 7px; font-size: 12px; }
+.workflow-fields input:not([type=checkbox]), .workflow-fields select, .workflow-fields textarea { padding: 5px; min-width: 160px; max-width: 360px; border: 1px solid var(--border); border-radius: 4px; }
+#workflow-compile-status { font-size: 12px; margin-top: 6px; }
+.workflow-step pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; font-size: 11px; }

@@ -1,0 +1,64 @@
+api_id: maya.rig.controls.create
+version: 1.0.1
+executor: maya
+capability: rigging.controls
+operation: create
+stages: [rigging]
+targets: [control, guide_curve]
+access: write
+effects:
+  scene_write: 'kind=rig_control: Creates one predefined curve control and zero hierarchy. kind=guide_curve: Creates one metadata-tagged
+    editable open guide curve.'
+execution_modes: [local, foreground, background]
+surfaces: [maya, service]
+modes: [apply]
+inputs:
+  kind: {type: string, default: rig_control, choices: [rig_control, guide_curve], description: Control family to create.}
+  name: {type: string, required: true, description: Unique transform leaf name.}
+  shape: {type: string, default: circle, choices: [circle, square, diamond, cross, cube], description: Predefined rig control shape.}
+  size: {type: number, default: 1.0, description: Positive rig control size.}
+  target: {type: string, description: Optional transform whose world matrix is matched.}
+  match_target: {type: boolean, default: true, description: Match target matrix for rig controls.}
+  parent: {type: string, description: Optional explicit hierarchy parent.}
+  offset_groups: {type: integer, default: 1, description: Zero and offset group count from 0 to 8.}
+  color_index: {type: integer, description: Maya indexed color from 0 to 31.}
+  lock_attrs: {type: array, default: [], description: Unique short transform channels to lock.}
+  points: {type: array, default: [], description: Guide positions from root to tip.}
+  degree: {type: integer, default: 3, description: Guide degree from 1 to 7.}
+  cluster_id: {type: string, description: Stable ASCII guide cluster identifier.}
+  display_color_rgb: {type: array, default: [1, 1, 0], description: Guide RGB values from 0 to 1.}
+  source_view: {type: string, description: Optional stable source-view label.}
+  dominant_clump: {type: string, description: Optional stable dominant-clump label.}
+preconditions: [Names must be unique literal leaves., Guide curves require degree plus one through 256 finite root-to-tip positions.]
+idempotent: false
+outputs:
+  kind: Created control family.
+  control: Rig control transform.
+  top_node: Rig control hierarchy root.
+  offset_groups: 'Optional by action: offset groups returned by the source implementation.'
+  shape: Curve shape or predefined shape name.
+  size: 'Optional by action: size returned by the source implementation.'
+  target: 'Optional by action: target returned by the source implementation.'
+  parent: 'Optional by action: parent returned by the source implementation.'
+  locked_attrs: 'Optional by action: locked attrs returned by the source implementation.'
+  color_index: 'Optional by action: color index returned by the source implementation.'
+  transform: Guide transform.
+  degree: 'Optional by action: degree returned by the source implementation.'
+  cv_count: 'Optional by action: cv count returned by the source implementation.'
+  cluster_id: 'Optional by action: cluster id returned by the source implementation.'
+  display_color_rgb: 'Optional by action: display color rgb returned by the source
+    implementation.'
+  root_to_tip: 'Optional by action: root to tip returned by the source implementation.'
+  root_position: 'Optional by action: root position returned by the source implementation.'
+  tip_position: 'Optional by action: tip position returned by the source implementation.'
+  arc_length: Guide arc length readback.
+  source_view: 'Optional by action: source view returned by the source implementation.'
+  dominant_clump: 'Optional by action: dominant clump returned by the source implementation.'
+statuses: [SUCCESS, ERROR]
+errors: {MAYA_RIG_CONTROLS_CREATE_FAILED: "Validation, curve creation, metadata readback, or rollback failed."}
+recovery: [Use a unique name and valid shape, hierarchy, or guide data.]
+help: {summary: Create native curve controls or stable metadata-tagged guide curves., usage: "execute_api(maya.rig.controls.create, params={kind, name, ...})", scenario: Build reusable rig UI controls and editable guide inputs through one control-domain API., safety: Constraint creation is intentionally delegated to maya.rig.constraints.manage.}
+tests: {contract: tests/test_maya_rig_p1_batch3.py, smoke: Maya 2025.3 foreground create both kinds then undo.}
+implementation: {status: implemented}
+verification: {level: contract_tested, evidence: [tests/test_maya_rig_p1_batch3.py]}
+handler: cgi_pipeline.capabilities.maya.rig.rig_control_ops:create_controls

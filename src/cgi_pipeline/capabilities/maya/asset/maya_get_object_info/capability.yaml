@@ -1,5 +1,5 @@
 api_id: maya.asset.maya_get_object_info
-version: 1.0.0
+version: 1.0.2
 name: maya_get_object_info
 executor: maya
 capability: scene.inspect
@@ -10,10 +10,9 @@ stages:
 - animation
 targets:
 - scene_object
-access: write
+access: read
 effects:
-  inspect: 只读取场景或标准数据，不改变资产。
-  apply: 按 API 实现对当前任务沙盒中的场景或数据执行操作。
+  scene_read: Reads node identity, transforms, bounds, topology, materials or camera properties.
 execution_modes:
 - local
 - background
@@ -22,13 +21,31 @@ surfaces:
 - maya
 - service
 modes:
-- apply
-inputs: {}
+- inspect
+inputs:
+  node: {type: string, required: true, description: "要检查的唯一 Maya 节点名或长路径。"}
+  object: {type: string, description: "node 的兼容别名。"}
 preconditions:
 - 项目配置通过统一 config/{project}_config.json 接口加载。
 - 后台模式由 CGI Worker 打开或复用对应 DCC 场景。
-idempotent: false
-outputs: {}
+idempotent: true
+outputs:
+  path: 'Optional by action: path returned by the source implementation.'
+  name: 'Optional by action: name returned by the source implementation.'
+  type: 'Optional by action: type returned by the source implementation.'
+  uuid: 'Optional by action: uuid returned by the source implementation.'
+  parent: 'Optional by action: parent returned by the source implementation.'
+  shapes: 'Optional by action: shapes returned by the source implementation.'
+  transform: 'Optional by action: transform returned by the source implementation.'
+  mesh: 'Optional by action: mesh returned by the source implementation.'
+  materials: 'Optional by action: materials returned by the source implementation.'
+  history: 'Optional by action: history returned by the source implementation.'
+  joint: 'Optional by action: joint returned by the source implementation.'
+  camera: 'Optional by action: camera returned by the source implementation.'
+  query_errors: 'Field query failures as field/error_type/error; failed values are null and status is PARTIAL.'
+  summary: Optional framework operation summary; present when the adapter supplies
+    one.
+  items: Optional framework item records; present when the adapter supplies them.
 statuses:
 - SUCCESS
 - PARTIAL
@@ -44,11 +61,16 @@ recovery:
 - 读取 api_help 获取参数、前置条件和输出。
 - 失败时检查任务报告中的错误与恢复建议。
 help:
-  summary: maya_get_object_info
-  usage: execute_api(maya.asset.maya_get_object_info, params={...})
-  scenario: maya_get_object_info
-  safety: read API 只读；write/destructive API 仅写入任务沙盒。
+  summary: 读取一个 Maya DAG 对象的路径、UUID、变换、mesh 统计、材质、历史及相机或关节信息；transform 使用首个非 intermediate mesh，直接 shape 检查自身。
+  usage: "execute_api(maya.asset.maya_get_object_info, params={node: '|root|head'})"
+  scenario: 绑定前检查、节点拓扑审计和响应测试前后快照。
+  safety: 只读，不修改场景；短名解析到多个节点时拒绝执行。shapes 保留所有子 shape；mesh 为首个适用 shape 的统计而非多 shape 汇总。字段读取失败返回 null、query_errors 和 PARTIAL，不将失败伪装为零或空数组。真实空mesh可返回零拓扑及Maya原生极值bounding_box哨兵；零拓扑时不将该bbox解释为有效空间范围。
 tests:
   contract: api.registry loads this manifest and api.runner validates its receipt.
   smoke: 代表性 workflow 统一验收。
+implementation: {status: implemented, module: maya_get_object_info.maya_get_object_info}
+verification:
+  level: live_tested
+  scope: Maya2025 isolated background resident; transform output/Orig and direct mesh/camera, zero topology, missing/ambiguous identity, controlled field failure. Not complete geometry/rig validation.
+  evidence: [tests/test_maya_asset_apis.py, projects/default/PL294/outputs/final_observation_v1/ACCEPTANCE.md, projects/default/PL294/work/tests/p8_final_observation_v1/runtime_extended_evidence.json]
 handler: cgi_pipeline.capabilities.maya.asset.maya_get_object_info.adapter:execute

@@ -1,0 +1,49 @@
+api_id: maya.scene.attributes.inspect
+version: 1.0.0
+name: attributes_inspect
+executor: maya
+capability: scene.attributes
+operation: inspect
+stages: [modeling, rigging, animation]
+targets: [attribute, scene_object]
+access: read
+effects:
+  scene_read: Enumerates bounded native Maya attribute declarations without reading values or evaluating output data.
+execution_modes: [local, foreground, background]
+surfaces: [maya, service]
+modes: [inspect]
+inputs:
+  nodes: {type: array, required: true, description: "Explicit node names or patterns, up to 2000 entries; empty returns no nodes and never uses selection."}
+  attribute_pattern: {type: string, default: '*', description: "Case-sensitive glob over long attribute names, for example brow* or translate?."}
+  user_defined: {type: boolean, description: "Optional filter: true selects dynamic attributes, false excludes them; omit to inspect both."}
+  keyable: {type: boolean, description: "Optional filter: true selects keyable attributes, false excludes them; omit to inspect both."}
+  max_nodes: {type: integer, default: 200, description: "Maximum unique resolved nodes, integer 1..2000."}
+  max_attributes: {type: integer, default: 500, description: "Total attribute schema budget across all returned nodes, integer 1..2000; not a per-node limit."}
+preconditions:
+  - Runs in one native Maya scene context; UFE attributes are outside this contract.
+  - Node names and patterns resolve to long paths before inspection.
+idempotent: true
+outputs:
+  nodes: "Node path, UUID, type, attributes, count and per-node truncated. Each attribute has name, plug, declaration type, user_defined, readable, writable, connectable, multi, keyable, hidden, children, enum and limits. Enum retains Maya definition strings including explicit numeric assignments; limits retain native numeric lists. Declaration type may be typed and does not identify current data."
+  node_count: Number of returned unique nodes.
+  attribute_count: Total returned attribute schemas, bounded by max_attributes.
+  nodes_truncated: True only when more unique nodes matched than max_nodes.
+  attributes_truncated: True only when matching attributes were omitted from returned nodes by the global attribute budget.
+  truncated: True when either node resolution or returned attribute schemas were truncated; an exact fit is false.
+statuses: [SUCCESS, ERROR]
+errors:
+  MAYA_BATCH_OPERATION_FAILED: Invalid inputs, missing node identity or failed Maya schema query; failures are not converted to false flags or empty successful schemas.
+recovery:
+  - Correct node patterns and filters; use smaller explicit groups when results are truncated.
+  - Inspect the reported Maya query error before retrying unsupported plugin attributes.
+help:
+  summary: Discover bounded Maya attribute names and declaration metadata without reading values.
+  usage: "execute_api(maya.scene.attributes.inspect, params={nodes: ['controller'], user_defined: true, max_attributes: 100})"
+  scenario: Discover unfamiliar rig controls, compound children, enum modes and declared limits before choosing explicit value or graph queries.
+  safety: "Read-only; no getAttr, scene edits, selection fallback, multi-element expansion or value evaluation. Maya ls/listAttr enumerate candidates before bounded schema queries."
+tests:
+  contract: tests/test_maya_attribute_inspection.py
+  smoke: Foreground or isolated Maya schema query on numeric, enum, message, typed, multi and compound attributes.
+implementation: {status: implemented, module: 'maya.scene_attributes:inspect_attributes'}
+verification: {level: live_tested, evidence: [tests/test_maya_attribute_inspection.py, audit/chain-c69daed7.json]}
+handler: cgi_pipeline.capabilities.maya.scene_attributes:inspect_attributes

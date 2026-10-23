@@ -1,0 +1,31 @@
+api_id: blender.scene.selection.get
+version: 1.0.1
+name: selection_get
+executor: blender
+capability: scene.selection
+operation: query
+stages: [modeling, rigging, animation]
+targets: [selection]
+access: read
+effects:
+  scene_read: Reads bounded selected and active objects.
+execution_modes: [local, foreground]
+surfaces: [blender, service]
+modes: [inspect]
+inputs:
+  max_items: {type: integer, default: 200, description: Maximum selected objects; hard limit 2000.}
+preconditions: [Runs in a Blender view layer context.]
+idempotent: true
+outputs:
+  items: Selected object names.
+  active: Active object name.
+  count: Number of returned or processed items for this action.
+  truncated: Whether selection exceeded max_items.
+statuses: [SUCCESS, ERROR]
+errors: {BLENDER_SCENE_CORE_OPERATION_FAILED: Invalid Blender context.}
+recovery: [Run in an active Blender scene.]
+help: {summary: Read Blender selection and active object., usage: "execute_api(blender.scene.selection.get, params={})", scenario: Capture interactive object context., safety: Read-only and bounded.}
+tests: {contract: tests/test_blender_scene_core_apis.py}
+handler: cgi_pipeline.capabilities.blender.scene_core:get_selection
+implementation: {status: implemented}
+verification: {level: contract_tested, evidence: [tests/test_blender_scene_core_apis.py]}

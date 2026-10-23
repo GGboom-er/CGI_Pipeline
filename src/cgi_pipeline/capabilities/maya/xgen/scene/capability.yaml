@@ -1,0 +1,36 @@
+api_id: maya.xgen.scene
+version: 1.0.1
+name: xgen_scene
+executor: maya
+capability: xgen
+operation: scene
+stages: [rigging, animation]
+targets: [curves, hair]
+access: read
+effects:
+  scene_read: Reads current Maya scene or recorded curve structure.
+execution_modes: [local, foreground, background]
+surfaces: [maya, service]
+modes: [inspect]
+inputs: {}
+preconditions: [Maya 2025 with registered xgen_cache package available., "Curve records are per NURBS shape; packed Houdini curves are not supported yet."]
+idempotent: true
+outputs:
+  groups: Traditional XGen palette, description and primitive records.
+  start: 'Optional by action: start returned by the source implementation.'
+  end: 'Optional by action: end returned by the source implementation.'
+  fps: 'Optional by action: fps returned by the source implementation.'
+  scene: Current Maya scene path from the independent XGen source.
+  unit: 'Optional by action: unit returned by the source implementation.'
+statuses: [SUCCESS, ERROR]
+errors: {XGEN_OPERATION_FAILED: Invalid input or unavailable package; see error.}
+recovery: [Read error and inspect current scene before retrying., "record and rebuild use Maya undo; file export rejects existing outputs."]
+help:
+  summary: "scene using the same core as the XGen desktop tool."
+  usage: "execute_api(maya.xgen.scene, params={...})"
+  scenario: XGen curve structure preparation and final hair cache publishing.
+  safety: "Explicit selected scope. Original records and existing export roots/files are never overwritten."
+tests: {contract: tests/test_xgen_api.py, smoke: PL227 Maya foreground structure roundtrip.}
+implementation: {status: implemented}
+verification: {level: live_tested, evidence: [tests/test_xgen_api.py, "audit/2026-09-16/api-aba0cd288393.json"]}
+handler: cgi_pipeline.capabilities.maya.xgen_api:execute

@@ -1,0 +1,40 @@
+api_id: maya.scene.nodes.resolve
+version: 1.1.1
+name: nodes_resolve
+executor: maya
+capability: scene.nodes
+operation: resolve
+stages: [modeling, rigging, animation]
+targets: [scene_object]
+access: read
+effects:
+  scene_read: Resolves explicit Maya names to long paths, UUIDs, and node types.
+  host_state_write: include_instances=true lazily installs two ephemeral native scene lifecycle callbacks for scene epoch identity, without creating scene nodes or persistent registry.
+execution_modes: [local, foreground, background]
+surfaces: [maya, service]
+modes: [inspect]
+inputs:
+  nodes: {type: array, required: true, description: Explicit Maya node names or long paths.}
+  max_items: {type: integer, default: 100, description: "Maximum nodes, hard limit 500."}
+  include_instances: {type: boolean, default: false, description: "Also return native DAG instance identities and process/scene epoch. Requires Maya native API on its main thread; no first-instance fallback."}
+preconditions: [Ambiguous short names are rejected.]
+idempotent: true
+outputs:
+  items: Input names with long paths, UUIDs, and node types.
+  count: Resolved node count.
+  session: Optional process birth, nonce and native scene epoch when include_instances=true.
+statuses: [SUCCESS, ERROR]
+errors:
+  MAYA_SCENE_P2_OPERATION_FAILED: Node resolution or Maya context failed.
+recovery: [Use an existing long path and reduce max_items.]
+help:
+  summary: Resolve Maya node UUID and optionally full DAG instance paths, native instance numbers and process/scene identity without scene mutation.
+  usage: execute_api(maya.scene.nodes.resolve, params={nodes})
+  scenario: Stabilize node references before multi-step operations.
+  safety: Read-only, bounded, and rejects ambiguity.
+tests:
+  contract: tests/test_maya_scene_p2.py
+  smoke: Foreground long-path and UUID resolution.
+implementation: {status: implemented}
+verification: {level: live_tested, evidence: [tests/test_maya_scene_p2.py, projects/default/PL296/work/tests/product_registered_evidence_v4.json]}
+handler: cgi_pipeline.capabilities.maya.scene_p2:resolve_nodes

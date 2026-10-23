@@ -10,3 +10,8 @@ CAPABILITIES_ROOT = PACKAGE_ROOT / "capabilities"
 CONFIG_ROOT = REPOSITORY_ROOT / "config"
 WORKFLOWS_ROOT = REPOSITORY_ROOT / "workflows"
 INTEGRATIONS_ROOT = REPOSITORY_ROOT / "integrations"
+
+
+def ipc_root(project_root: str | Path = REPOSITORY_ROOT) -> Path:
+    """Retain the deployed project root used by background host adapters."""
+    return Path(project_root) / "ipc"

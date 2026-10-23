@@ -1,5 +1,5 @@
 api_id: maya.asset.save_scene
-version: 1.0.0
+version: 1.0.2
 name: maya_save_scene_as_next_version
 executor: maya
 capability: scene.file
@@ -12,8 +12,9 @@ targets:
 - scene_file
 access: write
 effects:
-  inspect: 只读取场景或标准数据，不改变资产。
-  apply: 按 API 实现对当前任务沙盒中的场景或数据执行操作。
+  file_write: Selects the next available version and saves the scene while holding the shared directory .version_lock
+    through a real operating-system lock. Lock failure or timeout refuses the save.
+  host_state_write: Changes the current scene filename to the allocated version.
 execution_modes:
 - local
 - background
@@ -27,15 +28,21 @@ inputs:
   save_path:
     type: string
     default: ''
-    description: 可选。为空时保存当前已打开的沙盒场景；若填写，只允许任务沙盒内路径。
+    description: 可选。为空时使用当前已命名场景路径；当前及目标路径须位于 CGI projects/ 或 runs/ 管理根下，受保护路径拒绝。
 preconditions:
-- 项目配置通过统一 config/{project}_config.json 接口加载。
-- 后台模式由 CGI Worker 打开或复用对应 DCC 场景。
+- 当前已打开场景；未命名场景须显式提供 save_path。当前场景（若已命名）及保存目标均须位于 CGI projects/ 或 runs/ 管理根下，且不属于 protected path。
+- 后台 workspace 的 scene_action=continue 可续接同一驻留场景并保留未保存修改，无须每次重传 source_path；场景 owner 丢失时须显式 scene_action=open 恢复已保存源，不会重放前序
+  API。
+- 保存路径限制按 projects/ 与 runs/ 管理根检查，不是当前 run_dir 的跨任务权限隔离。
+- 目标存在时自动升版本，不覆盖已有文件。与 Blender 保存共用同目录 .version_lock 的真实 OS 锁；无法加锁或超时则报错，不会无锁保存。
 idempotent: false
 outputs:
-- name: scene
-  type: scene_file
-  label: 保存后场景
+  output_path: Actual operation output path; present only when this branch produces
+    or identifies a file.
+  result: Underlying operation result; its internal fields belong to that operation.
+  summary: Optional framework operation summary; present when the adapter supplies
+    one.
+  items: Optional framework item records; present when the adapter supplies them.
 statuses:
 - SUCCESS
 - PARTIAL
@@ -51,11 +58,13 @@ recovery:
 - 读取 api_help 获取参数、前置条件和输出。
 - 失败时检查任务报告中的错误与恢复建议。
 help:
-  summary: 保存当前任务沙盒中的 Maya 场景。后台 pipeline 默认保存当前已打开的沙盒副本，禁止写入沙盒外路径。
+  summary: 保存当前内存场景到 CGI projects/runs 管理根内；目标存在时自动升版本，返回实际 output.output_path。workspace continue 可保留未保存修改；Maya/Blender 保存使用共享目录 OS 锁。
   usage: execute_api(maya.asset.save_scene, params={...})
-  scenario: 保存当前任务沙盒中的 Maya 场景。后台 pipeline 默认保存当前已打开的沙盒副本，禁止写入沙盒外路径。
-  safety: read API 只读；write/destructive API 仅写入任务沙盒。
+  scenario: 独立保存当前 Maya 场景；后台可在同一 workspace 中继续编辑后显式保存。当前与目标均受 projects/runs 管理根及 protected path 检查，不限于当前 run_dir。
+  safety: 具体副作用见本契约 effects；运行上下文、路径与恢复边界见 docs/architecture/pipeline_runtime_contract_v1.md。
 tests:
   contract: api.registry loads this manifest and api.runner validates its receipt.
   smoke: 代表性 workflow 统一验收。
+implementation: {status: implemented, module: save_scene.save_scene}
+verification: {level: contract_tested, evidence: [tests/test_maya_asset_remaining_contracts.py, tests/test_maya_save_scene.py, tests/test_scene_files.py]}
 handler: cgi_pipeline.capabilities.maya.asset.save_scene.adapter:execute

@@ -1,0 +1,30 @@
+api_id: maya.scene.selection.get
+version: 1.0.1
+name: selection_get
+executor: maya
+capability: scene.selection
+operation: get
+stages: [modeling, rigging, animation]
+targets: [selection]
+access: read
+effects:
+  scene_read: Reads the bounded Maya active selection as long paths.
+execution_modes: [local, foreground, background]
+surfaces: [maya, service]
+modes: [inspect]
+inputs:
+  max_items: {type: integer, default: 200, description: "Maximum items, hard limit 2000."}
+preconditions: [Runs in one Maya scene context.]
+idempotent: true
+outputs:
+  items: Selected long paths.
+  count: Number of returned or processed items for this action.
+  truncated: Whether selection exceeded max_items.
+statuses: [SUCCESS, ERROR]
+errors: {MAYA_SCENE_CORE_OPERATION_FAILED: Selection could not be queried.}
+recovery: [Retry in an active Maya session.]
+help: {summary: Read the bounded Maya selection., usage: "execute_api(maya.scene.selection.get)", scenario: Resolve user-selected work scope., safety: Read-only and bounded.}
+tests: {contract: tests/test_maya_scene_core_apis.py, smoke: Foreground Maya selection query.}
+implementation: {status: implemented}
+verification: {level: live_tested, evidence: [tests/test_maya_scene_core_apis.py, audit/2026-08-30/api-63878faecce0.json]}
+handler: cgi_pipeline.capabilities.maya.scene_core:get_selection

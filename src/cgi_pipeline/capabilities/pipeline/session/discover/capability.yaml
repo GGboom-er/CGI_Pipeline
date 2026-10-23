@@ -9,7 +9,7 @@ targets:
 - host_session
 access: read
 effects:
-  inspect: Reads local CGI transport endpoints only; no DCC scene is opened or changed.
+  service_read: Reads local CGI transport endpoint discovery; no DCC scene is opened or changed.
 execution_modes:
 - background
 surfaces:
@@ -47,4 +47,10 @@ help:
 tests:
   contract: tests/test_api_catalog_additions.py
   smoke: One live session per DCC during the final integration workflow.
+implementation: {status: implemented}
+verification:
+  level: live_tested
+  evidence:
+  - tests/test_maya_port_discovery.py
+  - audit/api-fead1a89b2bd.json
 handler: cgi_pipeline.capabilities.pipeline.session.discover.handler:execute

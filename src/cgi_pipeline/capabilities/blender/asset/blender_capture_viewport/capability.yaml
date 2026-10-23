@@ -1,5 +1,5 @@
 api_id: blender.asset.blender_capture_viewport
-version: 1.0.0
+version: 1.0.1
 name: Blender 视口截图
 executor: blender
 capability: viewport.capture
@@ -10,10 +10,11 @@ stages:
 - animation
 targets:
 - viewport
-access: read
+access: write
 effects:
-  inspect: 只读取场景或标准数据，不改变资产。
-  apply: 按 API 实现对当前任务沙盒中的场景或数据执行操作。
+  scene_read: Renders the selected Blender scene.
+  scene_write: Temporarily changes render path, resolution and format; finally restores those settings.
+  file_write: Standard render writes the requested PNG image.
 execution_modes:
 - local
 - background
@@ -37,9 +38,11 @@ preconditions:
 - 后台模式由 CGI Worker 打开或复用对应 DCC 场景。
 idempotent: true
 outputs:
-- name: output_path
-  type: image_file
-  label: PNG 截图
+  output_path: Actual operation output path; present only when this branch produces
+    or identifies a file.
+  summary: Optional framework operation summary; present when the adapter supplies
+    one.
+  items: Optional framework item records; present when the adapter supplies them.
 statuses:
 - SUCCESS
 - PARTIAL
@@ -58,8 +61,14 @@ help:
   summary: 获取 Blender 当前活动视口或后台渲染截图，并保存为 PNG。
   usage: execute_api(blender.asset.blender_capture_viewport, params={...})
   scenario: 获取 Blender 当前活动视口或后台渲染截图，并保存为 PNG。
-  safety: read API 只读；write/destructive API 仅写入任务沙盒。
+  safety: 具体副作用见本契约 effects；运行上下文、路径与恢复边界见 docs/architecture/pipeline_runtime_contract_v1.md。
 tests:
   contract: api.registry loads this manifest and api.runner validates its receipt.
   smoke: 代表性 workflow 统一验收。
+implementation:
+  status: implemented
+verification:
+  level: live_tested
+  evidence:
+  - audit/api-fa44c31dd689.json
 handler: cgi_pipeline.capabilities.blender.asset.blender_capture_viewport.adapter:execute

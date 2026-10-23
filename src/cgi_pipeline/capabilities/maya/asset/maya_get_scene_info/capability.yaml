@@ -1,5 +1,5 @@
 api_id: maya.asset.maya_get_scene_info
-version: 1.0.0
+version: 1.0.2
 name: 获取场景总览
 executor: maya
 capability: scene.inspect
@@ -12,8 +12,7 @@ targets:
 - scene
 access: read
 effects:
-  inspect: 只读取场景或标准数据，不改变资产。
-  apply: 按 API 实现对当前任务沙盒中的场景或数据执行操作。
+  scene_read: Reads scene, geometry, material and reference statistics.
 execution_modes:
 - local
 - background
@@ -29,9 +28,10 @@ preconditions:
 - 后台模式由 CGI Worker 打开或复用对应 DCC 场景。
 idempotent: true
 outputs:
-- name: scene_info
-  type: json
-  label: 场景信息 (JSON)
+  result: 'Scene overview with collections metadata (total/returned/limit/truncated); statistics geometry_totals_complete and evaluated/failed mesh counts disclose partial topology totals.'
+  summary: Optional framework operation summary; present when the adapter supplies
+    one.
+  items: Optional framework item records; present when the adapter supplies them.
 statuses:
 - SUCCESS
 - PARTIAL
@@ -50,8 +50,13 @@ help:
   summary: 获取 Maya 当前场景的全面信息，包括对象统计、面数、材质列表、时间轴、渲染器、引用文件、未知节点等。AI 理解场景全貌的基础能力。
   usage: execute_api(maya.asset.maya_get_scene_info, params={...})
   scenario: 获取 Maya 当前场景的全面信息，包括对象统计、面数、材质列表、时间轴、渲染器、引用文件、未知节点等。AI 理解场景全貌的基础能力。
-  safety: read API 只读；write/destructive API 仅写入任务沙盒。
+  safety: 只读；面数统计遍历所有 mesh shape（含 intermediate）且可能触发求值，非 renderable-only 统计。materials/references/warnings/top_meshes_by_faces 按原上限返回并在 collections 标明裁切；mesh 查询失败为 PARTIAL，total_vertices/total_faces 仅汇总查询成功的 mesh。运行上下文、路径与恢复边界见 docs/architecture/pipeline_runtime_contract_v1.md。
 tests:
   contract: api.registry loads this manifest and api.runner validates its receipt.
   smoke: 代表性 workflow 统一验收。
+implementation: {status: implemented, module: maya_get_scene_info.maya_get_scene_info}
+verification:
+  level: live_tested
+  scope: Maya2025 isolated background resident; 21 materials/11 references, top-mesh limits and controlled21 warnings; paired handler timings at25/35/125 basic mesh shapes. Not production-scale performance or renderable-only statistics.
+  evidence: [tests/test_maya_asset_high_value_contracts.py, audit/2026-08-30/api-4927490d9d9f.json, projects/default/PL294/outputs/final_observation_v1/ACCEPTANCE.md, projects/default/PL294/work/tests/p8_final_observation_v1/runtime_extended_evidence.json]
 handler: cgi_pipeline.capabilities.maya.asset.maya_get_scene_info.adapter:execute

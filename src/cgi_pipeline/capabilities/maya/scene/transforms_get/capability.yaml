@@ -1,0 +1,32 @@
+api_id: maya.scene.transforms.get
+version: 1.0.1
+name: transforms_get
+executor: maya
+capability: scene.transforms
+operation: get
+stages: [modeling, rigging, animation]
+targets: [transform]
+access: read
+effects:
+  scene_read: Reads translation, rotation and scale in world or object space.
+execution_modes: [local, foreground, background]
+surfaces: [maya, service]
+modes: [inspect]
+inputs:
+  nodes: {type: array, required: true, description: Explicit transform nodes.}
+  space: {type: string, default: world, choices: [world, object], description: Transform space.}
+  max_items: {type: integer, default: 200, description: "Maximum items, hard limit 2000."}
+preconditions: [Nodes must resolve unambiguously and support xform.]
+idempotent: true
+outputs:
+  items: Long path, TRS, space and status.
+  count: Number of returned or processed items for this action.
+  truncated: Whether input exceeded max_items.
+statuses: [SUCCESS, ERROR]
+errors: {MAYA_SCENE_CORE_OPERATION_FAILED: Transform query failed.}
+recovery: [Use transform long paths and a supported space.]
+help: {summary: Read bounded Maya transforms., usage: "execute_api(maya.scene.transforms.get, params={nodes, space})", scenario: Inspect placement before edits., safety: Read-only and bounded.}
+tests: {contract: tests/test_maya_scene_core_apis.py, smoke: Foreground Maya xform query.}
+implementation: {status: implemented}
+verification: {level: live_tested, evidence: [tests/test_maya_scene_core_apis.py, audit/2026-08-30/api-55a72fc517b5.json]}
+handler: cgi_pipeline.capabilities.maya.scene_core:get_transforms

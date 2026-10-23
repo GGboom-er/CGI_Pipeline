@@ -1,0 +1,48 @@
+api_id: maya.scene.viewport.pick
+version: 1.1.0
+name: viewport_pick
+executor: maya
+capability: scene.viewport
+operation: pick
+stages: [modeling, rigging, animation]
+targets: [viewport, mesh, scene_object]
+access: read
+effects:
+  scene_read: "native mode queries Maya hitTest in an explicit current modelEditor and reads only view/session and returned node identities; no scene-wide geometry or vertex scan. verified mode revalidates complete bounded visible polygon geometry before and after intersections."
+  file_read: "verified mode reads managed original PNG and immutable observation sidecar and verifies SHA-256; native mode does not claim historical-image freshness."
+  host_state_write: Lazily installs two native afterNew/afterOpen callbacks for ephemeral scene epoch identity; no scene nodes or persistent registry.
+execution_modes: [local, foreground]
+surfaces: [maya, service]
+modes: [inspect]
+inputs:
+  mode: {type: string, default: verified, choices: [verified, native], description: "native is a current-viewport candidate query using Maya hitTest; use for daily identification. verified preserves the existing full polygon/hash validation of a saved grounded PNG."}
+  observation: {type: object, description: "Required in verified mode: exact {path,sha256} reference returned by grounded maya_capture_viewport. A native result is not a guarded-edit observation token."}
+  panel: {type: string, default: '', description: "Required in native mode: explicit visible modelPanel. The modelEditor control is resolved natively; no activation or focus change."}
+  expected_view: {type: object, description: "Optional native-mode lightweight context from ordinary viewport capture output.observation. Checks scene/frame/API, matching panel camera/display and dimensions; does not certify geometry or historical PNG freshness."}
+  pixels: {type: array, required: true, description: "1..20 integer [x,y] indices, top-left origin. native uses the current full modelPanel port (ordinary viewport PNG is 1:1); verified uses the exact original grounded PNG."}
+  expected_target: {type: string, description: "Optional exact full DAG target. verified uses a captured target; native resolves the current node and only reports a definite match for one resolved candidate without unresolved native hits."}
+preconditions:
+  - Maya GUI main thread and explicit visible native full-port modelPanel.
+  - "native: current visible modelPanel and in-range integer pixels. Native result order/frontmost/opacity/semantic labels are not certified; preserve all candidates and unresolved hits, never select the first arbitrarily. At most 200 candidate identities in one request; excess rejects."
+  - "native: optional expected_view must match cheap current view context; view/session/selection state must remain unchanged during the batch. Maya native filtering and isolate display are honored rather than replaced by a geometry scan."
+  - "verified: grounded original PNG/sidecar hashes and complete supported polygon/view state remain unchanged. Normal/reference full shaded drawing is recorded; no UI editability certification."
+  - "verified: filter/isolate/template/bbox/unshaded/hidden or alpha overrides/non-default layers/custom rendering/smooth preview reject; all visible polygon candidates remain in occlusion checks and unsupported nearest appearance returns unknown."
+idempotent: true
+outputs:
+  items: "native: raw_hits, resolved candidate identities and unresolved_hits without a depth-order guarantee. verified: nearest camera-clipped geometry; ties return AMBIGUOUS_POLYGON_GEOMETRY and unsupported appearance returns UNSUPPORTED_PIXEL_APPEARANCE with null match."
+  count: Number of requested pixels processed.
+  truncated: Always false; unsupported or over-budget candidate sets reject rather than truncate occluders.
+  observation: "native returns cheap current view metadata, not a strict edit-guard token; verified returns the validated original observation reference."
+  scope: Explicit current-native or verified-geometry semantics, freshness and rendering limits.
+statuses: [SUCCESS, ERROR]
+errors: {MAYA_OBSERVATION_REJECTED: "Invalid, stale, unsupported or over-budget original observation or pixel coordinates."}
+recovery: [Capture a fresh supported grounded viewport and inspect the actual original PNG before choosing pixel indices.]
+help:
+  summary: Use native Maya hitTest for fast current-viewport candidates, or verified mode for full saved-PNG polygon validation.
+  usage: "execute_api(maya.scene.viewport.pick, params={mode: native, panel, pixels, expected_view?}) or params={observation, pixels, expected_target?}"
+  scenario: "Known target: query it directly and frame or isolate when authorized. Unknown region: ordinary viewport capture, inspect PNG, native pick, inspect candidates. Use verified only when saved-image consistency or its strict edit guard is required."
+  safety: Native candidates are current Maya control hits without historical PNG, depth-order or rendered-pixel certification. Verified geometry also does not certify arbitrary shader/texture/light or final-render ownership.
+tests: {contract: tests/test_maya_scene_observation.py, smoke: Foreground Maya original PNG and explicit-instance pixel matching.}
+implementation: {status: implemented}
+verification: {level: live_tested, evidence: [tests/test_maya_scene_observation.py, tests/test_maya_scene_observation_ambiguity.py, projects/default/PL296/work/tests/product_registered_evidence_v4.json]}
+handler: cgi_pipeline.capabilities.maya.scene_observation:pick_pixels

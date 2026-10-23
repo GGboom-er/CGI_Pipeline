@@ -441,6 +441,9 @@ def execute(payload: dict) -> dict:
         for s in shapes:
             parent = cmds.listRelatives(s, parent=True, fullPath=True)
             if parent:
+                short_p = parent[0].split("|")[-1]
+                if short_p.startswith("RIG_"):
+                    continue
                 mesh_nodes.append(parent[0])
     else:
         shapes = cmds.ls(type="mesh", noIntermediate=True, long=True) or []

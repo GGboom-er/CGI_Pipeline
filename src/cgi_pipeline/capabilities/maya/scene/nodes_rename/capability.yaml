@@ -1,0 +1,31 @@
+api_id: maya.scene.nodes.rename
+version: 1.0.1
+name: nodes_rename
+executor: maya
+capability: scene.nodes
+operation: rename
+stages: [modeling, rigging, animation]
+targets: [scene_object]
+access: write
+effects:
+  scene_write: Renames explicit nodes and returns before and after long paths.
+execution_modes: [local, foreground, background]
+surfaces: [maya, service]
+modes: [apply]
+inputs:
+  items: {type: array, required: true, description: "[{node, new_name}]"}
+  max_items: {type: integer, default: 200, description: "Maximum items, hard limit 2000."}
+preconditions: [Nodes must resolve unambiguously.]
+idempotent: false
+outputs:
+  items: Before and after long paths with status.
+  count: Number of returned or processed items for this action.
+  truncated: Whether input exceeded max_items.
+statuses: [SUCCESS, ERROR]
+errors: {MAYA_SCENE_CORE_OPERATION_FAILED: "Node is missing, ambiguous or cannot be renamed."}
+recovery: [Use long paths and non-conflicting names.]
+help: {summary: Rename bounded Maya nodes., usage: "execute_api(maya.scene.nodes.rename, params={items})", scenario: Canonical scene naming., safety: Mutating and fail-loud.}
+tests: {contract: tests/test_maya_scene_core_apis.py, smoke: Foreground Maya rename and undo.}
+implementation: {status: implemented}
+verification: {level: live_tested, evidence: [tests/test_maya_scene_core_apis.py, audit/2026-08-30/api-4653615c0f56.json]}
+handler: cgi_pipeline.capabilities.maya.scene_core:rename_nodes

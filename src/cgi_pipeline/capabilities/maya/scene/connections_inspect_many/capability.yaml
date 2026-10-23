@@ -1,0 +1,35 @@
+api_id: maya.scene.connections.inspect_many
+version: 1.1.0
+name: connections_inspect_many
+executor: maya
+capability: scene.connections
+operation: inspect
+stages: [modeling, rigging, animation]
+targets: [dependency_graph]
+access: read
+effects:
+  scene_read: Reads bounded Maya plug connections.
+execution_modes: [local, foreground, background]
+surfaces: [maya, service]
+modes: [inspect]
+inputs:
+  nodes: {type: array, required: true, description: Node names or patterns.}
+  max_nodes: {type: integer, default: 100, description: Positive maximum of resolved nodes queried; nonpositive values return ERROR.}
+  max_edges: {type: integer, default: 1000, description: Positive maximum of unique directed plug edges returned; nonpositive values return ERROR.}
+  direction: {type: string, choices: [both, upstream, downstream], default: both, description: Inspect incoming and outgoing connections or only the selected direction.}
+preconditions: [Runs in one Maya scene context.]
+idempotent: true
+outputs:
+  nodes: 'Optional by action: nodes returned by the source implementation.'
+  edges: Unique source-to-destination plug pairs with full DAG node paths; unitConversion nodes are retained.
+  node_count: 'Optional by action: node count returned by the source implementation.'
+  edge_count: 'Optional by action: edge count returned by the source implementation.'
+  truncated: True when resolved nodes or unique edges were omitted; false requires complete queries of every selected node.
+statuses: [SUCCESS, ERROR]
+errors: {MAYA_BATCH_OPERATION_FAILED: Invalid connection query.}
+recovery: [Reduce node and edge bounds.]
+help: {summary: Inspect many Maya DG connections in one call., usage: "execute_api(maya.scene.connections.inspect_many, params={nodes})", scenario: Trace MFace controller evaluation chains., safety: Read-only and bounded.}
+tests: {contract: tests/test_scene_batch_apis.py, smoke: Foreground Maya connection query.}
+implementation: {status: implemented, module: maya.scene_batch:inspect_connections_many}
+verification: {level: live_tested, evidence: [tests/test_scene_batch_apis.py, tests/test_maya_graph_bounds.py, audit/chain-c69daed7.json, projects/default/PL294/work/foreground_oracle_receipt.json]}
+handler: cgi_pipeline.capabilities.maya.scene_batch:inspect_connections_many

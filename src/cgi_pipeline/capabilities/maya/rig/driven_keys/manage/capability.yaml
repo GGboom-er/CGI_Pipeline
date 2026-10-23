@@ -1,0 +1,54 @@
+api_id: maya.rig.driven_keys.manage
+version: 1.0.1
+executor: maya
+capability: rigging.driven_keys
+operation: manage
+stages: [rigging, animation]
+targets:
+- attribute
+- animation_curve
+access: destructive
+effects:
+  scene_write: 'action=create: Creates or updates bounded driven-key curves without changing current attribute values. action=remove:
+    Deletes only matching driven-key curves.'
+  scene_read: 'action=query: Reads matching driver-to-driven curves.'
+execution_modes: [local, foreground, background]
+surfaces: [maya, service]
+modes:
+- inspect
+- apply
+mode_binding:
+  input: action
+  cases:
+  - value: create
+    mode: apply
+  - value: query
+    mode: inspect
+  - value: remove
+    mode: apply
+inputs:
+  action: {type: string, required: true, choices: [create, query, remove], description: Canonical driven-key action.}
+  driver_attr: {type: string, required: true, description: Existing driver node.attribute path.}
+  driven_attrs: {type: array, required: true, description: One to 32 unique driven attribute paths.}
+  driver_values: {type: array, default: [], description: One to 64 strictly increasing finite driver values for create.}
+  driven_values: {type: array, default: [], description: Rectangular finite values by driver row and driven column.}
+  tangent_type: {type: string, default: linear, choices: [linear, smooth, flat, step], description: Native tangent type for created keys.}
+preconditions: [All plugs must exist and resolve unambiguously., Create accepts at most 2048 key assignments.]
+idempotent: false
+outputs:
+  action: Executed action.
+  driver_attr: 'Optional by action: driver attr returned by the source implementation.'
+  driven_attrs: 'Optional by action: driven attrs returned by the source implementation.'
+  curves: Bounded relationship snapshots.
+  curve_count: Matching curve count.
+  keys_set: Created key assignment count.
+  tangent_type: 'Optional by action: tangent type returned by the source implementation.'
+  removed_curves: 'Optional by action: removed curves returned by the source implementation.'
+statuses: [SUCCESS, ERROR]
+errors: {MAYA_RIG_DRIVEN_KEYS_MANAGE_FAILED: "Validation, native key creation, relationship readback, or rollback failed."}
+recovery: [Use numeric existing plugs and a complete rectangular values matrix.]
+help: {summary: Create, inspect, or remove explicit Maya driven-key relationships., usage: "execute_api(maya.rig.driven_keys.manage, params={action, driver_attr, driven_attrs, ...})", scenario: Build pose and control relationships without temporary setAttr state changes., safety: Removal deletes only anim curves proven to connect the requested driver and driven plugs.}
+tests: {contract: tests/test_maya_rig_p1_batch3.py, smoke: Maya 2025.3 foreground create/query/remove then undo.}
+implementation: {status: implemented}
+verification: {level: contract_tested, evidence: [tests/test_maya_rig_p1_batch3.py]}
+handler: cgi_pipeline.capabilities.maya.rig.rig_relationship_ops:manage_driven_keys

@@ -2,11 +2,13 @@
 
 import ast
 import inspect
+from pathlib import Path
 from unittest.mock import patch
 
 from cgi_pipeline.server import internals
 from cgi_pipeline.core import tasks
 from cgi_pipeline.core.service_manager import _normalize_dcc, _queue_for_dcc, _worker_hostname
+from test_workspace import root
 
 
 class _FakeCelery:
@@ -25,7 +27,7 @@ def test_all_dcc_aliases_use_one_queue_and_worker():
     assert _worker_hostname('maya') == 'cgi@%h'
 
 
-def test_workflow_submit_ensures_only_canonical_worker():
+def test_workflow_submit_ensures_only_canonical_worker(root):
     celery = _FakeCelery()
     ensure_calls = []
     with patch.object(internals, '_ensure_worker', side_effect=lambda dcc: ensure_calls.append(dcc) or (True, 'ok')), \
@@ -37,6 +39,8 @@ def test_workflow_submit_ensures_only_canonical_worker():
     assert result['status'] == 'SUBMITTED'
     assert ensure_calls == ['cgi']
     assert celery.calls[0][1]['queue'] == 'cgi_queue'
+    assert Path(result['run_dir']).is_relative_to(root)
+    assert Path(result['operation_dir']).is_dir()
 
 
 def test_workflow_has_no_nested_celery_dispatch():

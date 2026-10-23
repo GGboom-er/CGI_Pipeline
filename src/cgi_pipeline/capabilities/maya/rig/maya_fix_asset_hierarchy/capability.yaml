@@ -1,5 +1,5 @@
 api_id: maya.rig.maya_fix_asset_hierarchy
-version: 1.0.0
+version: 1.0.1
 name: maya_fix_rig_geometry_layout
 executor: maya
 capability: rigging.hierarchy
@@ -11,8 +11,9 @@ targets:
 - mesh
 access: destructive
 effects:
-  inspect: 只读取场景或标准数据，不改变资产。
-  apply: 按 API 实现对当前任务沙盒中的场景或数据执行操作。
+  scene_read: Reads explicit hierarchy diagnostics and affected geometry.
+  scene_write: Unlocks, creates or renames Group/Geometry/cache and reparents geometry; optional flags delete only checked
+    empty source/top-level roots.
 execution_modes:
 - local
 - background
@@ -40,9 +41,35 @@ preconditions:
 - 后台模式由 CGI Worker 打开或复用对应 DCC 场景。
 idempotent: false
 outputs:
-- name: result
-  type: json
-  label: 层级修复结果
+  scene: Current Maya scene path from the independent XGen source.
+  active_rig_root: 'Optional by action: active rig root returned by the source implementation.'
+  required_root: 'Optional by action: required root returned by the source implementation.'
+  renamed_top_count: 'Optional by action: renamed top count returned by the source
+    implementation.'
+  created_group_count: 'Optional by action: created group count returned by the source
+    implementation.'
+  deleted_top_node_count: 'Optional by action: deleted top node count returned by
+    the source implementation.'
+  moved_child_count: 'Optional by action: moved child count returned by the source
+    implementation.'
+  renamed_tops: 'Optional by action: renamed tops returned by the source implementation.'
+  normalized_rig_roots: 'Optional by action: normalized rig roots returned by the
+    source implementation.'
+  created_groups: 'Optional by action: created groups returned by the source implementation.'
+  moved_children: 'Optional by action: moved children returned by the source implementation.'
+  deleted_top_nodes: 'Optional by action: deleted top nodes returned by the source
+    implementation.'
+  removed_empty_sources: 'Optional by action: removed empty sources returned by the
+    source implementation.'
+  preserved_top_nodes: 'Optional by action: preserved top nodes returned by the source
+    implementation.'
+  manual_review_top_nodes: 'Optional by action: manual review top nodes returned by
+    the source implementation.'
+  result: Underlying operation result; its internal fields belong to that operation.
+  rolled_back: 'Optional by action: rolled back returned by the source implementation.'
+  summary: Optional framework operation summary; present when the adapter supplies
+    one.
+  items: Optional framework item records; present when the adapter supplies them.
 statuses:
 - SUCCESS
 - PARTIAL
@@ -61,8 +88,10 @@ help:
   summary: 消费 maya_check_asset_hierarchy 的检查结果，按检查结果把旧绑定几何根归一化为 |Group|Geometry|RIG_geo，并只删除安全空顶层节点。
   usage: execute_api(maya.rig.maya_fix_asset_hierarchy, params={...})
   scenario: 消费 maya_check_asset_hierarchy 的检查结果，按检查结果把旧绑定几何根归一化为 |Group|Geometry|RIG_geo，并只删除安全空顶层节点。
-  safety: read API 只读；write/destructive API 仅写入任务沙盒。
+  safety: 具体副作用见本契约 effects；运行上下文、路径与恢复边界见 docs/architecture/pipeline_runtime_contract_v1.md。
 tests:
   contract: api.registry loads this manifest and api.runner validates its receipt.
   smoke: 代表性 workflow 统一验收。
+implementation: {status: implemented}
+verification: {level: contract_tested, evidence: [tests/test_maya_rigging_contracts.py]}
 handler: cgi_pipeline.capabilities.maya.rig.maya_fix_asset_hierarchy.adapter:execute

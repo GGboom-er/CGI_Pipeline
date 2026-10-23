@@ -17,6 +17,7 @@ import time
 import datetime
 
 from cgi_pipeline.core.receipt import make_receipt
+from cgi_pipeline.core.run_archive import create_run_dir
 from cgi_pipeline.paths import REPOSITORY_ROOT
 
 
@@ -79,17 +80,35 @@ def _check_mesh_count(cache_root):
     return len(visible)
 
 
-def _generate_report(results, project, category, asset_name, stage, elapsed):
+def _safe_report_part(value):
+    text = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', str(value or 'unknown').strip())
+    return text or 'unknown'
+
+
+def _resolve_report_dir(payload):
+    run_dir = payload.get('run_dir') or (payload.get('extra_params') or {}).get('run_dir')
+    if not run_dir and payload.get('task_id'):
+        run_dir = create_run_dir(
+            payload['task_id'],
+            payload.get('project') or 'default',
+            payload.get('asset_name') or 'untitled',
+        )
+    return os.path.join(str(run_dir), '.info') if run_dir else os.path.join(str(REPOSITORY_ROOT), 'reports')
+
+
+def _generate_report(results, project, category, asset_name, stage, elapsed, report_dir):
     """生成 QC 报告。"""
     now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     passed = results['passed']
     icon = '✅ PASS' if passed else '❌ FAIL'
 
-    report_dir = os.path.join(str(REPOSITORY_ROOT), 'reports')
     os.makedirs(report_dir, exist_ok=True)
     report_path = os.path.join(
         report_dir,
-        f'qc_{project}_{category}_{asset_name}_{stage}.md'
+        'qc_{}_{}_{}_{}.md'.format(*(
+            _safe_report_part(value)
+            for value in (project, category, asset_name, stage)
+        )),
     )
 
     lines = [
@@ -207,8 +226,9 @@ def execute(payload: dict) -> dict:
 
     # ── 生成报告 ──
     report_path, md_content = _generate_report(
-        results, project or '?', category or '?',
-        asset_name or '?', stage or '?', elapsed,
+        results, project or 'unknown', category or 'unknown',
+        asset_name or 'unknown', stage or 'unknown', elapsed,
+        _resolve_report_dir(payload),
     )
 
     status = 'SUCCESS' if all_passed else 'AUDIT_FAILED'

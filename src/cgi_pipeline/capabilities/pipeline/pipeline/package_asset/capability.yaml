@@ -1,0 +1,48 @@
+api_id: pipeline.pipeline.package_asset
+version: 1.0.0
+name: 单资产Maya与贴图交付包
+executor: pipeline
+capability: pipeline.file
+operation: package
+stages: [pipeline]
+targets: [file, texture]
+access: write
+effects:
+  file_read: Reads one saved Maya scene, schema-v3 material references, and collected textures in the task workspace.
+  file_write: Writes one new ZIP containing only that Maya scene and its referenced textures; never includes reports, JSON, ABC, or README.
+execution_modes: [background]
+surfaces: [python, service]
+modes: [apply]
+inputs:
+  scene_path: {type: string, required: true, description: 当前任务已保存的ma或mb绝对路径。}
+  materials_path: {type: string, required: true, description: package_textures输出的schema-v3 JSON，只用于确定纹理成员，不放入包。}
+  output_path: {type: string, required: true, description: 当前任务工作区内未存在的ZIP绝对路径。}
+preconditions:
+- context.asset_name为本次唯一资产名，scene与materials属于当前任务工作区。
+- 纹理已收集在当前工作区sourceimages，只读取JSON实际引用，不扫目录。
+- 本入口不改Maya文件或贴图路径，不执行DCC；输入文件只读，目标不可覆盖。
+idempotent: false
+outputs:
+  output_path: 本资产ZIP绝对路径。
+  result: 资产名、Maya数量、贴图数量、总文件数、字节数和包内成员。
+  summary: 打包结果摘要。
+statuses: [SUCCESS, ERROR, BLOCKED]
+errors:
+  API_OPERATION_ERROR: 缺文件、输入不合规或已存在目标；不声称成功。
+recovery:
+- 已返回成功就交付结果，不重复打包。
+- 失败先看回执；已有目标改用新的明确输出路径，未知状态先恢复原task_id。
+help:
+  summary: 将一份已保存Maya与该资产材质JSON实际引用的贴图打成独立ZIP；包内只有Maya和贴图，框架中间物不进入交付。
+  usage: execute_api(pipeline.pipeline.package_asset, params={scene_path, materials_path, output_path})
+  scenario: 原blender_to_maya_full_build开启pack_textures后，在save之后由完整工作流调用。
+  safety: 仅当前任务工作区，输入只读，不覆盖已有ZIP，不执行DCC，不作额外资产质量判断。
+tests:
+  contract: tests/test_package_asset.py
+  smoke: 通过真实公开入口对既有Maya结果打包，核对回执。
+implementation:
+  status: implemented
+verification:
+  level: live_tested
+  evidence: [tests/test_package_asset.py, audit/api-f2dd55375c0d.json, audit/api-9114e1a4ef2f.json, audit/api-8c1c56248ad5.json]
+handler: cgi_pipeline.capabilities.pipeline.pipeline.package_asset.adapter:execute

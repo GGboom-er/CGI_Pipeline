@@ -9,8 +9,29 @@ import glob as globmod
 import maya.cmds as cmds
 
 from cgi_pipeline.core.receipt import make_receipt, make_item
+from cgi_pipeline.core.run_archive import create_run_dir
 
 _UDIM_PATTERN = re.compile(r'<udim>|\d{4}', re.IGNORECASE)
+
+
+def _resolve_report_path(payload):
+    run_dir = payload.get('run_dir') or (payload.get('extra_params') or {}).get('run_dir')
+    if not run_dir and payload.get('task_id'):
+        run_dir = create_run_dir(
+            payload['task_id'],
+            payload.get('project') or 'default',
+            payload.get('asset_name') or 'untitled',
+        )
+    return os.path.join(str(run_dir), '.info', 'texture_report.md') if run_dir else ''
+
+
+def _write_report(path, lines):
+    if not path:
+        return ''
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, 'w', encoding='utf-8') as stream:
+        stream.write('\n'.join(lines))
+    return path
 
 
 def _resolve_udim_exists(tex_path):
@@ -37,10 +58,17 @@ def execute(payload: dict) -> dict:
 
     file_nodes = cmds.ls(type='file') or []
     if not file_nodes:
+        report_path = _write_report(
+            _resolve_report_path(payload),
+            ['# Maya 贴图检查', '', '场景中无 file 节点。'],
+        )
+        output = {'result': {'total': 0, 'missing': 0, 'textures': []}}
+        if report_path:
+            output['report_path'] = report_path
         return make_receipt('maya_check_textures', 'SUCCESS', t0,
                             summary_input=scene_name,
                             summary_action='场景中无 file 节点',
-                            summary_count=0, summary_label='贴图')
+                            summary_count=0, summary_label='贴图', output=output)
 
     # 收集所有贴图信息
     all_textures = {}  # {dir: [(filename, file_node, exists)]}
@@ -101,6 +129,21 @@ def execute(payload: dict) -> dict:
                               f'共 {total_count} 张, 缺失 {len(missing)} 张'))
 
     status_msg = f'{total_count} 张贴图全部存在' if not missing else f'{len(missing)} 张贴图缺失'
+    report_path = _write_report(_resolve_report_path(payload), report_lines)
+    texture_rows = [
+        {'directory': tex_dir, 'name': tex_name, 'node': fn, 'exists': exists}
+        for tex_dir, entries in sorted(all_textures.items())
+        for tex_name, fn, exists in entries
+    ]
+    output = {
+        'result': {
+            'total': total_count,
+            'missing': len(missing),
+            'textures': texture_rows,
+        },
+    }
+    if report_path:
+        output['report_path'] = report_path
 
     receipt = make_receipt(
         api_id='maya_check_textures',
@@ -111,6 +154,6 @@ def execute(payload: dict) -> dict:
         summary_count=len(missing),
         summary_label='缺失',
         items=items,
+        output=output,
     )
-    receipt['_texture_report'] = '\n'.join(report_lines)
     return receipt

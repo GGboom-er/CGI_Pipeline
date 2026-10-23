@@ -1,0 +1,45 @@
+api_id: maya.rig.ik.manage
+version: 1.0.1
+executor: maya
+capability: rigging.ik
+operation: manage
+stages: [rigging]
+targets: [ik_handle, joint]
+access: destructive
+effects:
+  scene_write: 'action=create: Creates one IK handle and effector. action=set_blend: Sets one IK blend attribute. action=delete:
+    Deletes one IK handle.'
+execution_modes: [local, foreground, background]
+surfaces: [maya, service]
+modes: [apply]
+inputs:
+  action: {type: string, required: true, choices: [create, set_blend, delete], description: Canonical IK action.}
+  start_joint: {type: string, description: Start joint for create.}
+  end_joint: {type: string, description: Descendant end joint for create.}
+  solver: {type: string, default: ikRPsolver, choices: [ikRPsolver, ikSCsolver], description: Supported native IK solver.}
+  name: {type: string, description: Optional unique IK handle leaf name.}
+  ik_handle: {type: string, description: Existing IK handle for edit or delete.}
+  blend: {type: number, default: 1.0, description: IK blend from 0 to 1.}
+  attribute: {type: string, default: ikBlend, description: Existing exact blend attribute leaf name.}
+preconditions: [Start and end must be distinct joints in one descendant chain., Existing handles must resolve to node type ikHandle.]
+idempotent: false
+outputs:
+  action: Executed action.
+  handle: Created IK handle.
+  effector: Created IK effector.
+  start_joint: 'Optional by action: start joint returned by the source implementation.'
+  end_joint: 'Optional by action: end joint returned by the source implementation.'
+  solver: 'Optional by action: solver returned by the source implementation.'
+  ik_handle: 'Optional by action: ik handle returned by the source implementation.'
+  attribute: 'Optional by action: attribute returned by the source implementation.'
+  before: 'Optional by action: before returned by the source implementation.'
+  after: Blend readback.
+  deleted: Deleted handle path.
+statuses: [SUCCESS, ERROR]
+errors: {MAYA_RIG_IK_MANAGE_FAILED: "Validation, native mutation, type readback, or rollback failed."}
+recovery: [Use a valid joint chain or existing ikHandle and retry.]
+help: {summary: Create, blend, or delete native Maya RP and SC IK handles., usage: "execute_api(maya.rig.ik.manage, params={action, start_joint, end_joint})", scenario: Build reusable IK relationships without selection state., safety: Joint ancestry and node types are checked before success.}
+tests: {contract: tests/test_maya_rig_p1_batch3.py, smoke: Maya 2025.3 foreground create/blend/delete then undo.}
+implementation: {status: implemented}
+verification: {level: contract_tested, evidence: [tests/test_maya_rig_p1_batch3.py]}
+handler: cgi_pipeline.capabilities.maya.rig.rig_relationship_ops:manage_ik

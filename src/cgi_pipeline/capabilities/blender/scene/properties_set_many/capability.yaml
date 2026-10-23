@@ -1,0 +1,33 @@
+api_id: blender.scene.properties.set_many
+version: 1.0.1
+name: properties_set_many
+executor: blender
+capability: scene.properties
+operation: set
+stages: [modeling, rigging, animation]
+targets: [object_property]
+access: write
+effects:
+  scene_write: Writes bounded RNA or custom object properties.
+execution_modes: [local, foreground, background]
+surfaces: [blender, service]
+modes: [apply]
+inputs:
+  items: {type: array, required: true, description: "[{node, property, value}]; custom properties use custom:name."}
+  max_items: {type: integer, default: 500, description: Maximum properties; hard limit 2000.}
+preconditions: [Objects exist and RNA properties are writable.]
+idempotent: true
+outputs:
+  items: Per-property before and after values.
+  count: Number of returned or processed items for this action.
+  succeeded: Number of successful per-item operations.
+  failed: Number of failed per-item operations.
+  truncated: Whether the operation reached its configured result or input bound.
+statuses: [SUCCESS, PARTIAL, ERROR]
+errors: {BLENDER_SCENE_CORE_OPERATION_FAILED: Invalid object property value or context.}
+recovery: [Undo the host transaction or restore before values.]
+help: {summary: Set many Blender object properties., usage: "execute_api(blender.scene.properties.set_many, params={items})", scenario: Change RNA or custom properties in one call., safety: Writes the current scene.}
+tests: {contract: tests/test_blender_scene_core_apis.py}
+handler: cgi_pipeline.capabilities.blender.scene_core:set_properties_many
+implementation: {status: implemented}
+verification: {level: contract_tested, evidence: [tests/test_blender_scene_core_apis.py]}

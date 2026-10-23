@@ -321,6 +321,21 @@ def execute(payload: dict) -> dict:
 
     params = payload.get('parameters', payload) if 'parameters' in payload else payload
     mode = params.get('mode', 'check')
+    if params.get('profile', 'master') == 'proxy_authoring':
+        # Runtime Proxy does not deliver ng authoring layers. This narrow profile
+        # skips Master-only diagnostics and general scene cleanup.
+        nodes = []
+        if cmds.pluginInfo('ngSkinTools2', query=True, loaded=True):
+            from ngSkinTools2.operations import removeLayerData
+            nodes = list(removeLayerData.list_custom_nodes())
+            if mode == 'fix' and nodes:
+                with _undo_chunk('proxy_authoring_cleanup'):
+                    removeLayerData.remove_custom_nodes(interactive=False)
+        return make_receipt('maya.asset.maya_master_cleanup', 'SUCCESS', start_time,
+            input=params, output={'profile': 'proxy_authoring', 'nodes': nodes,
+                                  'deleted_count': len(nodes) if mode == 'fix' else 0},
+            summary_action='Clean Proxy authoring data' if mode == 'fix' else 'Inspect Proxy authoring data',
+            summary_count=len(nodes), summary_label='ng data nodes')
 
     # 场景来源信息
     source_path = payload.get('source_path', '')

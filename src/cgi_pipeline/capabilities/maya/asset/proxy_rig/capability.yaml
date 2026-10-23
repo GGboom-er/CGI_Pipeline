@@ -1,0 +1,110 @@
+api_id: maya.asset.proxy_rig
+version: 1.11.0
+name: Rig Master生成Proxy Rig
+executor: maya
+capability: rigging.proxy
+operation: build
+stages: [rigging]
+targets: [rig, mesh, skin_weights, scene_file, report]
+access: destructive
+effects:
+  scene_read: Resolve configured absolute rig cache roots through the shared asset_info_collector; inventory cache outputs and only lightly audit outside-cache dependency candidates/protected helpers.
+  scene_write: Prepare can explicitly remove local FitSkeleton construction subtrees and unused meshes, simplify authorized zero-contribution nodes, and batch-edit texture directories or visibility drivers. Apply performs plan-driven reduction, native skin and expression restoration, source retention and verified replacement. Finalize removes disposable originals and optionally applies controller tags/GPU settings before save. Apply does not delete joints/controllers. Generated outputs disable inherited smooth preview; sources retain display settings.
+  file_read: Reads an optional managed JSON plan and records supplied Master provenance.
+  file_write: Every mode writes the full inventory artifact. Apply saves an independently versioned Proxy scene via save_scene and writes its build report.
+  host_state_write: Apply changes the sandbox scene filename after successful construction; selection is restored inside the construction transaction. No host restart, scene open or camera/display setup.
+execution_modes: [local, background, foreground]
+surfaces: [maya, service]
+modes: [inspect, preview, apply]
+mode_binding:
+  input: mode
+  cases:
+  - {value: inspect, mode: inspect}
+  - {value: preview, mode: preview}
+  - {value: apply, mode: apply}
+  - {value: prepare, mode: apply}
+  - {value: finalize_preview, mode: preview}
+  - {value: finalize, mode: apply}
+inputs:
+  preparation: {type: object, default: {}, description: "prepare mode: fit_skeleton=true deletes existing local FitSkeleton subtrees regardless of hierarchy or namespace. Explicit UUID arrays constant_subtrees preserve undriven scalar destinations; discard_meshes require no effective consumers. zero_weight_nodes handles undriven exact-zero *_W_* authoring coefficients into blendWeighted only; visibility_values contains explicit editable numeric driver plugs. textures_1k checks each texMaster_1k directory once and bulk replaces texMaster path components without checking individual filenames. One native undo transaction; no save. Never prune currently-zero animated BS weights."}
+  mode: {type: string, default: inspect, choices: [prepare, inspect, preview, apply, finalize_preview, finalize], description: "Prepare performs explicit Proxy-only scene cleanup in one reversible transaction without saving; inspect indexes source outputs; preview validates a plan; apply builds a candidate. Finalize checks the exact build manifest, removes disposable originals, preserves live binding inputs and saves a new Proxy version. finalize_preview only reads."}
+  build_path: {type: string, default: '', description: "Managed original build JSON required for finalize/finalize_preview. The current scene must match its output_path; exact original UUIDs and container children are checked, never wildcard-deleted."}
+  controller_options: {type: object, default: {}, description: "Optional exact maya.rig.controller_tags parameters for finalize. Shared implementation runs after cleanup verification as the last scene operation before save; host settings are restored on failure. Agent inspects identities first. No executable callbacks in output."}
+  character: {type: string, default: '', description: "Canonical character name, preserving source capitalization, used for stable output mesh naming."}
+  plan: {type: object, default: {}, description: "AI decisions: policy_version, scene_path/fingerprint, character, optional cache UUID scope, reduce_entries, merge_groups, region_entries [{source_uuid,reason,regions:[{name,faces,keep_face_ratio,preserve_border,output_name}],quality:{max_error,max_retries,retry_factor,on_exceeded,samples_per_shell}}], keep/protect, optional discard [{uuid,reason,evidence}], cleanup_unused_materials, retain_sources, source_master and weight options. Shared regional outputs combine compatible static source groups before one final skin. Optional sampled per-source-shell shape feedback precedes binding and rebuilds failed groups only; thresholds are caller decisions, not universal acceptance. Multi-source BS/component-set assembly is refused. Face partitions are exhaustive and nonoverlapping. Sources are pruned before reduction and combine; originals remain hidden for revision. Schema/validation live in proxy_rig.plan; no executable code."}
+  plan_path: {type: string, default: '', description: "Alternative managed projects/runs JSON plan path; cannot be combined with plan."}
+  output_path: {type: string, default: '', description: "Preview/apply require an explicit managed filename containing character and _proxyRig_vNNN. Proxy version is independently selected; save_scene prevents overwrite and increments only that Proxy stem."}
+  # plan.retain_sources defaults true: candidate originals remain in hidden
+  # identity-transform containers under their original parents until approval.
+preconditions:
+- "Finalize requires explicit user authorization to clear candidate originals, an exact candidate build_path and a new output_path. It checks both child shapes and source-history deformers/combinationShape consumers, preserves effective binding inputs under hidden cgi_proxy_binding_inputs, removes empty recorded backup containers, and guards final surfaces plus native deformation input connections. It writes a finalized build artifact without rerunning reduction or pruning weights."
+- "Optional plan.geometry_search maps ordinary final output names to search objects; region_entries[].regions[].search uses the same internal grouping/search on reducible faces. Each requires score_band=[low,high] and radius in current scene units; optional initial_reduction=90, max_evaluations=5 (1..8), samples_per_shell=512 (32..4096), minimal_faces=12. Source construction data is cached once per operation. UV borders remain protected for connected or unknown materials; known constant surface shaders relax only that constraint. UV sets/interpolation and source correspondence remain. Groups record actual constraints, attempts and stop reason. Criteria are caller-chosen, not universal deformation guarantees."
+- Agent resolves the character's formal Master, stages a sandbox and observes category representatives through existing CGI observation tools before supplying a reduction plan. This API does not replace the open-ended visual decision with a numeric threshold.
+- Current scene and every output/plan artifact must stay under managed projects/runs. Formal source files are provenance only and are never opened or modified by this operation.
+- The plan's structural identity must match the current scene. Every scoped cache output requires a processing, keep, protect or evidence-backed discard decision; hidden meshes are not assumed unused.
+- Optimization targets come exclusively from configured stages.rig.geom_roots through the shared Maya cache/output resolver. Absolute candidate ambiguity is refused, not replaced by a global leaf-name search. Cache-external meshes are only dependency-audited and never reduced or merged.
+- Explicit discard requires an indexed leaf-output UUID, reason and evidence, with fresh checks for outgoing/message consumers, transform attachments, shared/non-skin deformation and script-name dependencies. Incoming local/ancestor display switching alone does not make a dispensable external proxy a rig consumer. All child shapes including Orig are checked before deletion. Redundancy is not inferred from visibility or location.
+- Optional cleanup_unused_materials calls Autodesk MLdeleteUnused only after geometry passes. Utility/math/imagePlane nodes, assigned shading groups and rig/script-connected rendering nodes plus their native-history rendering networks are protected; temporary node locks are restored. Every edge touching the protected rendering nodes is guarded, including an endpoint previously classified as a cleanup candidate. Protected UUID or critical-connection loss rolls back the entire build. This phase cleans isolated unused materials/textures, not arbitrary utility nodes.
+- Ordinary reduce/combine sources require one unreferenced non-instanced skin-only output without child transforms or active downstream/name consumers. Explicit regional sources retain their original dependencies and support one native skin plus one local pre-skin blendShape, original-vertex static delta remapping and intact indexed live-head targets. Unsupported deformation spaces or correspondence are refused.
+- Combine requires matching parent, local/ancestor/shape display switching, whole-object user sets/layers and skin method. The original visibility inputs and common ancestor switching are retained; topology-dependent component sets require protection.
+- Native viewport isolation objectSets are excluded from business membership/fingerprints by exact getPanel/isolateSelect ownership queries, cached once per inventory. Similar-looking business set names are not excluded.
+- Maya undo must be enabled. Geometry core and DAIR-inspired mature solver dependencies must pass preflight before any scene write. ng_proportional remains a separately callable weight API, outside this transaction.
+idempotent: false
+outputs:
+  policy_version: Stable decision/process policy version.
+  scene_path: Current inspected sandbox scene.
+  scene_fingerprint: Structural source identity including pose bounds, display and binding metadata; not a full weight-content hash.
+  inventory_path: Full output-mesh inventory artifact; only class representatives and outliers are returned inline.
+  categories: Per-category counts, representative UUIDs and largest outliers for bounded AI visual review.
+  mesh_count: Number of non-intermediate cache output shapes indexed, including hidden cache outputs.
+  faces: Cache output face total before construction.
+  cache_root: Unique configured absolute rig cache root resolved by the shared asset collector.
+  cache_candidates: Configured absolute root candidates used for scope resolution.
+  outside_cache_summary: Lightweight external candidate/protected counts and bounded examples, without geometry optimization or orig-coordinate scanning.
+  fingerprint_scope: Exact limits of the structural freshness check.
+  policy: Shallow-first classification and explicit protection policy.
+  reason: Missing-plan attention detail, when applicable.
+  plan_valid: True after all preview preflight checks.
+  full_scene_coverage: Whether the explicit plan accounts for all cache target outputs; keep/protect/discard entries count as accounted outputs. Outside-cache helpers are retained unless explicitly discarded.
+  unscoped_meshes: Outputs outside a bounded plan; nonzero produces PARTIAL after apply.
+  planned_output: Independently selected requested Proxy filename.
+  reduce_count: Number of class-driven reduction entries.
+  merge_count: Number of compatible merge groups.
+  protected_count: Number of explicit protection decisions.
+  kept_count: Number of explicit no-reduction decisions.
+  discard_count: Explicit evidence-backed discard decisions validated before construction.
+  discarded_count: Actual discarded output count after all generated results passed.
+  cleanup_unused_materials: Whether the plan explicitly enables guarded native material cleanup.
+  material_cleanup: Native cleanup count, protection guard status and material/texture-only limits; full deleted identities are in the build report.
+  output_path: Actual version-safe saved Proxy scene path.
+  report_path: Complete plan, provenance, output checks, weight results, coverage and limitations artifact.
+  before: Cache target mesh and face counts before construction.
+  after: Cache target mesh and face counts after construction.
+  outputs: Final result identities and structural history/UV-set/material/skin/display checks; lossy reduction does not require identical topology or UV coordinates.
+  changed_sources: Number of replaced source outputs.
+  acceptance: Structural checks only; visual, motion and performance acceptance remain separate.
+  timing_seconds: Non-overlapping execution phases. source_processing_times is nested within reduce; regional_weight_seconds is nested within regional; final weight detail is nested within weights. Do not add nested values to their parent phases. Report serialization timing is returned after report writing.
+  source_processing_times: Source-array preparation, static geometry, join and final binding durations within the ordinary reduce phase; total is their parent envelope.
+  construction_stats: Final skin-node and bounded weight-write counts for ordinary constructed outputs, excluding separately reported regional outputs.
+  timing_totals_seconds: Parent totals for the API and construction transaction; do not add these to the phase values.
+statuses: [SUCCESS, PARTIAL, ERROR, BLOCKED, NEEDS_ATTENTION, TIMEOUT, CANCELLED]
+errors:
+  PROXY_PLAN_PRECONDITION: Invalid or stale plan, unsupported binding/dependency, naming, output or coverage.
+  PROXY_DEPENDENCY_REQUIRED: A declared geometry or solver dependency is unavailable in the host.
+  PROXY_BUILD_FAILED: Construction/save failed; read explicit undo recovery evidence before retry.
+recovery:
+- Inspect the existing result/error and current Maya scene before replaying any apply request.
+- A scoped PARTIAL is a saved bounded experiment, never a whole-character Proxy acceptance.
+help:
+  summary: Inspect category representatives, validate an explicit AI scene plan, then construct and save a deterministic sandbox Proxy Rig using reusable geometry and weight cores.
+  usage: "execute_api(maya.asset.proxy_rig, execution_mode=foreground, params={mode: inspect, character: pengMoWang}); observe representatives; apply with a managed plan and independent output_path. Preview is optional for a separate plan review; apply always retains its own preflight."
+  scenario: "For an autonomous character request, load src/cgi_pipeline/capabilities/maya/asset/proxy_rig/README.md as the Agent work-method owner. Use current-source reasoning and the fixed review/report contract; structural success is not visual acceptance. Foreground uses existing execute_api transport; the generic pipeline workflow runtime does not advertise foreground support."
+  safety: Sources remain until all generated results pass; active or unknown rig dependencies are protected. Structural checks permit intended reduction loss and do not claim animation/performance acceptance.
+implementation: {status: implemented}
+verification:
+  level: contract_tested
+  evidence: [tests/test_proxy_rig_workflow.py, tests/test_proxy_rig_membership.py]
+tests:
+  contract: Pure plan coverage/freshness/compatibility checks, exact native viewport isolation-set filtering and the single canonical business-workflow owner/interface.
+  smoke: Foreground Maya full business-chain acceptance is recorded separately in the task sandbox.
+handler: cgi_pipeline.capabilities.maya.asset.proxy_rig.adapter:execute

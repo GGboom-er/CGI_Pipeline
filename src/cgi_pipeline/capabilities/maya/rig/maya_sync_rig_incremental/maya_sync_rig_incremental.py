@@ -22,6 +22,7 @@ import maya.cmds as cmds
 from maya.api import OpenMaya as om2
 
 from cgi_pipeline.core.receipt import make_receipt, make_item
+from cgi_pipeline.core.abc_reader import transform_normals_fv, validate_mesh_entry
 from cgi_pipeline.paths import REPOSITORY_ROOT
 from cgi_pipeline.capabilities.maya.rig.maya_sync_rig_incremental.sync_contract import (
     API_ID,
@@ -263,8 +264,8 @@ def _find_skin_cluster(dag_shape_or_transform):
             pass
     return None, None
 
-def _collect_rig_meshes(cache_group=None):
-    """采集已加 RIG_ 前缀的 rig mesh 信息，规则与 maya_build_asset_info 共用。"""
+def _collect_rig_scene_info(cache_group=None):
+    """采集已加 RIG_ 前缀的 rig 场景信息（含 meshes 与 nonrig_meshes）。"""
     from cgi_pipeline.hosts.maya.asset_info_collector import collect_scene_info
 
     rig_cache_group = cache_group or f"{RIG_PREFIX}cache"
@@ -272,7 +273,11 @@ def _collect_rig_meshes(cache_group=None):
         rig_cache_group,
         include_topology=True,
         precision=4,
-    ).get("meshes", {})
+    )
+
+def _collect_rig_meshes(cache_group=None):
+    """采集已加 RIG_ 前缀的 rig mesh 信息，规则与 maya_build_asset_info 共用。"""
+    return _collect_rig_scene_info(cache_group).get("meshes", {})
 
 def _get_target_name_and_parent(dag_tex):
     clean = dag_tex.replace("ABC|", "").lstrip("|")
@@ -287,7 +292,28 @@ def _get_target_name_and_parent(dag_tex):
         group_parts = group_parts[1:]
     return transform_name, group_parts
 
-def _ensure_hierarchy(group_parts):
+def _extract_relative_group_parts(group_parts):
+    """从 ABC group_parts 中剥离外层资产名和容器组（geo/cache/RIG_geo/Geometry/Group），只保留相对于几何根的子层级。"""
+    markers = ("RIG_geo", "cache", "geo", "Geometry")
+    for marker in markers:
+        if marker in group_parts:
+            idx = group_parts.index(marker)
+            return group_parts[idx + 1:]
+    if len(group_parts) > 1 and group_parts[0] in ("Group", "asset"):
+        return group_parts[1:]
+    return group_parts
+
+def _ensure_hierarchy(group_parts, cache_root=None):
+    if cache_root and cmds.objExists(cache_root):
+        rel_parts = _extract_relative_group_parts(group_parts)
+        current = (cmds.ls(cache_root, long=True, type="transform") or [cache_root])[0]
+        for grp in rel_parts:
+            target = f"{current}|{grp}"
+            if not cmds.objExists(target):
+                cmds.group(em=True, name=grp, parent=current)
+            current = (cmds.ls(target, long=True, type="transform") or [target])[0]
+        return current
+
     current = ""
     for i, grp in enumerate(group_parts):
         if grp == "Group":
@@ -492,7 +518,7 @@ def _relocate_rig_mesh(rig_dag, new_name, target_parent, rig_prefix):
         if target_parent and cmds.objExists(target_parent):
             parent_now = cmds.listRelatives(transform, parent=True, fullPath=True)
             if not parent_now or parent_now[0] != target_parent:
-                transform = cmds.parent(transform, target_parent)[0]
+                transform = cmds.parent(transform, target_parent, absolute=True)[0]
                 transform = cmds.ls(transform, long=True)[0]
     except Exception:
         return None
@@ -517,39 +543,39 @@ def _relocate_rig_mesh(rig_dag, new_name, target_parent, rig_prefix):
             except Exception:
                 pass
 
-    # 几何注入由 dispatch 调用统一 plug 写入路径完成。
-    # 本函数只做「搬运 + 改名」；ABC 全量注入(点+UV+法线)由 dispatch 调
-    # _clean_orig_upstream → _regularize_uvset_to_map1 → _inject_mesh_data_via_plug 完成。
+    # 本函数只做搬运与改名；注入函数先准备数据，再清上游、规整UV与写入。
     return transform
 
 
-def _clear_pnts_tweak(shape):
-    """清一个 mesh shape 的 .pnts 顶点位移(tweak)残留，一次性归零。
+def _validate_replacement_tweaks(shape):
+    """Refuse driven pnts and preserve authored visible-shape offsets."""
+    incoming = cmds.listConnections(shape + '.pnts', source=True, destination=False, plugs=True) or []
+    if incoming:
+        raise ValueError(f'{shape}.pnts is driven; replacement will not disconnect authored inputs: {incoming}')
+    is_orig = bool(cmds.getAttr(shape + '.intermediateObject'))
+    if not is_orig:
+        values = cmds.getAttr(shape + '.pnts') or []
+        if any(component != 0.0 for value in values for component in value):
+            raise ValueError(f'{shape}: visible-shape authored pnts cannot be cleared by Orig replacement')
+    return is_orig
 
-    改的是节点属性值、非 poly 编辑，不生 polyModifier 历史。
-    一次性范围 setAttr(.pnts[0:n-1]) 比逐索引快约 9x（实测 3542 点 0.1s vs 0.9s），
-    大件(万级点)差距更大；点数用 numVertices 定，覆盖全部顶点（不依赖已分配的稀疏索引）。
-    """
-    try:
-        sel = om2.MSelectionList()
-        sel.add(shape)
-        n = om2.MFnMesh(sel.getDagPath(0)).numVertices
-    except Exception:
-        n = 0
+
+def _clear_pnts_tweak(shape):
+    """Strictly clear/read back only the Orig whose full base was just replaced."""
+    if not _validate_replacement_tweaks(shape):
+        raise ValueError(f'{shape}: pnts cleanup is restricted to the injected intermediate Orig')
+    sel = om2.MSelectionList()
+    sel.add(shape)
+    n = om2.MFnMesh(sel.getDagPath(0)).numVertices
     if n <= 0:
-        return
-    try:
-        cmds.setAttr("{}.pnts[0:{}]".format(shape, n - 1),
-                     *([0.0, 0.0, 0.0] * n), type="double3")
-        return
-    except Exception:
-        pass
-    # 退化：一次性失败时逐索引兜底
-    try:
-        for i in (cmds.getAttr(shape + ".pnts", multiIndices=True) or []):
-            cmds.setAttr("{}.pnts[{}]".format(shape, i), 0.0, 0.0, 0.0, type="double3")
-    except Exception:
-        pass
+        raise RuntimeError(f'{shape}: injected Orig has no vertices for pnts cleanup')
+    attribute = f'{shape}.pnts[0:{n - 1}]'
+    cmds.setAttr(attribute, *([0.0, 0.0, 0.0] * n), type='double3')
+    values = cmds.getAttr(attribute) or []
+    if len(values) != n or any(len(value) != 3 or any(component != 0.0 for component in value)
+                               for value in values):
+        raise RuntimeError(f'{shape}: injected Orig pnts did not read back as {n} zero offsets')
+    return n
 
 
 # ── 旧注入函数已废弃删除（2026-07-10 重构）──
@@ -558,45 +584,78 @@ def _clear_pnts_tweak(shape):
 #   UV 沙盒两趟。统一由 _inject_mesh_data_via_plug(点+UV+法线一次写 cachedInMesh) 替代。
 
 
-def _clean_orig_upstream(orig_shape):
-    """删除 orig 的上游构造历史(polySoftEdge / 上游 mesh 等)，使 orig 成无输入干净头节点。
+def _orig_upstream_cleanup_plan(orig_shape):
+    """Validate exclusive geometry ownership before deleting any construction node."""
+    def unique_node(node):
+        matches = cmds.ls(node, long=True, allPaths=True) or []
+        if len(matches) != 1:
+            raise ValueError(f'{orig_shape}: history node is missing or ambiguous: {node}')
+        if cmds.nodeType(matches[0]) == 'mesh' and len(cmds.listRelatives(
+                matches[0], allParents=True, fullPath=True) or []) > 1:
+            raise ValueError(f'{orig_shape}: shared instanced geometry: {node}')
+        return matches[0]
 
-    ⚠ 禁用 cmds.delete(ch=True)：实测它会连下游 skinCluster/blendShape 一起删（破坏绑定）。
-    变形器消费 orig.outMesh(下游)，不在 orig 的上游 history 内；listHistory(orig) 只回上游，
-    故删上游构造节点安全、不碰变形器。删完 orig.inMesh 应为空，cachedInMesh 才写得住。
-    返回被删节点短名列表。
-    """
-    incoming = cmds.listConnections(orig_shape + ".inMesh", s=True, d=False) or []
+    orig_long = unique_node(orig_shape)
+    incoming = cmds.listConnections(orig_shape + '.inMesh', source=True,
+                                    destination=False, plugs=True) or []
     if not incoming:
-        return []  # 已无上游，干净头节点(如 hair orig)
-    orig_long = (cmds.ls(orig_shape, long=True) or [orig_shape])[0]
-    deformer_types = {
-        "skinCluster", "blendShape", "cluster", "ffd", "wrap", "deltaMush",
-        "tweak", "softMod", "nonLinear", "sculpt", "wire", "groupParts", "groupId",
-    }
-    to_del = []
-    for n in (cmds.listHistory(orig_shape) or []):
-        nl = (cmds.ls(n, long=True) or [None])[0]
-        if not nl or nl == orig_long:
+        return []
+    nodes = []
+    for node in cmds.listHistory(orig_shape) or []:
+        node = unique_node(node)
+        if node == orig_long:
             continue
-        nt = cmds.nodeType(n)
-        if nt in deformer_types:
-            continue  # 保变形器
-        if nt.startswith("poly") or nt == "mesh":
-            to_del.append(n)
+        kind = cmds.nodeType(node)
+        if (kind.startswith('poly') or kind == 'mesh') and node not in nodes:
+            nodes.append(node)
+    allowed = set(nodes) | {orig_long}
+    for plug in incoming:
+        if unique_node(plug.split('.', 1)[0]) not in nodes:
+            raise ValueError(f'{orig_shape}: unsupported upstream input cannot be deleted: {plug}')
+    for node in nodes:
+        pairs = cmds.listConnections(node, source=False, destination=True,
+                                     connections=True, plugs=True) or []
+        if len(pairs) % 2:
+            raise RuntimeError(f'{orig_shape}: incomplete history connection pairs for {node}')
+        for output, destination in zip(pairs[::2], pairs[1::2]):
+            destination_node = unique_node(destination.split('.', 1)[0])
+            if destination_node in allowed:
+                continue
+            attribute = output.split('.', 1)[1]
+            destination_attribute = destination.split('.', 1)[1]
+            destination_kind = cmds.nodeType(destination_node)
+            # Deleting geometry also removes Maya's passive set membership.
+            # Every other outside dependency (including matrices/scalars and
+            # unknown/uncomputed data types) makes node ownership non-exclusive.
+            shading_membership = (
+                (attribute == 'instObjGroups' or attribute.startswith('instObjGroups['))
+                and destination_attribute.startswith('dagSetMembers[')
+                and destination_kind == 'shadingEngine'
+            )
+            passive_message = (
+                cmds.getAttr(output, type=True) == 'message'
+                and destination_kind in ('objectSet', 'shadingEngine', 'displayLayer')
+            )
+            if not (shading_membership or passive_message):
+                raise ValueError(f'{orig_shape}: shared history dependency: {output} -> {destination}')
+    return nodes
+
+
+def _clean_orig_upstream(orig_shape):
+    """Delete only preflighted, exclusively owned mesh construction history."""
+    nodes = _orig_upstream_cleanup_plan(orig_shape)
     deleted = []
-    for n in to_del:
-        if cmds.objExists(n):
-            try:
-                cmds.delete(n)
-                deleted.append(n.split("|")[-1])
-            except Exception as e:
-                cmds.warning("清上游节点失败 %s: %s" % (n, e))
+    for node in nodes:
+        if cmds.objExists(node):
+            cmds.delete(node)
+            deleted.append(node.split('|')[-1])
     return deleted
 
 
-def _regularize_uvset_to_map1(shape):
-    """把 shape 的 uvSet 规整成有且仅有一套、名为 map1（真 shape 上操作，须在注入写入之前）。
+def _regularize_uvset_to_map1(shape, keep=None):
+    """把真实 shape 的 uvSet 规整成单套 map1。
+
+    新建数据路径在注入前调用；copy 路径保留旧名字直到持久 UV 写完后再调用。
 
     data 块 MObject 上 renameUVSet 报 Object does not exist、不可用，故 uvSet 名字类操作走真 shape。
     删多余 set + 把留下的改名 map1；改名/删是节点属性操作，不生 polyModifier 历史。
@@ -604,55 +663,184 @@ def _regularize_uvset_to_map1(shape):
     sets = cmds.polyUVSet(shape, q=True, allUVSets=True) or []
     if not sets:
         return
-    keep = "map1" if "map1" in sets else sets[0]
+    if keep is None:
+        keep = "map1" if "map1" in sets else sets[0]
+    elif keep not in sets:
+        raise ValueError(f'{shape}: requested UV set to keep is missing: {keep}')
     for us in sets:
         if us != keep:
-            try:
-                cmds.polyUVSet(shape, delete=True, uvSet=us)
-            except Exception as e:
-                cmds.warning("删 uvSet %s 失败: %s" % (us, e))
+            cmds.polyUVSet(shape, delete=True, uvSet=us)
     if keep != "map1":
-        try:
-            cmds.polyUVSet(shape, rename=True, uvSet=keep, newUVSet="map1")
-        except Exception as e:
-            cmds.warning("uvSet 改名 map1 失败: %s" % e)
+        cmds.polyUVSet(shape, rename=True, uvSet=keep, newUVSet="map1")
 
 
-def _inject_mesh_data_via_plug(orig_shape, abc_entry):
+def _matrix_rows(matrix):
+    values = list(matrix)
+    return [values[start:start + 4] for start in range(0, 16, 4)]
+
+
+def _injection_local_space(shape, normals_fv, corner_count):
+    """Read target DAG space and validate it before any destructive operation."""
+    selection = om2.MSelectionList()
+    selection.add(shape)
+    dag = selection.getDagPath(0)
+    world_matrix = dag.inclusiveMatrix()
+    # Maya inverse() is not the singularity/reflection policy boundary.
+    transform_normals_fv([], _matrix_rows(world_matrix), corner_count)
+    inverse = world_matrix.inverse()
+    local_normals = transform_normals_fv(normals_fv, _matrix_rows(inverse), corner_count)
+    return dag, inverse, local_normals
+
+
+def _capture_edge_smoothing(mesh_fn, face_counts, face_indices):
+    """Only preserve edge state when full polygon/vertex correspondence is proven."""
+    old_counts, old_indices = mesh_fn.getVertices()
+    if list(old_counts) != list(face_counts) or list(old_indices) != list(face_indices):
+        return None
+    smoothing = {}
+    for edge_id in range(mesh_fn.numEdges):
+        endpoints = tuple(sorted(mesh_fn.getEdgeVertices(edge_id)))
+        if endpoints in smoothing:
+            raise ValueError('ambiguous duplicate edge endpoints cannot preserve smoothing')
+        smoothing[endpoints] = mesh_fn.isEdgeSmooth(edge_id)
+    return smoothing
+
+
+def _can_copy_target_mesh_data(mesh_fn, abc_entry):
+    """Use the same copy predicate in global preflight and direct injection."""
+    if abc_entry.get('normals_fv') or mesh_fn.numVertices != abc_entry['vertices']:
+        return False
+    if _capture_edge_smoothing(mesh_fn, abc_entry['face_counts'], abc_entry['face_indices']) is None:
+        return False
+    uv_sets = list(mesh_fn.getUVSetNames())
+    if not uv_sets:
+        raise ValueError('missing-normal target copy requires at least one target UV set')
+    return True
+
+
+def _preflight_sync_geometry(tex_info, report, cache_group, rig_prefix):
+    """Validate source and every planned injection target before unlocking/renaming."""
+    from cgi_pipeline.core.asset_info_schema import _normalize_dag
+    from cgi_pipeline.hosts.maya.asset_info_collector import get_deform_input, resolve_cache_group
+    source_meshes = tex_info.get('meshes', {})
+    if not source_meshes:
+        raise ValueError('source contains no complete meshes')
+    for path, mesh_data in source_meshes.items():
+        validate_mesh_entry(mesh_data)
+        if not mesh_data.get('vertices') or not mesh_data.get('face_counts'):
+            raise ValueError(f'{path}: complete polygon topology is required')
+    cache_node = resolve_cache_group(cache_group)
+    if not cache_node:
+        raise ValueError(f'场景中未找到 cache_group: {cache_group}')
+    scene_info = _collect_rig_scene_info(cache_group)
+    candidates = set(scene_info.get('meshes', {})) | set(scene_info.get('nonrig_meshes', []))
+    cache_parent, _, cache_leaf = cache_node.rpartition('|')
+    prefixed_leaf = cache_leaf if cache_leaf.startswith(rig_prefix) else rig_prefix + cache_leaf
+    # Mirror Phase 1 plus the collector's actual "RIG_" classification. With a
+    # custom prefix a zero-tweak static visible shape can reach direct injection.
+    excludes_static = 'RIG_' in cache_parent + '|' + prefixed_leaf
+
+    def normalized(path):
+        parts = [part[len(rig_prefix):] if part.startswith(rig_prefix) else part
+                 for part in path.strip('|').split('|')]
+        return _normalize_dag('|'.join(parts))
+
+    def resolve(path):
+        if path in candidates:
+            return path
+        matches = [candidate for candidate in candidates if normalized(candidate) == normalized(path)]
+        if len(matches) != 1:
+            raise ValueError(f'compare target is missing or ambiguous: {path}')
+        return matches[0]
+
+    for path in report['target_only_dags']:
+        resolve(path)
+    for group in report['pairing_groups']:
+        source_paths, target_paths = group['abc_dags'], group['rig_dags']
+        if any(path not in source_meshes for path in source_paths):
+            raise ValueError(f"compare source not found: group={group['group_id']}")
+        targets = [resolve(path) for path in target_paths]
+        if group['action'] not in ('IDENTICAL', 'ORIG_INJECT') or len(source_paths) != 1 or len(targets) != 1:
+            continue
+        target = targets[0]
+        transform = (cmds.listRelatives(target, parent=True, fullPath=True) or [None])[0]
+        if not transform:
+            raise ValueError(f'target mesh has no transform: {target}')
+        visible, orig = get_deform_input(transform)
+        entry = source_meshes[source_paths[0]]
+        if not orig:
+            old_entry = scene_info.get('meshes', {}).get(target, {})
+            if excludes_static or old_entry.get('vertices') != entry['vertices']:
+                continue  # Dispatch rebuilds nonrig or changed-vertex-count parts.
+            if not visible:
+                raise ValueError(f'target has no deformation input or visible shape: {target}')
+        injection_shape = orig or visible
+        _validate_replacement_tweaks(injection_shape)
+        _orig_upstream_cleanup_plan(injection_shape)
+        dag, _inverse, _normals = _injection_local_space(injection_shape, entry.get('normals_fv'), len(entry['face_indices']))
+        _can_copy_target_mesh_data(om2.MFnMesh(dag), entry)
+
+
+def _inject_mesh_data_via_plug(orig_shape, abc_entry, details=None):
     """把 ABC 完整几何(点+拓扑+UV+法线)一次写进 orig 的 base(cachedInMesh plug)。
 
     无临时 DAG mesh：内存 MFnMeshData 承载 ABC 几何 → 直接 setMObject 到 cachedInMesh。
-    - 点：abc_entry['vert_positions'](abc_reader 已乘 world_matrix，含 m→cm 缩放，世界坐标)
+    - 点：abc_entry['vert_positions'] 为世界坐标，写入前转换到目标真实 DAG 局部空间。
     - UV：abc_entry u/v/uv_indices（单套 map1）
-    - 法线：abc_entry['normals_fv'](facevarying，保硬边)；无则不设 → Maya 按拓扑重算
+    - 法线：来源 FV 为权威；缺失且同拓扑时复制目标原生几何数据，保留锁定法线与平滑信息。
     写 cachedInMesh 而非 inMesh：无历史 mesh 的 outMesh 从 cachedInMesh 读；写 inMesh 无连接不触发重算。
-    调用前提：orig 已无上游 inMesh 连接（见 _clean_orig_upstream），否则上游会覆盖本次写入。
+    数据预检/内存构建成功后才清上游并规整 UV，避免损坏输入先改场景。
     返回 True=已写。
     """
+    validate_mesh_entry(abc_entry)
     vp = abc_entry.get("vert_positions", [])
     fc = abc_entry.get("face_counts", [])
     fi = list(abc_entry.get("face_indices", []))
     if not vp or not fc or not fi:
-        return False
+        raise ValueError(f'{orig_shape}: injection requires complete polygon topology')
+    is_orig = _validate_replacement_tweaks(orig_shape)
+    _orig_upstream_cleanup_plan(orig_shape)
+    dag, inverse, nfv = _injection_local_space(
+        orig_shape, abc_entry.get('normals_fv'), len(fi)
+    )
+    # Maya merges/recalculates authored corner normals when edge smoothing is
+    # restored afterwards. Source normals win; missing normals with complete
+    # correspondence copy the old native mesh, including authored normal locks.
+    target_fn = om2.MFnMesh(dag)
+    copied_target_mesh_data = _can_copy_target_mesh_data(target_fn, abc_entry)
+    copy_uv_sets = list(target_fn.getUVSetNames()) if copied_target_mesh_data else []
+    # Maya's first/default set cannot be deleted. Keep it through the copy and
+    # persistent writes, then delete nondefault sets before renaming it to map1.
+    copy_uv_set = copy_uv_sets[0] if copied_target_mesh_data else None
+    smoothing_policy = ('authored_normals' if nfv else
+                        'target_smoothing' if copied_target_mesh_data else 'generated_normals')
     pts = om2.MPointArray()
     for i in range(0, len(vp), 3):
-        pts.append(om2.MPoint(vp[i], vp[i + 1], vp[i + 2]))
+        pts.append(om2.MPoint(vp[i], vp[i + 1], vp[i + 2]) * inverse)
     counts = om2.MIntArray(fc)
-    u = abc_entry.get("u_array", []); v = abc_entry.get("v_array", [])
-    uvi = list(abc_entry.get("uv_indices", []))
-    nfv = list(abc_entry.get("normals_fv", []))
+    u = abc_entry.get("u_array") or []; v = abc_entry.get("v_array") or []
+    uvi = list(abc_entry.get("uv_indices") or [])
 
     def _build_data_object():
         data_object = om2.MFnMeshData().create()
-        om2.MFnMesh().create(
-            pts, counts, om2.MIntArray(fi), parent=data_object
-        )
-        data_fn = om2.MFnMesh(data_object)
+        if copied_target_mesh_data:
+            copied = om2.MFnMesh().copy(target_fn.object(), parent=data_object)
+            data_fn = om2.MFnMesh(copied)
+            data_fn.setPoints(pts, om2.MSpace.kObject)
+            for uv_set in list(data_fn.getUVSetNames()):
+                data_fn.clearUVs(uv_set)
+                # clearUVs can invalidate the function set's cached reference.
+                data_fn = om2.MFnMesh(data_object)
+        else:
+            om2.MFnMesh().create(
+                pts, counts, om2.MIntArray(fi), parent=data_object
+            )
+            data_fn = om2.MFnMesh(data_object)
         if u and v and uvi:
-            setname = (data_fn.getUVSetNames() or ["map1"])[0]
+            setname = copy_uv_set if copied_target_mesh_data else (data_fn.getUVSetNames() or ['map1'])[0]
             data_fn.setUVs(om2.MFloatArray(u), om2.MFloatArray(v), setname)
             data_fn.assignUVs(counts, om2.MIntArray(uvi), setname)
-        if nfv and len(nfv) == len(fi) * 3:
+        if nfv:
             normals = om2.MVectorArray()
             for i in range(0, len(nfv), 3):
                 normals.append(om2.MVector(nfv[i], nfv[i + 1], nfv[i + 2]))
@@ -663,16 +851,22 @@ def _inject_mesh_data_via_plug(orig_shape, abc_entry):
                     face_ids.append(face_id)
                     vtx_ids.append(fi[idx])
                     idx += 1
-            try:
-                data_fn.setFaceVertexNormals(normals, face_ids, vtx_ids)
-            except Exception as exc:
-                cmds.warning("setFaceVertexNormals 失败，回退 Maya 重算: %s" % exc)
+            data_fn.setFaceVertexNormals(normals, face_ids, vtx_ids)
         return data_object
 
     data = _build_data_object()
+    # Copy the evaluated old Orig and prepare all data before upstream/UV edits.
+    _clean_orig_upstream(orig_shape)
+    if cmds.listConnections(orig_shape + '.inMesh', source=True, destination=False):
+        raise RuntimeError(f'{orig_shape}: orig still has an upstream inMesh connection')
+    if not copied_target_mesh_data:
+        _regularize_uvset_to_map1(orig_shape)
     sl = om2.MSelectionList(); sl.add(orig_shape)
     dep = om2.MFnDependencyNode(sl.getDependNode(0))
     dep.findPlug("cachedInMesh", False).setMObject(data)
+    # Source positions already contain the evaluated old offsets. Leaving pnts
+    # here would add those offsets a second time, even when a default BS hides it.
+    cleared_orig_vertices = _clear_pnts_tweak(orig_shape) if is_orig else 0
     cmds.getAttr(orig_shape + ".boundingBoxMin")
 
     # ── UV 必须直写 orig 的持久属性，不能只靠 cachedInMesh ──
@@ -683,15 +877,26 @@ def _inject_mesh_data_via_plug(orig_shape, abc_entry):
     # 修法：点/法线走上面 cachedInMesh；UV 在 cachedInMesh 写完、拓扑就位后，
     # 用 setUVs+assignUVs 直写 orig DAG shape 的持久属性。前提同上：orig 无上游 inMesh。
     # 两条都是 OpenMaya 底层直写、均不建 history。
+    # Replace persistent UV storage in every branch. setUVs alone can retain an
+    # old allocation and lose newly referenced UVs on save/reopen; absent source
+    # UVs must also remove old assignments. Keep copied set names until the
+    # existing final normalization, and refresh the function set after each clear.
+    ofn = om2.MFnMesh(sl.getDagPath(0))
+    for uv_set in list(ofn.getUVSetNames()):
+        ofn.clearUVs(uv_set)
+        ofn = om2.MFnMesh(sl.getDagPath(0))
+    oset = copy_uv_set if copied_target_mesh_data else (ofn.getUVSetNames() or ['map1'])[0]
     if u and v and uvi:
-        try:
-            dag = sl.getDagPath(0); dag.extendToShape()
-            ofn = om2.MFnMesh(dag)
-            oset = (ofn.getUVSetNames() or ["map1"])[0]
-            ofn.setUVs(om2.MFloatArray(u), om2.MFloatArray(v), oset)
-            ofn.assignUVs(counts, om2.MIntArray(uvi), oset)
-        except Exception as e:
-            cmds.warning("UV 直写 orig 持久属性失败: %s" % e)
+        ofn.setUVs(om2.MFloatArray(u), om2.MFloatArray(v), oset)
+        ofn.assignUVs(counts, om2.MIntArray(uvi), oset)
+    if copied_target_mesh_data:
+        _regularize_uvset_to_map1(orig_shape, keep=copy_uv_set)
+        if list(om2.MFnMesh(sl.getDagPath(0)).getUVSetNames()) != ['map1']:
+            raise RuntimeError(f'{orig_shape}: copied target UV sets did not normalize to map1')
+    if details is not None:
+        details['smoothing_policy'] = smoothing_policy
+        details['copied_target_mesh_data'] = copied_target_mesh_data
+        details['cleared_orig_vertices'] = cleared_orig_vertices
     return True
 
 
@@ -820,6 +1025,7 @@ def execute(payload: dict) -> dict:
     sync_output_details = {}
     all_new_nodes = []
     action_counts = {}
+    orig_cleanup_records = []
 
     # ── 读取 source 数据 / 外部 compare_result ──
     try:
@@ -840,6 +1046,14 @@ def execute(payload: dict) -> dict:
         )
     except Exception as e:
         return _sync_receipt("ERROR", t0, "source_load", error=f"读取源数据失败: {e}")
+
+    try:
+        _preflight_sync_geometry(tex_info, external_report, cache_group, rig_prefix)
+    except Exception as e:
+        return _sync_receipt(
+            "ERROR", t0, "geometry_preflight", error=str(e), items=items,
+            recovery_hint="未修改场景；修正完整来源几何、compare 引用或目标矩阵后重试。",
+        )
 
     # Sandbox mode: no backup required.
 
@@ -879,9 +1093,11 @@ def execute(payload: dict) -> dict:
         _add_prefix_recursive(cache_node, rig_prefix)
         _plog("Phase1 done: prefix added")
 
-        _plog("Phase2: _collect_rig_meshes start")
-        rig_meshes = _collect_rig_meshes(rig_cache_group)
-        _plog(f"Phase2: rig_meshes collected, n={len(rig_meshes)}")
+        _plog("Phase2: _collect_rig_scene_info start")
+        rig_scene_info = _collect_rig_scene_info(rig_cache_group)
+        rig_meshes = rig_scene_info.get("meshes", {})
+        nonrig_meshes = rig_scene_info.get("nonrig_meshes", [])
+        _plog(f"Phase2: rig_meshes collected, n={len(rig_meshes)}, nonrig_meshes={len(nonrig_meshes)}")
         empty_rig_dags = [
             dag for dag, entry in rig_meshes.items()
             if int(entry.get("vertices") or 0) <= 0 or not entry.get("vert_positions")
@@ -910,6 +1126,11 @@ def execute(payload: dict) -> dict:
             source_abc=abc_path,
             source_info=tex_json,
             cache_group=cache_group,
+        )
+        sync_output_details['normal_policy'] = (
+            'Valid authored corner normals are authoritative; previous edge flags are not preserved. '
+            'Only missing normals with identical FC/FI and vertex count copy target native mesh data, '
+            'preserving its locked normals and edge smoothing while updating points and source UVs.'
         )
 
         # ── 对比摘要写入 receipt/report_content，不额外落散文件 ──
@@ -983,11 +1204,53 @@ def execute(payload: dict) -> dict:
             _register_rig_lookup("|".join(all_rel_parts), full_path)
             _register_rig_lookup("|".join(all_keep_root_parts), full_path)
 
+        # 为未蒙皮 (nonrig_meshes) 建立 lookup，以便识别并容错
+        nonrig_dag_lookup = {}
+        for full_path in nonrig_meshes:
+            parts = full_path.split("|")
+            rig_start = -1
+            for i, p in enumerate(parts):
+                if p == rig_cache_group:
+                    rig_start = i
+                    break
+            if rig_start >= 0:
+                rel_source = parts[rig_start:]
+                rel_parts = _strip_rig_parts(rel_source)
+                rel_keep_root_parts = _strip_rig_parts(rel_source, keep_first=True)
+                for k in ("|".join(rel_parts), "|".join(rel_keep_root_parts)):
+                    if k:
+                        nonrig_dag_lookup[k] = full_path
+                        if not k.startswith("|"):
+                            nonrig_dag_lookup["|" + k] = full_path
+
+            indexed_parts = list(enumerate(parts))
+            all_rel_parts = _strip_rig_parts(indexed_parts)
+            all_keep_root_parts = _strip_rig_parts(indexed_parts, keep_abs_index=rig_start if rig_start >= 0 else None)
+            for k in ("|".join(all_rel_parts), "|".join(all_keep_root_parts)):
+                if k:
+                    nonrig_dag_lookup[k] = full_path
+                    if not k.startswith("|"):
+                        nonrig_dag_lookup["|" + k] = full_path
+
+        def _translate_nonrig(compare_dag):
+            """compare 侧未蒙皮 rig_dag → 当前 Maya fullPath。"""
+            if compare_dag in nonrig_meshes:
+                return compare_dag
+            full = nonrig_dag_lookup.get(compare_dag)
+            if full and full in nonrig_meshes:
+                return full
+            if cmds.objExists(compare_dag):
+                long_p = cmds.ls(compare_dag, long=True)
+                if long_p and long_p[0] in nonrig_meshes:
+                    return long_p[0]
+            return None
+
         reused_rig_dags = set()
         voting_pool_tex = {}
         group_records = {}   # group_id → {layer_name, action, abc_nodes, rig_nodes, reason}
         unpaired_nodes = []  # UNPAIRED 新建 mesh 累积（进 _source_only）
         target_only_rig_nodes = []  # target_only 的 rig transform 累积（进 _target_only）
+        nonrig_detected_dags = []   # 未蒙皮件累积（进 _no_deform）
 
         def _translate_rig(compare_dag):
             """compare 侧 rig_dag → Maya fullPath。
@@ -1006,7 +1269,24 @@ def execute(payload: dict) -> dict:
             referenced_rigs = set(target_only_dags)
             for group in pairing_groups:
                 referenced_rigs.update(group.get("rig_dags", []))
-            missing_rigs = sorted(r for r in referenced_rigs if not _translate_rig(r))
+
+            missing_rigs = []
+            for r in referenced_rigs:
+                if _translate_rig(r):
+                    continue
+                nonrig_full = _translate_nonrig(r)
+                if nonrig_full:
+                    nonrig_detected_dags.append((r, nonrig_full))
+                else:
+                    missing_rigs.append(r)
+
+            if nonrig_detected_dags:
+                items.append(make_item(
+                    "NonRigMeshes",
+                    f"发现 {len(nonrig_detected_dags)} 个网格未蒙皮变形，不作为变形件注入，已归入无变形层并记录报告: "
+                    f"{[r.split('|')[-1] for r, _ in nonrig_detected_dags]}"
+                ))
+
             if missing_rigs:
                 cmds.undoInfo(closeChunk=True)
                 cmds.undo()
@@ -1014,7 +1294,7 @@ def execute(payload: dict) -> dict:
                     "AUDIT_FAILED", t0, "compare_target_match",
                     error=(
                         "compare_result 与当前 target rig 不匹配，已撤销本步。"
-                        f"缺失 rig 引用: {missing_rigs[:20]}"
+                        f"缺失 rig 引用: {sorted(missing_rigs)[:20]}"
                     ),
                     items=items,
                     recovery_hint="不要复用旧 compare_result；请在当前 target rig 场景上重新运行 maya_compare_asset_in_scene。",
@@ -1061,7 +1341,7 @@ def execute(payload: dict) -> dict:
                     continue
 
                 target_name, group_parts = _get_target_name_and_parent(abc_dag)
-                parent_path = _ensure_hierarchy(group_parts)
+                parent_path = _ensure_hierarchy(group_parts, cache_root=cache_node)
 
                 # IDENTICAL / ORIG_INJECT 统一：搬运改名 + 从 ABC 全量注入 orig 的 base。
                 # 点数不符则降级 voting pool 重建（保留原防呆）。
@@ -1084,13 +1364,19 @@ def execute(payload: dict) -> dict:
                     vis_sh, orig_sh = get_deform_input(new_transform)
                     target_sh = orig_sh or vis_sh
                     injected = False
+                    injection_details = {}
                     if target_sh:
-                        _clean_orig_upstream(target_sh)            # 清上游构造历史（禁 delete ch）
-                        _regularize_uvset_to_map1(target_sh)       # uvSet 收成唯一 map1（写入前）
-                        injected = _inject_mesh_data_via_plug(target_sh, tex_data)  # ABC 点+UV+法线一次写 base
+                        injected = _inject_mesh_data_via_plug(target_sh, tex_data, details=injection_details)
+                    else:
+                        raise RuntimeError(f'{new_transform}: no deformation input shape for injection')
+                    cleared_vertices = injection_details.get('cleared_orig_vertices', 0)
+                    if cleared_vertices:
+                        orig_cleanup_records.append({'shape': target_sh, 'vertices': cleared_vertices})
                     items.append(make_item(
                         target_name,
-                        f"{action}: 搬运 + ABC注入(点/UV/法线)" + ("" if injected else " [注入跳过]")
+                        f"{action}: 搬运 + ABC注入(点/UV/法线); "
+                        f"smoothing={injection_details.get('smoothing_policy', 'not_written')}; "
+                        f"copied_target_mesh_data={injection_details.get('copied_target_mesh_data', False)}"
                     ))
                     # IDENTICAL/ORIG_INJECT 都不建 layer：仅层级与命名修复，后续 QC 统一标注。
                 else:
@@ -1154,6 +1440,9 @@ def execute(payload: dict) -> dict:
         for tod in target_only_dags:
             rig_full = _translate_rig(tod)
             if not rig_full:
+                nonrig_full = _translate_nonrig(tod)
+                if nonrig_full:
+                    items.append(make_item(tod.split("|")[-1], "target_only(未蒙皮): 原位保留，已归入 _no_deform 层"))
                 continue
             reused_rig_dags.add(rig_full)  # 防止被当 super mesh 源
             transform = cmds.listRelatives(rig_full, parent=True, fullPath=True)
@@ -1179,7 +1468,7 @@ def execute(payload: dict) -> dict:
         for _pi, (dag_tex, tex_data) in enumerate(voting_pool_tex.items()):
             _plog(f"  Phase4 mesh {_pi+1}/{len(voting_pool_tex)}: {dag_tex.split('|')[-1]}")
             target_name, group_parts = _get_target_name_and_parent(dag_tex)
-            parent_path = _ensure_hierarchy(group_parts)
+            parent_path = _ensure_hierarchy(group_parts, cache_root=cache_node)
 
             exist_path = f"{parent_path}|{target_name}" if parent_path else target_name
             if cmds.objExists(exist_path):
@@ -1262,13 +1551,47 @@ def execute(payload: dict) -> dict:
                              group_id="_target_only", action="TARGET_ONLY",
                              reason="rig 独有（abc 侧已无对应）")
 
+        # ── 构建无变形 layer（用户指示：未蒙皮部件构建没有变形的 layer 放置以便查看）──
+        nonrig_transforms = []
+        for full in nonrig_meshes:
+            tr = cmds.listRelatives(full, parent=True, fullPath=True)
+            if tr and cmds.objExists(tr[0]):
+                nonrig_transforms.append(tr[0])
+        for _, full in nonrig_detected_dags:
+            tr = cmds.listRelatives(full, parent=True, fullPath=True)
+            if tr and cmds.objExists(tr[0]):
+                nonrig_transforms.append(tr[0])
+        nonrig_transforms = sorted(list(set(nonrig_transforms)))
+        if nonrig_transforms:
+            _assign_to_layer(
+                "_no_deform",
+                nonrig_transforms,
+                group_id="_no_deform",
+                action="NO_DEFORM",
+                reason="rig未蒙皮/无变形件（独立放置以便查看）",
+            )
+            items.append(make_item(
+                "Layer:_no_deform",
+                f"构建无变形层 _no_deform，已放入 {len(nonrig_transforms)} 个未蒙皮节点"
+            ))
+
         # ── 清理 RIG_ 前缀残留空组（被搬走后可能留空的中间层级）──
         for rc in cmds.ls(rig_cache_group, long=True, type="transform") or []:
-            if cmds.objExists(rc):
+            if cmds.objExists(rc) and rc != cache_node:
                 live = [m for m in (cmds.listRelatives(rc, allDescendents=True, type="mesh", fullPath=True) or [])
                         if not cmds.getAttr(m + ".intermediateObject")]
                 if not live:
                     cmds.delete(rc)
+        if cache_node and cmds.objExists(cache_node):
+            for node in (cmds.listRelatives(cache_node, allDescendents=True, type="transform", fullPath=True) or []):
+                if cmds.objExists(node) and node.split("|")[-1].startswith(rig_prefix):
+                    live = [m for m in (cmds.listRelatives(node, allDescendents=True, type="mesh", fullPath=True) or [])
+                            if not cmds.getAttr(m + ".intermediateObject")]
+                    if not live:
+                        try:
+                            cmds.delete(node)
+                        except Exception:
+                            pass
 
         # ── Phase 6: 汇总新节点；材质由 workflow 的显式 assign_materials 唯一负责 ──
         _plog("Phase6: collect new nodes (material pass is external)")
@@ -1277,29 +1600,16 @@ def execute(payload: dict) -> dict:
             all_new_nodes.extend(rec.get("abc_nodes", []))
         all_new_nodes.extend(unpaired_nodes)
 
-        # ── 标记 sync 已完成，防重跑 ──
-        new_cache_node = None
-        for node in cmds.ls("cache", long=True, type="transform") or []:
-            if "|cache" in node or node == "cache":
-                new_cache_node = node
-                break
-
-        # ── 统一清理 .pnts：所有几何写完后，对 cache 组下每片 mesh(可见 + ShapeOrig)一次性清零 ──
-        # 终态要求：真实几何存 base(.vrts)、.pnts 恒空、orig 正确再经变形器传给可见 shape
-        # （用户 2026-07-09 拍板）。注入已由 _inject_mesh_data_via_plug 把 ABC 点+UV+法线写进
-        # base(cachedInMesh)，base 本身即正确；这里清掉一切 .pnts 残留，使 orig=base=ABC、pnts=0。
-        # 因 base 已对，清 .pnts 只会归位、不会露脏 base——这正是旧 setPoints/datablock 注入
-        # （base 未真写、几何靠 .pnts/上游撑）会被此清理弄塌的根因，改直写 cachedInMesh 后消除。
-        # 覆盖 IDENTICAL 与 ORIG_INJECT（已合并统一注入）；新建件本就无残留，清零为 no-op。
-        _pnts_cleared = 0
-        if new_cache_node and cmds.objExists(new_cache_node):
-            for _m in cmds.listRelatives(new_cache_node, allDescendents=True,
-                                         type="mesh", fullPath=True) or []:
-                _clear_pnts_tweak(_m)
-                _pnts_cleared += 1
-        if _pnts_cleared:
-            items.append(make_item("pnts 清理", f"清零 {_pnts_cleared} 个 mesh shape 的顶点偏移残留"))
-        _plog(f"pnts sweep done: {_pnts_cleared} shapes")
+        # Report only this operation's injected Orig cleanup; never sweep visible
+        # shapes or unrelated RIG remnants under a guessed geometry-root name.
+        sync_output_details['orig_tweak_cleanup'] = {
+            'shapes': orig_cleanup_records,
+            'vertex_count': sum(record['vertices'] for record in orig_cleanup_records),
+        }
+        if orig_cleanup_records:
+            items.append(make_item('Orig pnts 清理',
+                                   f"仅清零并核验本次完整注入的 {len(orig_cleanup_records)} 个 Orig"))
+        _plog(f'owned Orig pnts cleanup verified: {len(orig_cleanup_records)} shapes')
         _plog("sync main body done")
 
     except Exception as e:
@@ -1312,9 +1622,9 @@ def execute(payload: dict) -> dict:
         cmds.undoInfo(closeChunk=True)
         return _sync_receipt(
             "ERROR", t0, "execute",
-            error=f"执行崩溃，已撤销: {e}",
+            error=f"执行失败，场景可能已部分修改；未自动回滚: {e}",
             items=items,
-            recovery_hint="查看统一任务报告中的 sync items 和 worker 日志，优先定位最后一个 Phase 日志。",
+            recovery_hint="不要保存为成功输出；从干净原绑定重新打开后重跑。查看 sync items 和 worker 日志的最后一个 Phase。",
             report_content=sync_md_content,
             output=sync_output_details,
         )
@@ -1332,7 +1642,7 @@ def execute(payload: dict) -> dict:
             "cache_group": cache_group,
         },
         output={
-            "scene": "current_maya_scene",
+            "scene": cmds.file(query=True, sceneName=True) or '',
             "actions": action_counts,
             "new_node_count": len(all_new_nodes),
             **sync_output_details,

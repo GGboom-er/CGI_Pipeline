@@ -1,5 +1,5 @@
 api_id: maya.rig.reference.update
-version: 1.0.0
+version: 1.0.1
 executor: maya
 capability: rigging.reference
 operation: update
@@ -10,8 +10,9 @@ targets:
 - rig
 access: destructive
 effects:
-  preview: No scene mutation.
-  apply: Replaces only references whose old_path is present in target_map.
+  scene_read: operation=preview builds the reference replacement plan; apply verifies loaded references.
+  scene_write: operation=apply replaces only references whose old_path is present in target_map.
+  file_read: operation=apply sends each planned UPDATE newPath to Maya loadReference; unloaded references retain loadReferenceDepth=none.
 execution_modes:
 - local
 - foreground
@@ -22,6 +23,13 @@ surfaces:
 modes:
 - preview
 - apply
+mode_binding:
+  input: operation
+  cases:
+  - value: preview
+    mode: preview
+  - value: apply
+    mode: apply
 inputs:
   operation:
     type: string
@@ -42,9 +50,13 @@ preconditions:
 - Project-specific resolution has produced explicit target_map entries.
 idempotent: false
 outputs:
-  rows: Per-reference plan or verification rows.
-  counts: Status counts.
+  operation: 'Optional by action: operation returned by the source implementation.'
+  scene_path: 'Optional by action: scene path returned by the source implementation.'
+  reference_count: 'Optional by action: reference count returned by the source implementation.'
   updated_count: Number of verified reference replacements.
+  counts: Status counts.
+  failed_count: 'Optional by action: failed count returned by the source implementation.'
+  rows: Per-reference plan or verification rows.
 statuses:
 - SUCCESS
 - PARTIAL
@@ -64,4 +76,6 @@ tests:
   - tests/test_api_registry.py
   - tests/test_maya_reference_api.py
   smoke: mayapy with a Maya scene containing one loaded reference.
+implementation: {status: implemented}
+verification: {level: contract_tested, evidence: [tests/test_maya_reference_api.py, tests/test_maya_rigging_contracts.py]}
 handler: cgi_pipeline.capabilities.maya.rig.reference.update.handler:execute

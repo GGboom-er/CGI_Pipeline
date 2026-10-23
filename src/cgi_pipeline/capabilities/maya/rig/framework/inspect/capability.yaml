@@ -1,0 +1,39 @@
+api_id: maya.rig.framework.inspect
+version: 1.0.1
+name: framework_inspect
+executor: maya
+capability: rigging.framework
+operation: inspect
+stages: [rigging, animation]
+targets: [rig, hierarchy]
+access: read
+effects:
+  scene_read: Reads bounded DAG identity and framework signature evidence without changing the scene.
+execution_modes: [local, foreground, background]
+surfaces: [maya, service]
+modes: [inspect]
+inputs:
+  roots: {type: array, default: ['|'], description: Exact DAG roots; world root must be the only item and inspects top-level assemblies.}
+  max_nodes: {type: integer, default: 500, description: Maximum returned DAG nodes; hard limit 2000.}
+  max_depth: {type: integer, default: 8, description: Maximum child depth per root; allowed range 0 to 64.}
+preconditions: [Runs in one Maya scene context; ambiguous short roots should be replaced with long paths.]
+idempotent: true
+outputs:
+  roots: 'Optional by action: roots returned by the source implementation.'
+  frameworks: Evidence-backed framework candidates.
+  snapshot: Deterministically sorted node identities and parent edges.
+  snapshot_hash: SHA-256 of the deterministic snapshot.
+  node_count: 'Optional by action: node count returned by the source implementation.'
+  truncated: Whether node or depth bounds omitted DAG content.
+statuses: [SUCCESS, ERROR]
+errors: {MAYA_RIG_FRAMEWORK_INSPECT_FAILED: "Invalid roots, bounds, or Maya context."}
+recovery: [Use existing long-path roots and reduce max_nodes or max_depth.]
+help:
+  summary: Detect known Maya rig frameworks and return a deterministic bounded rig snapshot.
+  usage: "execute_api(maya.rig.framework.inspect, params={roots, max_nodes, max_depth})"
+  scenario: Identify framework evidence and compare stable rig hierarchy snapshots.
+  safety: Read-only, bounded, and deterministic; candidate evidence is not treated as authoritative framework ownership.
+tests: {contract: tests/test_maya_rig_p1_batch2.py, smoke: Maya 2025.3 foreground read-only snapshot.}
+implementation: {status: implemented}
+verification: {level: live_tested, evidence: [tests/test_maya_rig_p1_batch2.py, audit/2026-08-30/api-e77bc0a2a51b.json]}
+handler: cgi_pipeline.capabilities.maya.rig.rig_p1:inspect_framework

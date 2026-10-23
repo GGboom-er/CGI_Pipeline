@@ -91,7 +91,7 @@ def execute(payload: dict) -> dict:
     # ── 查找 cache 组 ──
     # 兼容 Maya 风格的大纲路径 (例如 "|Group|cache") -> "cache"
     blender_obj_name = cache_group_name.split('|')[-1]
-    cache_grp = bpy.data.objects.get(blender_obj_name)
+    cache_grp = bpy.data.objects.get(blender_obj_name) or bpy.data.objects.get('cache') or bpy.data.objects.get('geo')
     if not cache_grp:
         objs = [o.name for o in bpy.data.objects][:20]
         return make_receipt('blender_export_abc', 'ERROR', t0,

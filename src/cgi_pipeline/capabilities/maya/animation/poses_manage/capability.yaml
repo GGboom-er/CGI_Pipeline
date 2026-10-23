@@ -1,0 +1,56 @@
+api_id: maya.animation.poses.manage
+version: 1.0.1
+executor: maya
+capability: animation.poses
+operation: manage
+stages: [rigging, animation]
+targets: [pose, attribute]
+access: destructive
+effects:
+  scene_read: 'action=list: Reads scene-local CGI pose records.'
+  scene_write: 'action=save: Captures bounded numeric attributes into a scene-local network node. action=load: Applies one
+    saved pose to captured or explicitly mapped nodes. action=mirror: Applies one pose through explicit node and attribute
+    multiplier maps.'
+execution_modes: [local, foreground, background]
+surfaces: [maya, service]
+modes: [inspect, apply]
+mode_binding:
+  input: action
+  cases:
+  - value: list
+    mode: inspect
+  - value: save
+    mode: apply
+  - value: load
+    mode: apply
+  - value: mirror
+    mode: apply
+inputs:
+  action: {type: string, required: true, choices: [list, save, load, mirror], description: "Pose management action."}
+  name: {type: string, default: "", description: "Scene-local pose name."}
+  nodes: {type: array, default: [], description: "Explicit nodes captured by save."}
+  attributes: {type: array, default: [], description: "Relative numeric or boolean attributes; empty uses transform TRS channels."}
+  overwrite: {type: boolean, default: false, description: "Whether save may replace an existing pose record."}
+  node_map: {type: object, default: {}, description: "Optional saved-path to target-path map for load; mandatory and complete for mirror."}
+  attribute_multipliers: {type: object, default: {}, description: "Explicit per-attribute finite multipliers required for mirror."}
+  max_items: {type: integer, default: 200, description: "Maximum nodes, attributes or listed poses; hard limit 2000."}
+preconditions: [Nodes must resolve to explicit unambiguous long paths., Pose attributes must be finite scalar numbers or booleans., Mirror requires explicit complete node mapping and explicit attribute multipliers.]
+idempotent: false
+outputs:
+  action: Executed action.
+  items: Pose records or applied plug changes.
+  pose_node: Scene-local network node storing JSON pose data.
+  count: Returned or applied count.
+  returned_count: Number of visible items after applying the result bound.
+  truncated: Whether the operation reached its configured result or input bound.
+  name: 'Optional by action: name returned by the source implementation.'
+  value_count: 'Optional by action: value count returned by the source implementation.'
+  overwritten: 'Optional by action: overwritten returned by the source implementation.'
+statuses: [SUCCESS, ERROR]
+errors: {MAYA_ANIMATION_OPERATION_FAILED: "Pose validation, storage, application or readback failed."}
+recovery: [Correct long paths, writable attributes and explicit mirror maps; failed writes roll back one Maya undo chunk.]
+help: {summary: "List, save, load or explicitly mirror bounded scene-local numeric Maya poses.", usage: "execute_api(maya.animation.poses.manage, params={action, name, nodes, attributes})", scenario: "Capture controller TRS poses and reapply or explicitly map them without external files.", safety: "No naming-based mirror inference, arbitrary scripts, external files or non-scalar payloads; writes use one undo chunk."}
+tests: {contract: tests/test_maya_animation_expressions_poses.py, smoke: "Foreground save, load and explicit mirror with rollback."}
+implementation: {status: implemented, module: maya.animation.poses_manage.core:execute}
+verification: {level: contract_tested, evidence: [tests/test_maya_animation_expressions_poses.py]}
+handler: cgi_pipeline.capabilities.maya.animation.poses_manage.core:execute

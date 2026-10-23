@@ -1,0 +1,33 @@
+api_id: blender.scene.nodes.duplicate_many
+version: 1.0.1
+name: nodes_duplicate_many
+executor: blender
+capability: scene.nodes
+operation: duplicate
+stages: [modeling, rigging, animation]
+targets: [scene_object]
+access: write
+effects:
+  scene_write: Copies and links bounded Blender objects.
+execution_modes: [local, foreground, background]
+surfaces: [blender, service]
+modes: [apply]
+inputs:
+  items: {type: array, required: true, description: "[{node, name?, collection?, copy_data?}]"}
+  max_items: {type: integer, default: 100, description: Maximum copies; hard limit 2000.}
+preconditions: [Source objects and named collections exist.]
+idempotent: false
+outputs:
+  items: Per-object before after and collection.
+  count: Number of returned or processed items for this action.
+  succeeded: Number of successful per-item operations.
+  failed: Number of failed per-item operations.
+  truncated: Whether the operation reached its configured result or input bound.
+statuses: [SUCCESS, PARTIAL, ERROR]
+errors: {BLENDER_SCENE_CORE_OPERATION_FAILED: Invalid object collection or Blender context.}
+recovery: [Undo the host transaction or remove created objects.]
+help: {summary: Duplicate many Blender objects using the data API., usage: "execute_api(blender.scene.nodes.duplicate_many, params={items})", scenario: Copy linked or single-user object data., safety: Writes the scene and copy_data controls datablock duplication.}
+tests: {contract: tests/test_blender_scene_core_apis.py}
+handler: cgi_pipeline.capabilities.blender.scene_core:duplicate_nodes_many
+implementation: {status: implemented}
+verification: {level: contract_tested, evidence: [tests/test_blender_scene_core_apis.py]}

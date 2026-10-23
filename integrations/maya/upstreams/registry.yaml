@@ -1,0 +1,135 @@
+schema_version: 1
+frozen_at: "2026-08-30"
+snapshot_policy:
+  mode: manifest_plus_selected_sources
+  commit_full_repositories: false
+  selected_source_root: snapshots
+  requirements:
+    - Record the upstream repository and full commit before reviewing code.
+    - Copy only source files selected for an approved CGI capability migration.
+    - Preserve each copied file's upstream path and commit in its snapshot manifest.
+    - Do not copy source from repositories whose root license status is missing.
+
+repositories:
+  - source_id: dcc_mcp_maya
+    name: dcc-mcp-maya
+    remote_url: https://github.com/dcc-mcp/dcc-mcp-maya.git
+    default_branch: main
+    commit: c6242647b7e07325a08cf5fc122989bbf16e1e95
+    commit_date: "2026-08-29T16:42:35Z"
+    disposition: migrate
+    uses: [tool_inventory, skill_grouping, main_thread_dispatch, progressive_discovery]
+    license:
+      status: verified_root_file
+      spdx: MIT
+      upstream_path: LICENSE
+      upstream_blob_sha: 8f0f47b8b88a4810ea722046b7297e0be940c032
+      local_copy: licenses/dcc_mcp_maya.LICENSE
+
+  - source_id: gg_mayamcp
+    name: GG_MayaMCP
+    remote_url: https://github.com/GimbalGoats/GG_MayaMCP.git
+    default_branch: main
+    commit: 06862e0d50202970795ca0a89acd1a5247c2823a
+    commit_date: "2026-07-20T15:09:35Z"
+    disposition: migrate
+    uses: [typed_crud, parameter_contracts, atomic_operations, tool_tests]
+    license:
+      status: verified_root_file
+      spdx: MIT
+      upstream_path: LICENSE
+      upstream_blob_sha: dc6b0b5b7eda14828ace29606a1c86ba8ca6c7af
+      local_copy: licenses/gg_mayamcp.LICENSE
+
+  - source_id: chadrik_maya_mcp_server
+    name: maya-mcp-server
+    remote_url: https://github.com/chadrik/maya-mcp-server.git
+    default_branch: main
+    commit: 5eaa53752fd0ac7f69403843a237c13336222d8e
+    commit_date: "2026-07-15T17:14:39Z"
+    disposition: reference
+    uses: [multi_session_design, reusable_virtual_modules, output_resources]
+    license:
+      status: verified_root_file
+      spdx: MIT
+      upstream_path: LICENSE
+      upstream_blob_sha: 110744689e48cd6e13506e9949c700f8b09c0e86
+      local_copy: licenses/chadrik_maya_mcp_server.LICENSE
+
+  - source_id: patrickpalmer_mayamcp
+    name: MayaMCP
+    remote_url: https://github.com/PatrickPalmer/MayaMCP.git
+    default_branch: main
+    commit: 5aa3d7b575facf699f88d5334aafa785516bb7e5
+    commit_date: "2025-05-12T12:38:23Z"
+    disposition: migrate
+    uses: [scene_crud, object_crud, modeling_helpers, dynamic_tool_loading]
+    license:
+      status: verified_root_file
+      spdx: MIT
+      upstream_path: LICENSE
+      upstream_blob_sha: d365108ed4b59149ab4d13556bbd0caba30db2ce
+      local_copy: licenses/patrickpalmer_mayamcp.LICENSE
+
+  - source_id: damaya_mcp
+    name: DAMaya_MCP
+    remote_url: https://github.com/NightXDreamin/DAMaya_MCP.git
+    default_branch: master
+    commit: 6cdb9682dad4cf73914ca12131e7c6bae6943751
+    commit_date: "2026-08-14T09:43:16Z"
+    disposition: reference
+    uses: [scene_summary, attribute_search, topology_queries, viewport_capture]
+    license:
+      status: missing_root_file
+      spdx: NOASSERTION
+      upstream_path: null
+      upstream_blob_sha: null
+      local_copy: null
+
+  - source_id: maya_mcp_server_enhanced
+    name: maya-mcp-server-enhanced
+    remote_url: https://github.com/Xxx91n/maya-mcp-server-enhanced.git
+    default_branch: main
+    commit: 4d95a3b210370b0a9a76d9cc58da83728f4ea5b7
+    commit_date: "2026-06-29T16:58:06Z"
+    disposition: reference
+    uses: [spatial_measurement, scene_audit, checkpoint_design, rollback_design]
+    license:
+      status: missing_root_file
+      spdx: NOASSERTION
+      upstream_path: null
+      upstream_blob_sha: null
+      local_copy: null
+
+  - source_id: abrahamadsk_maya_mcp
+    name: maya-mcp
+    remote_url: https://github.com/abrahamADSK/maya-mcp.git
+    default_branch: main
+    commit: a9f0af10ad327a052a12b8b7cfc4aa812be265e2
+    commit_date: "2026-08-16T14:16:22Z"
+    disposition: reimplement
+    uses: [api_document_search, safety_scanning, audit_metrics, performance_statistics]
+    license:
+      status: verified_root_file
+      spdx: MIT
+      upstream_path: LICENSE
+      upstream_blob_sha: 07d1a4c4e8447e05d576689ce898f5c5557e93a7
+      local_copy: licenses/abrahamadsk_maya_mcp.LICENSE
+      notice_upstream_path: NOTICE.md
+      notice_upstream_blob_sha: 1ed50992df77afc53887566f01569dab3cb83b42
+      notice_local_copy: licenses/abrahamadsk_maya_mcp.NOTICE.md
+
+  - source_id: aydji_autodesk_maya_mcp
+    name: Autodesk-Maya-MCP
+    remote_url: https://github.com/AYDJI/Autodesk-Maya-MCP.git
+    default_branch: main
+    commit: 3db6b8b98806568b33526d5855c0ccb25cd620d1
+    commit_date: "2026-02-13T15:13:10Z"
+    disposition: reference
+    uses: [prompt_examples, capability_cross_check]
+    license:
+      status: missing_root_file
+      spdx: NOASSERTION
+      upstream_path: null
+      upstream_blob_sha: null
+      local_copy: null

@@ -1,5 +1,5 @@
 api_id: ue.editor.python.execute
-version: 1.0.0
+version: 1.0.1
 executor: ue
 capability: editor.automation
 operation: execute
@@ -10,7 +10,8 @@ targets:
 - python
 access: destructive
 effects:
-  apply: Executes editor-only Unreal Python in the selected open editor.
+  code_execute: Executes caller-provided editor Python in the selected UE Editor; scene, file and host effects depend on the
+    code.
 execution_modes:
 - background
 surfaces:
@@ -42,7 +43,10 @@ outputs:
   result: JSON result assigned or emitted by the UE bridge.
   stdout: Captured editor output.
   stderr: Captured editor errors.
+  traceback: Python traceback text returned by the selected UE bridge.
   session: Connected UE Editor metadata.
+  bridge_protocol: Protocol reported by the selected UE bridge.
+  progress: Progress events returned by the selected UE bridge.
 statuses:
 - SUCCESS
 - ERROR
@@ -62,4 +66,10 @@ help:
 tests:
   contract: tests/test_api_catalog_additions.py
   smoke: Non-destructive UE Python query in the final integration workflow.
+implementation:
+  status: implemented
+verification:
+  level: live_tested
+  evidence:
+  - audit/api-8d78ab1d7545.json
 handler: cgi_pipeline.capabilities.ue.editor.python_execute.handler:execute

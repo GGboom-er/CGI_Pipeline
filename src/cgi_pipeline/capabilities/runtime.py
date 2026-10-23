@@ -12,6 +12,7 @@ _STATUS_MAP = {
     "CHAIN_SUCCESS": "SUCCESS",
     "PARTIAL": "PARTIAL",
     "BLOCKED": "BLOCKED",
+    "AUDIT_FAILED": "AUDIT_FAILED",
     "NEEDS_ATTENTION": "NEEDS_ATTENTION",
     "TIMEOUT": "TIMEOUT",
     "CANCELLED": "CANCELLED",
@@ -35,6 +36,7 @@ def execute_operation(
     api_version = str(context.extras.get("_api_version") or "1.0.0")
     payload = {
         "task_id": str(context.extras.get("task_id") or ""),
+        "workspace_id": str(context.extras.get("workspace_id") or ""),
         "api_id": api_id,
         "project": context.project,
         "asset_name": context.asset_name,
@@ -50,6 +52,9 @@ def execute_operation(
             raise ApiContractError("operation must return a receipt mapping")
         operation_status = str(result.get("status") or "ERROR")
         status = _STATUS_MAP.get(operation_status, "ERROR")
+        error_code = result.get("error_code")
+        if not isinstance(error_code, str) or not error_code.strip():
+            error_code = "API_OPERATION_ERROR"
         output = dict(result.get("output") or {})
         if result.get("summary") is not None:
             output.setdefault("summary", result["summary"])
@@ -67,7 +72,7 @@ def execute_operation(
                 "source_path": context.source_path,
             },
             output=output,
-            error_code=("API_OPERATION_ERROR" if status == "ERROR" else ""),
+            error_code=error_code if status == "ERROR" else "",
             error=str(result.get("error") or "") if status != "SUCCESS" else "",
             recovery_hint=str(result.get("recovery_hint") or ""),
             artifacts=[

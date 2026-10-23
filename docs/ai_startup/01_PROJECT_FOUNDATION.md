@@ -37,12 +37,12 @@ MCP list_apis/api_help
         ↓
 execute_api 或 pipeline_execute_workflow
         ↓
-Redis → cgi_queue → 唯一 cgi@%h Worker
+workspace亲和准入 → Redis → cgi_slot_N → 独立solo Worker（默认最多3）
         ↓
 Maya / Blender / UE adapter → receipt → audit / REPORT.md
 ```
 
-前台模式必须显式 `foreground_port`；后台模式复用 DCC warm pool。Workflow 在同一 Worker 内顺序消费 API，不再嵌套 Celery 任务。
+前台模式必须显式 `foreground_port`；后台工作区各自复用 DCC warm pool。Workflow 在所属同一 Worker 内顺序消费 API，不嵌套 Celery 投递。未绑定只读/UE与旧客户端保留 legacy cgi_queue；状态与安全释放通过目录里的 pipeline.runtime 控制API。完整边界见 docs/architecture/pipeline_runtime_contract_v1.md。
 
 ## 五、项目扩展
 

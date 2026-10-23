@@ -20,18 +20,45 @@ from pathlib import Path
 from dotenv import load_dotenv
 from fastmcp import FastMCP
 from fastmcp.server.lifespan import lifespan
+from mcp.types import CallToolResult
+from cgi_pipeline.paths import REPOSITORY_ROOT
 
-load_dotenv()
+load_dotenv(REPOSITORY_ROOT / '.env')
 
 # ── 常量 ──
-PROJECT_ROOT = Path(os.getenv('PROJECT_ROOT', '.'))
+PROJECT_ROOT = REPOSITORY_ROOT
 
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from cgi_pipeline.catalog import list_capabilities
 from cgi_pipeline.core.manifest import get_manifest
+from cgi_pipeline.core.task_status import is_failure
 from cgi_pipeline.server.mcp_audit import build_mcp_audit
+from cgi_pipeline.server.public_surface import render_public_tool_routes
+
+
+class PipelineMCP(FastMCP):
+    """Preserve business receipts while marking terminal failures at transport exit.
+
+    FastMCP 3.2 converts dict returns to content/structuredContent without an
+    error flag. Keep this SDK-specific adaptation here, outside business owners
+    and audit middleware; real Client tests guard its serialization contract.
+    """
+
+    async def _call_tool_mcp(self, key, arguments):
+        result = await super()._call_tool_mcp(key, arguments)
+        if isinstance(result, tuple):
+            result = CallToolResult(content=result[0], structuredContent=result[1])
+        if isinstance(result, CallToolResult):
+            receipt = result.structuredContent
+            # Explicit terminal failures only: PARTIAL, attention and running
+            # states retain their own meaning; nested step errors are not the
+            # overall operation status.
+            status = receipt.get("status") if isinstance(receipt, dict) else None
+            if is_failure(status):
+                result = result.model_copy(update={"isError": True})
+        return result
 
 
 # ══════════════════════════════════════════════════
@@ -39,56 +66,53 @@ from cgi_pipeline.server.mcp_audit import build_mcp_audit
 # ══════════════════════════════════════════════════
 
 def _build_instructions() -> str:
-    """从 manifest + registry 动态生成 MCP instructions（英文路由决策树优先）
-
-    设计意图：
-    - 英文路由决策树置顶，让所有 AI 客户端第一时间知道"用什么工具"
-    - 明确禁止裸 socket，引导 AI 走 MCP 工具链
-    - 运行时规则保留但精简，降低上下文 token 消耗
-    """
+    """Shared routing/safety contract; tool descriptions supply only their own delta."""
     m = get_manifest()
     principles = m.get('principles', {})
     status_codes = m.get('status_codes', {})
-    safety_rules = m.get('exec_code_safety', [])
-    chain_rules = m.get('chain_rules', {})
 
     readonly_drives = ', '.join(d.upper() + ':/' for d in principles.get('readonly_drives', []))
     unc_prefixes = ', '.join(principles.get('readonly_unc_prefixes', []))
     status_str = ' | '.join(f'{k}={v}' for k, v in status_codes.items())
-    safety_str = '\n'.join(f'  - {r}' for r in safety_rules)
-    save_rule = 'mandatory' if chain_rules.get('save_scene_must_be_last') else 'recommended'
-    abort_rule = 'mandatory' if chain_rules.get('abort_on_step_failure') else 'optional'
 
     return (
-        "CGI/VFX Pipeline Automation Server — controls Maya, Blender, and Unreal Editor.\n"
-        "\n"
-        "## TOOL ROUTING — READ THIS FIRST\n"
-        "\n"
-        "CRITICAL: Do NOT open your own raw socket / subprocess / commandPort connection to Maya\n"
-        "from the client side — route ALL Maya interactions through this server's tools.\n"
-        "This server internally bridges to Maya via an RPyC-upgraded commandPort that is type-safe,\n"
-        "thread-safe and session-persistent; rely on that sanctioned path instead of rolling your own\n"
-        "(a hand-rolled commandPort only sends strings one-way and cannot return structured data reliably).\n"
-        "\n"
-        "### Operation contract\n"
-        "- list_apis -> enumerate atomic APIs; api_help(api_id) -> read its manifest contract\n"
-        "- execute_api(api_id, params, execution_mode, foreground_port, wait=True) -> run one atomic action and return its final receipt\n"
-        "- get_task_result(task_id) -> recover a task after timeout, reconnect, or explicit wait=False\n"
-        "- list_workflows -> enumerate registered workflows\n"
-        "- pipeline_execute_workflow(..., wait=True) -> run multi-step or cross-DCC work and return final status, step checklist, and report path\n"
-        "Foreground execution requires the session or port required by the API contract.\n"
-        "Both atomic API and workflow calls wait for final results by default.\n"
-        "\n"
-        "## SANDBOX RULES\n"
-        f"- {readonly_drives} = production server, strictly read-only\n"
-        f"- UNC paths ({unc_prefixes}) = also read-only\n"
-        "- Pass original paths (e.g. X:/Project/...); system auto-creates task sandbox\n"
-        "- save_scene path must be within workspace; protected paths -> BLOCKED\n"
-        "\n"
-        "## STATUS CODES\n"
+        "CGI Pipeline: Maya, Blender and Unreal Editor. Use this registered transport; "
+        "do not create client-side raw socket, subprocess or commandPort connections.\n"
+        f"{render_public_tool_routes()}\n"
+        "Unknown API: read api_help, cache catalog_version. Known contract: execute directly with "
+        "expected_catalog_version; refresh once on CATALOG_VERSION_STALE. Workflow list supplies input bindings.\n"
+        "Calls wait by default. For long workflows, use wait=False, keep the returned task_id, "
+        "and recover via get_task_result; do not resubmit after a client timeout. PARTIAL is terminal, not full success.\n"
+        "During a frontend update, HTTP_DRAINING with submitted=false means this call was not accepted; "
+        "reconnect after the frontend resumes before retrying it. Accepted tasks retain their task_id and "
+        "must be recovered without resubmission.\n"
+        "Foreground calls operate the selected session's existing scene using the contract's port/session; workspace_id "
+        "links receipts without staging. Authorized foreground work may use the actual project; each API retains "
+        "its own path restrictions. Background scene initialization stages explicit source inputs.\n"
+        "For a non-empty call collection containing only Maya/Blender inspect or preview operations, select a "
+        "foreground session, source_path or existing workspace_id, or explicitly use scene_action=open. "
+        "Mixed apply/query collections may initialize a scene. Modes describe intent, not permission or absence "
+        "of side effects; inspect effects and access.\n"
+        "workspace_id with scene_action=continue preserves a resident unsaved scene. If its owner is lost, "
+        "explicitly open a saved source; prior APIs are never replayed. Saving is an independent API choice. "
+        "Maya and Blender save_scene restrict current and target paths to managed projects/runs roots, not only the "
+        "current run_dir; both use the same OS directory lock for next-version saving.\n"
+        "Resident API/editing workspaces bind isolated runtime lanes (default maximum 3, with memory admission). "
+        "Automated workflow variants declare runtime_lifecycle=temporary: independent operation-owned workers, "
+        "no resident-slot cap, automatic memory waiting and own-runtime cleanup after verified success. "
+        "Failures retain diagnostics and their own scene. Same-workspace execution stays serial. "
+        "Only resident capacity returns RUNTIME_CAPACITY_BUSY without dispatch. Retain runtime_id/generation. "
+        "pipeline.runtime.status/release are standalone control APIs and need no free lane. "
+        "Release refuses pending/active work and dirty/unknown scenes unless discard is explicit.\n"
+        "project selects business rules; workspace_project selects storage, defaulting to project when omitted. "
+        "Use workspace_project=default for task sandboxes. Pass business_task_id to reuse "
+        "projects/{workspace_project}/{business_task_id}; retain workspace_id. "
+        "Existing UE editor and read-only Pipeline calls need no sandbox unless workspace_id, source_path "
+        "or scene_action=open is explicit.\n"
+        f"Protected roots: {readonly_drives}; {unc_prefixes}; protected paths remain read-only in every mode. "
+        "Path guards are cooperative checks, not operating-system isolation for arbitrary Python.\n"
         f"{status_str}\n"
-        "\n"
-        "The active MCP surface is intentionally small: list_apis, api_help, execute_api, get_task_result, list_workflows, and pipeline_execute_workflow."
+        "The MCP surface is registry-controlled; use API/workflow metadata for operation details."
     )
 
 
@@ -98,32 +122,13 @@ def _build_instructions() -> str:
 
 @lifespan
 async def _server_lifespan(_server):
-    owns_worker = False
-    if '--http' in sys.argv:
-        from cgi_pipeline.core.service_manager import (
-            claim_worker_owner,
-            ensure_worker_healthy,
-            get_worker_owner,
-            is_worker_alive,
-            shutdown_worker_owned_by,
-        )
+    # MCP connections are lightweight frontends. Runtime startup is lazy at the
+    # first execution request; closing any frontend must not stop shared work.
+    from cgi_pipeline.core.service_manager import share_worker_runtime
+    await __import__('asyncio').to_thread(share_worker_runtime)
+    yield {}
 
-        was_running, _ = await __import__('asyncio').to_thread(is_worker_alive, 'cgi')
-        ok, message = await __import__('asyncio').to_thread(ensure_worker_healthy, 'cgi')
-        if not ok:
-            raise RuntimeError(f'CGI Worker failed to start: {message}')
-        # Adopt an unowned Worker after an upgrade or unclean legacy shutdown;
-        # never replace an ownership record held by another HTTP MCP process.
-        owns_worker = not was_running or not await __import__('asyncio').to_thread(get_worker_owner)
-        if owns_worker:
-            await __import__('asyncio').to_thread(claim_worker_owner, os.getpid())
-    try:
-        yield {}
-    finally:
-        if owns_worker:
-            await __import__('asyncio').to_thread(shutdown_worker_owned_by, os.getpid())
-
-mcp = FastMCP(
+mcp = PipelineMCP(
     name="cgi_pipeline_mcp",
     instructions=_build_instructions(),
     lifespan=_server_lifespan,
@@ -163,12 +168,13 @@ except Exception as _e:
 
 if __name__ == '__main__':
     if '--http' in sys.argv:
-        # 生命周期只清理本 HTTP 进程创建的 Worker；不能全局关掉其他实例正在复用的队列。
+        # HTTP is optional; both transports share the same independently managed runtime.
         host = os.getenv('MCP_HOST', '127.0.0.1')
         port = int(os.getenv('MCP_PORT', '8000'))
         print(f'[cgi_pipeline_mcp] Streamable HTTP on http://{host}:{port}/mcp')
         print(f'[cgi_pipeline_mcp] {len(list_capabilities())} APIs registered')
-        mcp.run(transport='streamable-http', host=host, port=port)
+        from cgi_pipeline.server.http_runtime import run_http
+        run_http(mcp, host=host, port=port)
     else:
         # stdio 可能由 mcporter 以“一次调用、一个短进程”启动；后台 worker
         # 是跨 MCP 调用复用的独立服务，不能在本次 MCP 进程退出时被误杀。

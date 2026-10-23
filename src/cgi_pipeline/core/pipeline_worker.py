@@ -12,6 +12,7 @@ if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
 from cgi_pipeline.execution import execute_api
+from cgi_pipeline.core.code_reload import capability_session
 
 
 class PipelineWorker:
@@ -40,7 +41,11 @@ class PipelineWorker:
                 context.setdefault(key, payload.get(key, ''))
             context.setdefault('task_id', task_id)
             context.setdefault('extra_params', payload.get('extra_params', {}))
-            result = execute_api(api_id, params, context)
+            # Reuse the existing catalog-pinned capability reload owner. Pipeline
+            # runs inside a resident process too; catalog publication alone must
+            # not advertise a new contract while dispatching an old handler.
+            with capability_session() as selected_catalog:
+                result = execute_api(api_id, params, context, catalog_snapshot=selected_catalog)
             return {
                 'task_id': task_id,
                 'status': result['status'],

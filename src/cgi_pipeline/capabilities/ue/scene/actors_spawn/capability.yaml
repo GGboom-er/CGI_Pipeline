@@ -1,0 +1,31 @@
+api_id: ue.scene.actors.spawn
+version: 1.0.1
+executor: ue
+capability: scene.actors
+operation: spawn
+stages: [editor]
+targets: [level_actor]
+access: write
+effects:
+  scene_write: Spawns loaded-level actors in one editor transaction.
+execution_modes: [foreground]
+surfaces: [ue, service]
+modes: [apply]
+inputs:
+  items: {type: array, required: true, description: "actor_class plus optional label, location, and rotation."}
+  max_items: {type: integer, default: 200, description: "Maximum actors, hard limit 1000."}
+preconditions: [Runs in UE5 Editor with a loaded writable level.]
+idempotent: false
+outputs:
+  items: Per-item before and after actor identity.
+  count: Number of returned or processed items for this action.
+  error_count: Number of failed per-item operations.
+  truncated: Whether input exceeded max_items.
+statuses: [SUCCESS, PARTIAL, ERROR]
+errors: {UE_SCENE_CORE_OPERATION_FAILED: "Invalid class, level, or editor context."}
+recovery: [Verify class path and loaded writable level; undo the transaction if needed.]
+help: {summary: Spawn loaded-level UE actors., usage: "execute_api(ue.scene.actors.spawn, params={items})", scenario: Create bounded actors from explicit classes., safety: Undoable editor write.}
+tests: {contract: tests/test_ue_scene_core_apis.py, smoke: UE5 Editor spawn and undo.}
+handler: cgi_pipeline.capabilities.ue.scene_core:spawn_actors
+implementation: {status: implemented}
+verification: {level: contract_tested, evidence: [tests/test_ue_scene_core_apis.py]}

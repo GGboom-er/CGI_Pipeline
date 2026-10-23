@@ -33,3 +33,6 @@ dependencies:
     - scikit-learn==1.8.0
     - matplotlib==3.10.9
     - transforms3d==0.4.2
+    - "windows-capture==2.0.1; sys_platform == 'win32'"
+    - "opencv-python==4.11.0.86; sys_platform == 'win32'"
+    - "Pillow==12.2.0; sys_platform == 'win32'"

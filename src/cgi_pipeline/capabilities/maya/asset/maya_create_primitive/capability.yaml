@@ -1,5 +1,5 @@
 api_id: maya.asset.maya_create_primitive
-version: 1.0.0
+version: 1.0.1
 name: maya_create_primitive
 executor: maya
 capability: modeling.geometry
@@ -10,8 +10,7 @@ targets:
 - mesh
 access: write
 effects:
-  inspect: 只读取场景或标准数据，不改变资产。
-  apply: 按 API 实现对当前任务沙盒中的场景或数据执行操作。
+  scene_write: Creates one of the six supported polygon primitive types.
 execution_modes:
 - local
 - background
@@ -21,12 +20,27 @@ surfaces:
 - service
 modes:
 - apply
-inputs: {}
+inputs:
+  primitive_type: {type: string, default: cube, choices: [cube, sphere, cylinder, cone, plane, torus], description: "要创建的多边形原语类型。"}
+  name: {type: string, default: primitive, description: "目标 transform 名称。"}
+  parent: {type: string, default: "", description: "可选父节点长路径。"}
+  size: {type: number, default: 1.0, description: "立方体边长。"}
+  radius: {type: number, default: 1.0, description: "球体、圆柱、圆锥或圆环半径。"}
+  height: {type: number, default: 2.0, description: "圆柱或圆锥高度。"}
+  width: {type: number, default: 1.0, description: "平面宽度。"}
+  major_radius: {type: number, default: 1.0, description: "圆环主半径。"}
+  minor_radius: {type: number, default: 0.25, description: "圆环副半径。"}
 preconditions:
 - 项目配置通过统一 config/{project}_config.json 接口加载。
 - 后台模式由 CGI Worker 打开或复用对应 DCC 场景。
 idempotent: false
-outputs: {}
+outputs:
+  transform: 'Optional by action: transform returned by the source implementation.'
+  shapes: 'Optional by action: shapes returned by the source implementation.'
+  primitive_type: 'Optional by action: primitive type returned by the source implementation.'
+  summary: Optional framework operation summary; present when the adapter supplies
+    one.
+  items: Optional framework item records; present when the adapter supplies them.
 statuses:
 - SUCCESS
 - PARTIAL
@@ -42,11 +56,13 @@ recovery:
 - 读取 api_help 获取参数、前置条件和输出。
 - 失败时检查任务报告中的错误与恢复建议。
 help:
-  summary: maya_create_primitive
-  usage: execute_api(maya.asset.maya_create_primitive, params={...})
-  scenario: maya_create_primitive
-  safety: read API 只读；write/destructive API 仅写入任务沙盒。
+  summary: 在当前 Maya 场景创建一个受参数约束的多边形原语并返回长路径。
+  usage: "execute_api(maya.asset.maya_create_primitive, params={primitive_type: cube, name: probe})"
+  scenario: 场景搭建、API smoke 或 workflow 的几何起点。
+  safety: 写入当前任务沙盒中的 Maya 场景；不覆盖已有节点，失败返回 ERROR。
 tests:
   contract: api.registry loads this manifest and api.runner validates its receipt.
   smoke: 代表性 workflow 统一验收。
+implementation: {status: implemented, module: maya_create_primitive.maya_create_primitive}
+verification: {level: contract_tested, evidence: [tests/test_maya_asset_apis.py]}
 handler: cgi_pipeline.capabilities.maya.asset.maya_create_primitive.adapter:execute

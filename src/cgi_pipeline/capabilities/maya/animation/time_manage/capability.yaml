@@ -1,0 +1,41 @@
+api_id: maya.animation.time.manage
+version: 1.0.0
+executor: maya
+capability: animation.time
+operation: manage
+stages: [animation, rigging]
+targets: [timeline, current_time]
+access: write
+effects:
+  scene_read: 'action=query: Reads timeline state.'
+  scene_write: 'action=set_current: Changes current frame. action=set_range: Changes playback or animation range.'
+execution_modes: [local, foreground, background]
+surfaces: [maya, service]
+modes: [inspect, apply]
+mode_binding:
+  input: action
+  cases:
+  - value: query
+    mode: inspect
+  - value: set_current
+    mode: apply
+  - value: set_range
+    mode: apply
+inputs:
+  action: {type: string, required: true, choices: [query, set_current, set_range], description: Timeline action.}
+  current_frame: {type: number, description: Finite target frame for set_current.}
+  playback_start: {type: number, description: Playback range start for set_range.}
+  playback_end: {type: number, description: Playback range end for set_range.}
+  animation_start: {type: number, description: Animation range start for set_range.}
+  animation_end: {type: number, description: Animation range end for set_range.}
+preconditions: [Set actions require their matching frame values.]
+idempotent: true
+outputs: {action: Executed action., timeline: Current timeline fields., before: Timeline fields before a set action.}
+statuses: [SUCCESS, ERROR]
+errors: {MAYA_ANIMATION_OPERATION_FAILED: Timeline action or frame values are invalid.}
+recovery: ["Use query to inspect the current state, then submit a complete finite range.", Current-frame changes are not Maya-undoable; API failures attempt to restore the original frame.]
+help: {summary: Query or edit Maya current time and timeline ranges through one bounded API., usage: "execute_api(maya.animation.time.manage, params={action, current_frame})", scenario: Inspect timing or establish the frame used by animation and rig tests., safety: Range edits use one Maya undo chunk; current-frame edits are not Maya-undoable and restore the original frame only when the API reports failure.}
+tests: {contract: tests/test_maya_p1_apis.py, smoke: Foreground Maya timeline query; current-frame failure restoration is contract-tested.}
+implementation: {status: implemented}
+verification: {level: contract_tested, evidence: [tests/test_maya_p1_apis.py]}
+handler: cgi_pipeline.capabilities.maya.animation_core:manage_time

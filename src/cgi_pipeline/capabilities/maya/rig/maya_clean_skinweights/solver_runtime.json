@@ -1,0 +1,6 @@
+{
+  "runtime_owner": "Y:/GGbommer/scripts/Notes/ai/scripts/brain_python.ps1",
+  "python_executable": "Y:/GGbommer/scripts/.conda_envs/brain/python.exe",
+  "native_bin": "Y:/GGbommer/scripts/.conda_envs/brain/Library/bin",
+  "timeout_seconds": 1800
+}

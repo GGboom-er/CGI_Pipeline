@@ -1,0 +1,41 @@
+api_id: maya.scene.components.select
+version: 1.0.1
+name: components_select
+executor: maya
+capability: scene.components
+operation: select
+stages: [modeling, rigging, animation]
+targets: [mesh_component, selection]
+access: write
+effects:
+  scene_write: Converts explicit Maya nodes or components to one bounded component type and updates selection.
+execution_modes: [local, foreground, background]
+surfaces: [maya, service]
+modes: [apply]
+inputs:
+  action: {type: string, default: convert_select, choices: [convert_select, clear], description: "Component selection action."}
+  source: {type: array, default: [], description: "Explicit node or component names; required for convert_select."}
+  component_type: {type: string, default: vertex, choices: [vertex, edge, face, uv, vertex_face], description: "Target component type."}
+  selection_mode: {type: string, default: replace, choices: [replace, add, remove], description: "How converted components modify active selection."}
+  max_items: {type: integer, default: 500, description: "Maximum selected components; hard limit 2000."}
+preconditions: [Each source must resolve to one DAG owner; ambiguous short names are rejected., Source values must support polygon component conversion.]
+idempotent: true
+outputs:
+  action: 'Optional by action: action returned by the source implementation.'
+  component_type: 'Optional by action: component type returned by the source implementation.'
+  selection_mode: 'Optional by action: selection mode returned by the source implementation.'
+  source: 'Optional by action: source returned by the source implementation.'
+  items: Converted component long paths.
+  count: Number of returned or processed items for this action.
+  truncated: Whether conversion exceeded max_items.
+  before: Previous selection for recovery.
+  after: Resulting selection.
+  recovery: 'Optional by action: recovery returned by the source implementation.'
+statuses: [SUCCESS, ERROR]
+errors: {MAYA_SCENE_OPERATION_FAILED: "Invalid source, action, component type or Maya context."}
+recovery: [Failures after selection attempt restore the previous selection immediately., Restore output.recovery.selection with maya.scene.selection.set after a successful call when rollback is needed.]
+help: {summary: "Convert explicit Maya objects or components and select a bounded result.", usage: "execute_api(maya.scene.components.select, params={action, source, component_type, selection_mode})", scenario: "Select mesh vertices, edges, faces, UVs or vertex-faces without arbitrary code.", safety: "Selection-only mutation; returns the previous selection for explicit recovery."}
+tests: {contract: tests/test_maya_scene_p1_batch2.py, smoke: "Foreground Maya component conversion and selection restore."}
+implementation: {status: implemented, module: maya.scene_components_measurements:select_components}
+verification: {level: contract_tested, evidence: [tests/test_maya_scene_p1_batch2.py]}
+handler: cgi_pipeline.capabilities.maya.scene_components_measurements:select_components

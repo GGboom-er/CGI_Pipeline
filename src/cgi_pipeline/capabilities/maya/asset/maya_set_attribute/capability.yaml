@@ -1,5 +1,5 @@
 api_id: maya.asset.maya_set_attribute
-version: 1.0.0
+version: 1.0.1
 name: maya_set_attribute
 executor: maya
 capability: scene.edit
@@ -12,8 +12,8 @@ targets:
 - attribute
 access: write
 effects:
-  inspect: 只读取场景或标准数据，不改变资产。
-  apply: 按 API 实现对当前任务沙盒中的场景或数据执行操作。
+  scene_write: Sets the requested attribute; unlock=true unlocks first and relocks on the normal success path, without finally
+    restoration on error.
 execution_modes:
 - local
 - background
@@ -23,12 +23,26 @@ surfaces:
 - service
 modes:
 - apply
-inputs: {}
+inputs:
+  plug: {type: string, description: "完整属性 plug，如 |root.translateX。"}
+  node: {type: string, description: "与 attribute 一起使用的节点。"}
+  attribute: {type: string, description: "与 node 一起使用的属性名。"}
+  value: {type: [string, number, boolean, array], description: "要写入的值。"}
+  values: {type: array, description: "复合属性的多值兼容输入。"}
+  type: {type: string, description: "setAttr 的可选 type。"}
+  unlock: {type: boolean, default: false, description: "是否显式临时解锁属性后恢复锁定。"}
 preconditions:
 - 项目配置通过统一 config/{project}_config.json 接口加载。
 - 后台模式由 CGI Worker 打开或复用对应 DCC 场景。
 idempotent: false
-outputs: {}
+outputs:
+  plug: 'Optional by action: plug returned by the source implementation.'
+  before: 'Optional by action: before returned by the source implementation.'
+  after: 'Optional by action: after returned by the source implementation.'
+  restored_lock: 'Optional by action: restored lock returned by the source implementation.'
+  summary: Optional framework operation summary; present when the adapter supplies
+    one.
+  items: Optional framework item records; present when the adapter supplies them.
 statuses:
 - SUCCESS
 - PARTIAL
@@ -44,11 +58,13 @@ recovery:
 - 读取 api_help 获取参数、前置条件和输出。
 - 失败时检查任务报告中的错误与恢复建议。
 help:
-  summary: maya_set_attribute
-  usage: execute_api(maya.asset.maya_set_attribute, params={...})
-  scenario: maya_set_attribute
-  safety: read API 只读；write/destructive API 仅写入任务沙盒。
+  summary: 对单个 Maya plug 执行受类型约束的 setAttr，并报告修改前后值和锁定状态。
+  usage: "execute_api(maya.asset.maya_set_attribute, params={plug: '|root.visibility', value: true})"
+  scenario: 节点属性配置、绑定开关和 workflow 参数注入。
+  safety: 默认拒绝写入锁定 plug；仅 unlock=true 时临时解锁并在完成后恢复。
 tests:
   contract: api.registry loads this manifest and api.runner validates its receipt.
   smoke: 代表性 workflow 统一验收。
+implementation: {status: implemented, module: maya_set_attribute.maya_set_attribute}
+verification: {level: contract_tested, evidence: [tests/test_maya_asset_apis.py]}
 handler: cgi_pipeline.capabilities.maya.asset.maya_set_attribute.adapter:execute

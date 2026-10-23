@@ -5,9 +5,10 @@
 #   python cli.py list-apis
 #   python cli.py list-workflows
 #   python cli.py resolve-asset --project ysj --asset xiaotianquan
-#   python cli.py run-api maya.rig.maya_clean_skinweights --project ysj --asset xiaotianquan --source-path xxx.ma
+#   python cli.py api-help maya.rig.maya_clean_skinweights
 #   python cli.py run-api maya.asset.maya_master_cleanup --project ysj --asset xiaotianquan --source-path xxx.ma --param mode=check
-#   python cli.py run-chain --project ysj --asset xiaotianquan --source-path xxx.ma --steps maya.rig.maya_clean_skinweights,maya.asset.save_scene --param save_path=yyy.ma
+#   Skin cleanup v2 requires a skin_clusters array via execute_api JSON parameters;
+#   the scalar-only CLI --param parser cannot provide that explicit target scope.
 #   python cli.py run-workflow tex_to_rig_verify_and_sync --project ysj --asset ciweiguai
 
 import argparse
@@ -129,112 +130,48 @@ def _parse_params(param_list: list[str]) -> dict:
     return params
 
 
+def _print_submitted_result(result):
+    """Keep synchronous CLI behavior while reusing the service task lifecycle."""
+    from cgi_pipeline.server.internals import get_task_result
+    from cgi_pipeline.core.task_status import TERMINAL_STATUSES
+    print(json.dumps(result, ensure_ascii=False))
+    if result.get('status') != 'SUBMITTED':
+        return result
+    deadline = time.monotonic() + 1800
+    while time.monotonic() < deadline:
+        state = get_task_result(result['task_id'])
+        if state.get('status') in TERMINAL_STATUSES:
+            print(json.dumps(state, ensure_ascii=False))
+            return state
+        time.sleep(1)
+    state = {'task_id': result['task_id'], 'status': 'PROGRESS',
+             'message': 'Wait ended; retrieve this task without resubmitting.'}
+    print(json.dumps(state, ensure_ascii=False))
+    return state
+
+
+def _cli_payload(args):
+    return {'project': args.project, 'asset_name': args.asset,
+            'source_path': args.source_path or '',
+            **{key: getattr(args, key) for key in ('business_task_id', 'workspace_id', 'workspace_project')
+               if getattr(args, key, None)}}
+
+
 def cmd_run_api(args):
-    from cgi_pipeline.core.dcc_factory import create_worker, open_source_file
-    from cgi_pipeline.core.capability_registry import get_executor, resolve_api_id
-
-    api_id = resolve_api_id(args.api_id)
-    dcc_type = get_executor(api_id)
-    task_id = f"cli-{uuid.uuid4().hex[:8]}"
-    params = _parse_params(args.param)
-
-    payload = {
-        'task_id': task_id,
-        'api_id': api_id,
-        'project': args.project,
-        'asset_name': args.asset,
-        'source_path': args.source_path or '',
-        'parameters': params,
-    }
-
-    print(f'[{task_id}] 启动 {dcc_type} Worker...')
-    worker = create_worker(dcc_type, args.source_path)
-    worker.start()
-
-    try:
-        if args.source_path:
-            print(f'[{task_id}] 打开源文件: {args.source_path}')
-            ok, err = open_source_file(worker, task_id, args.source_path, dcc_type)
-            if not ok:
-                print(f'[{task_id}] 打开失败: {err}')
-                return
-
-        print(f'[{task_id}] 执行 API: {api_id}')
-        t0 = time.time()
-        result = worker.run_api(payload)
-        elapsed = round(time.time() - t0, 2)
-
-        status = result.get('status', 'UNKNOWN')
-        print(f'[{task_id}] {status} ({elapsed}s)')
-
-        detail = result.get('detail', '')
-        if detail:
-            try:
-                detail_obj = json.loads(detail)
-                print(json.dumps(detail_obj, indent=2, ensure_ascii=False))
-            except (json.JSONDecodeError, TypeError):
-                print(detail)
-    finally:
-        worker.shutdown()
-        print(f'[{task_id}] Worker 已关闭')
+    from cgi_pipeline.server.internals import _submit_api_to_celery
+    payload = _cli_payload(args)
+    payload.update(params=_parse_params(args.param), context={'execution_mode': 'background'})
+    return _print_submitted_result(_submit_api_to_celery(args.api_id, payload))
 
 
 def cmd_run_chain(args):
-    from cgi_pipeline.core.dcc_factory import create_worker, open_source_file
-    from cgi_pipeline.core.capability_registry import get_executor, resolve_api_id
-
-    steps = [resolve_api_id(s.strip()) for s in args.steps.split(',') if s.strip()]
-    if not steps:
-        print('错误: --steps 不能为空')
-        return
-
-    dcc_type = get_executor(steps[0])
-    task_id = f"cli-chain-{uuid.uuid4().hex[:8]}"
+    from cgi_pipeline.server.internals import _submit_chain
+    steps = [step.strip() for step in args.steps.split(',') if step.strip()]
     params = _parse_params(args.param)
-
-    print(f'[{task_id}] 链式执行: {" → ".join(steps)}')
-    worker = create_worker(dcc_type)
-    worker.start()
-
-    try:
-        if args.source_path:
-            print(f'[{task_id}] 打开源文件: {args.source_path}')
-            ok, err = open_source_file(worker, task_id, args.source_path, dcc_type)
-            if not ok:
-                print(f'[{task_id}] 打开失败: {err}')
-                return
-
-        for i, api_id in enumerate(steps):
-            step_params = dict(params) if api_id == steps[-1] else {}
-            payload = {
-                'task_id': f'{task_id}-step{i}',
-                'api_id': api_id,
-                'project': args.project,
-                'asset_name': args.asset,
-                'source_path': '',
-                'parameters': step_params,
-            }
-            print(f'[{task_id}] Step {i+1}/{len(steps)}: {api_id}')
-            t0 = time.time()
-            result = worker.run_api(payload)
-            elapsed = round(time.time() - t0, 2)
-            status = result.get('status', 'UNKNOWN')
-            print(f'  → {status} ({elapsed}s)')
-
-            detail = result.get('detail', '')
-            if detail:
-                try:
-                    detail_obj = json.loads(detail)
-                    if detail_obj.get('status') in ('ERROR', 'BLOCKED', 'NEEDS_ATTENTION'):
-                        print(f'  链中断: {detail_obj.get("error", detail_obj.get("status"))}')
-                        return
-                except (json.JSONDecodeError, TypeError):
-                    pass
-
-        print(f'[{task_id}] 链式执行完成')
-    finally:
-        worker.shutdown()
-        print(f'[{task_id}] Worker 已关闭')
+    payload = _cli_payload(args)
+    payload.update(api_chain=[{'api_id': api_id, 'parameters': params if i == len(steps)-1 else {}}
+                              for i, api_id in enumerate(steps)], batch_mode=True, atomic=True)
+    return _print_submitted_result(_submit_chain(payload))
 
 
 def cmd_run_workflow(args):
@@ -247,6 +184,7 @@ def cmd_run_workflow(args):
         extra_params['category'] = args.category
 
     payload = {
+        **_cli_payload(args),
         'workflow_id': args.workflow_id,
         'source_path': args.source_path or '',
         'project': args.project,
@@ -324,6 +262,11 @@ def main():
     p_rw.add_argument('--param', action='append', help='额外 input 参数 key=value，可多次使用')
     p_rw.add_argument('--wait', action='store_true', help='提交后轮询任务状态')
     p_rw.add_argument('--interval', type=float, default=5.0, help='--wait 轮询间隔秒数')
+
+    for command_parser in (p_ra, p_rc, p_rw):
+        command_parser.add_argument('--business-task-id')
+        command_parser.add_argument('--workspace-id')
+        command_parser.add_argument('--workspace-project', help='Storage namespace; project still selects business rules')
 
     args = parser.parse_args()
 

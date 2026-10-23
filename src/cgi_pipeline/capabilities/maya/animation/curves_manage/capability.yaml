@@ -1,0 +1,52 @@
+api_id: maya.animation.curves.manage
+version: 1.0.1
+executor: maya
+capability: animation.curves
+operation: manage
+stages: [animation, rigging]
+targets:
+- animation_curve
+- tangent_types
+access: destructive
+effects:
+  scene_read: 'action=query: Reads bounded keys and tangent types from explicit plugs.'
+  scene_write: 'action=set_tangent_types: Edits tangent types on bounded matching keys.'
+execution_modes: [local, foreground, background]
+surfaces: [maya, service]
+modes: [inspect, apply]
+mode_binding:
+  input: action
+  cases:
+  - value: query
+    mode: inspect
+  - value: set_tangent_types
+    mode: apply
+inputs:
+  action: {type: string, required: true, choices: [query, set_tangent_types], description: "Curve action."}
+  nodes: {type: array, required: true, description: "Unique explicit nodes resolved to long paths."}
+  attributes: {type: array, required: true, description: "Unique relative plug names shared by all nodes."}
+  start_time: {type: number, description: "Optional inclusive key range start."}
+  end_time: {type: number, description: "Optional inclusive key range end."}
+  times: {type: array, default: [], description: "Optional unique explicit key times; mutually exclusive with a range."}
+  in_tangent_type: {type: string, default: '', choices: ['', auto, clamped, flat, linear, plateau, spline, step, stepnext], description: "Optional incoming tangent type."}
+  out_tangent_type: {type: string, default: '', choices: ['', auto, clamped, flat, linear, plateau, spline, step, stepnext], description: "Optional outgoing tangent type."}
+  max_items: {type: integer, default: 200, description: "Per-list bound; hard limit 2000."}
+  max_keys: {type: integer, default: 2000, description: "Returned or edited key bound; hard limit 65536."}
+preconditions: [Every requested plug exists; tangent edits require a finite range or explicit times and at least one tangent type.]
+idempotent: true
+outputs:
+  action: 'Optional by action: action returned by the source implementation.'
+  items: Per-plug curves and key data.
+  key_count: Matched key count.
+  returned_key_count: Number of visible animation keys after applying max_keys.
+  truncated: Whether read-only output exceeded max_keys.
+  changed_curves: Native modified-curve count for edits.
+  before_key_count: Number of matched keys before a tangent edit.
+statuses: [SUCCESS, ERROR]
+errors: {MAYA_ANIMATION_OPERATION_FAILED: "Target, key range, tangent type, native edit, or readback failed."}
+recovery: [Query the same explicit plugs first; failed tangent edits roll back one Maya undo chunk.]
+help: {summary: "Inspect bounded animation curves or edit key tangent types.", usage: "execute_api(maya.animation.curves.manage, params={action, nodes, attributes, start_time, end_time})", scenario: "Audit controller keys and normalize tangent types without relying on active selection.", safety: "Weighted tangent values, locks, animation layers and curve file transfer are intentionally outside this phase."}
+tests: {contract: tests/test_maya_animation_p1_batch2.py, smoke: "Foreground query plus reversible tangent edit on disposable animation curves."}
+implementation: {status: implemented}
+verification: {level: contract_tested, evidence: [tests/test_maya_animation_p1_batch2.py]}
+handler: cgi_pipeline.capabilities.maya.animation_curves:manage_curves

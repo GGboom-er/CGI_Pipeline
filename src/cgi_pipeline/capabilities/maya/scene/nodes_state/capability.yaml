@@ -1,0 +1,37 @@
+api_id: maya.scene.nodes.state
+version: 1.0.0
+name: nodes_state
+executor: maya
+capability: scene.nodes
+operation: state
+stages: [modeling, rigging, animation]
+targets: [scene_object]
+access: write
+effects:
+  scene_write: Edits visibility or TRS channel locks on bounded Maya nodes in one undo transaction.
+execution_modes: [local, foreground, background]
+surfaces: [maya, service]
+modes: [apply]
+inputs:
+  items: {type: array, required: true, description: "Items with node and optional visibility or lock_trs booleans."}
+  max_items: {type: integer, default: 100, description: "Maximum items, hard limit 500."}
+preconditions: [Nodes resolve unambiguously., TRS locks require transform or joint nodes.]
+idempotent: true
+outputs:
+  items: Long paths with before and verified after states.
+  count: Edited node count.
+statuses: [SUCCESS, ERROR]
+errors:
+  MAYA_SCENE_P2_OPERATION_FAILED: Validation, Maya edit, or readback failed and the transaction was rolled back.
+recovery: [Inspect node types and locked channels, then retry the complete transaction.]
+help:
+  summary: Set bounded Maya node visibility and TRS lock state.
+  usage: execute_api(maya.scene.nodes.state, params={items, max_items})
+  scenario: Prepare controller or geometry editability without selection-dependent commands.
+  safety: One undo transaction with readback verification.
+tests:
+  contract: tests/test_maya_scene_p2.py
+  smoke: Foreground visibility and lock edit on disposable transforms followed by undo.
+implementation: {status: implemented}
+verification: {level: contract_tested, evidence: [tests/test_maya_scene_p2.py]}
+handler: cgi_pipeline.capabilities.maya.scene_p2:manage_node_state

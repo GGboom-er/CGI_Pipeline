@@ -1,0 +1,34 @@
+api_id: maya.scene.attributes.set_many
+version: 1.1.4
+name: attributes_set_many
+executor: maya
+capability: scene.attributes
+operation: set
+stages: [modeling, rigging, animation]
+targets: [attribute]
+access: write
+effects:
+  scene_write: "Sets explicit plugs. Optional observation guard supports scalar TRS placement channels on captured leaf mesh transforms, with verified readback and owned-chunk rollback."
+execution_modes: [local, foreground, background]
+surfaces: [maya, service]
+modes: [apply]
+inputs:
+  items: {type: array, required: true, description: "[{node, attribute, value, optional type}]; guarded items require expected_uuid and numeric expected_before, full TRS channel names only, no explicit type."}
+  max_items: {type: integer, default: 500, description: Maximum plugs.}
+  observation: {type: object, description: "Optional fresh capture sidecar {path,sha256}; only numeric translateX/Y/Z, rotateX/Y/Z, scaleX/Y/Z on captured ordinary leaf mesh transforms. Every requested captured target must explicitly have pixel_lookup_supported=true; unsupported non-target meshes do not block. Requires enabled undo and rejects DG consumers, connections, duplicate plugs and truncation. Geometry/view freshness is not rendered appearance freshness."}
+preconditions: [All plugs exist and are writable.]
+idempotent: true
+outputs:
+  items: Before and after values.
+  count: Number of returned or processed items for this action.
+  truncated: Observation mode always false; oversized batches fail before writing.
+  guard: "Observation mode only; preflight, writes, readback, exact snapshot change detection and rollback verification, fixed absolute 1e-6 / zero relative tolerance for expected old values and desired readback in native queried units, owned undo chunk and recovery errors."
+  scope: Observation mode only; exact supported placement-edit scope.
+statuses: [SUCCESS, ERROR]
+errors: {MAYA_BATCH_OPERATION_FAILED: Invalid legacy plug or write., MAYA_GUARDED_EDIT_FAILED: Observation validation or guarded edit/readback/recovery failed; inspect output.guard.}
+recovery: ["Inspect guarded error and actual rollback evidence; capture a fresh observation before retrying. Legacy arbitrary attributes retain existing partial-write behavior."]
+help: {summary: Set Maya attributes with optional observed TRS guard., usage: "execute_api(maya.scene.attributes.set_many, params={items, observation?})", scenario: "Guarded placement channels on an observed ordinary polygon leaf transform; legacy calls support arbitrary explicit plugs.", safety: "Guarded mode does not cover arbitrary DG, shape, material or rig authoring. No automatic unlocking, disconnection, framing or view restoration."}
+tests: {contract: tests/test_maya_guarded_edits.py, smoke: Foreground Maya observed scalar TRS edit and actual rollback verification.}
+implementation: {status: implemented, module: maya.scene_batch:set_attributes_many}
+verification: {level: live_tested, evidence: [tests/test_scene_batch_apis.py, tests/test_maya_guarded_edits.py, projects/default/PL296/work/tests/product_registered_evidence_v3.json, projects/default/PL296/work/tests/product_registered_evidence_v4.json]}
+handler: cgi_pipeline.capabilities.maya.scene_batch:set_attributes_many

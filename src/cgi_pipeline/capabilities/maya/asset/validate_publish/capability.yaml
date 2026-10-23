@@ -1,5 +1,5 @@
 api_id: maya.asset.validate_publish
-version: 1.0.0
+version: 1.0.1
 name: 发布前质量门禁
 executor: maya
 capability: pipeline.quality
@@ -9,10 +9,10 @@ stages:
 targets:
 - asset
 - scene
-access: read
+access: write
 effects:
-  inspect: 只读取场景或标准数据，不改变资产。
-  apply: 按 API 实现对当前任务沙盒中的场景或数据执行操作。
+  scene_read: Reads the publishing validation scope.
+  file_write: Writes the independent business Markdown quality report.
 execution_modes:
 - local
 - background
@@ -48,17 +48,17 @@ preconditions:
 - 后台模式由 CGI Worker 打开或复用对应 DCC 场景。
 idempotent: true
 outputs:
-- name: scene
-  type: scene_file
-  label: 检查后场景
-- name: report
-  type: report
-  label: QC 报告 (.md)
+  report_path: 'Optional by action: report path returned by the source implementation.'
+  result: Underlying operation result; its internal fields belong to that operation.
+  summary: Optional framework operation summary; present when the adapter supplies
+    one.
+  items: Optional framework item records; present when the adapter supplies them.
 statuses:
 - SUCCESS
 - PARTIAL
 - ERROR
 - BLOCKED
+- AUDIT_FAILED
 - NEEDS_ATTENTION
 - TIMEOUT
 - CANCELLED
@@ -72,8 +72,10 @@ help:
   summary: 发布前自动化 QC 检查：验证场景完整性、cache 组存在性、mesh 数量、未知节点、空组、命名规范。只读操作，输出 PASS/FAIL 报告。
   usage: execute_api(maya.asset.validate_publish, params={...})
   scenario: 发布前自动化 QC 检查：验证场景完整性、cache 组存在性、mesh 数量、未知节点、空组、命名规范。只读操作，输出 PASS/FAIL 报告。
-  safety: read API 只读；write/destructive API 仅写入任务沙盒。
+  safety: 具体副作用见本契约 effects；运行上下文、路径与恢复边界见 docs/architecture/pipeline_runtime_contract_v1.md。
 tests:
   contract: api.registry loads this manifest and api.runner validates its receipt.
   smoke: 代表性 workflow 统一验收。
+implementation: {status: implemented, module: validate_publish.validate_publish}
+verification: {level: contract_tested, evidence: [tests/test_maya_asset_high_value_contracts.py]}
 handler: cgi_pipeline.capabilities.maya.asset.validate_publish.adapter:execute

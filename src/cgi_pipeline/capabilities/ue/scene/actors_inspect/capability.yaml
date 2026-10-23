@@ -1,0 +1,31 @@
+api_id: ue.scene.actors.inspect
+version: 1.0.1
+executor: ue
+capability: scene.actors
+operation: inspect
+stages: [editor]
+targets: [level_actor]
+access: read
+effects:
+  scene_read: Reads bounded actor identity and transform data.
+execution_modes: [foreground]
+surfaces: [ue, service]
+modes: [inspect]
+inputs:
+  actors: {type: array, required: true, description: "Actor object paths, names, or labels."}
+  max_items: {type: integer, default: 200, description: "Maximum actors, hard limit 1000."}
+preconditions: [Runs in UE5 Editor with a loaded level.]
+idempotent: true
+outputs:
+  items: Actor identity and transform rows.
+  count: Number of returned or processed items for this action.
+  error_count: Number of failed per-item operations.
+  truncated: Whether input exceeded max_items.
+statuses: [SUCCESS, PARTIAL, ERROR]
+errors: {UE_SCENE_CORE_OPERATION_FAILED: Invalid actor identifier or editor context.}
+recovery: [Use object paths for ambiguous actors.]
+help: {summary: Inspect loaded-level UE actors., usage: "execute_api(ue.scene.actors.inspect, params={actors})", scenario: Capture actor state before an edit., safety: Read-only and bounded.}
+tests: {contract: tests/test_ue_scene_core_apis.py, smoke: UE5 Editor actor inspection.}
+handler: cgi_pipeline.capabilities.ue.scene_core:inspect_actors
+implementation: {status: implemented}
+verification: {level: contract_tested, evidence: [tests/test_ue_scene_core_apis.py]}

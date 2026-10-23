@@ -1,0 +1,27 @@
+api_id: maya.scene.graph.validate_delta
+version: 1.0.0
+name: graph_validate_delta
+executor: maya
+capability: scene.graph
+operation: compare
+stages: [modeling, rigging, animation]
+targets: [dependency_graph]
+access: read
+effects: {}
+execution_modes: [local, foreground, background]
+surfaces: [maya, service]
+modes: [inspect]
+inputs:
+  before: {type: object, required: true, description: Earlier snapshot output.}
+  after: {type: object, required: true, description: Later snapshot output.}
+preconditions: [Both snapshots use snapshot_bounded schema.]
+idempotent: true
+outputs: {added_nodes: Added nodes, removed_nodes: Removed nodes, added_edges: Added edges, removed_edges: Removed edges, changed: Delta flag.}
+statuses: [SUCCESS, ERROR]
+errors: {MAYA_BATCH_OPERATION_FAILED: Snapshot schema is invalid.}
+recovery: [Recreate both snapshots with graph.snapshot_bounded.]
+help: {summary: Validate the delta between two Maya graph snapshots., usage: "execute_api(maya.scene.graph.validate_delta, params={before, after})", scenario: Verify an MFace graph edit changed only intended nodes and edges., safety: Read-only comparison.}
+tests: {contract: tests/test_scene_batch_apis.py, smoke: Compare two bounded snapshots.}
+implementation: {status: implemented, module: maya.scene_batch:validate_graph_delta}
+verification: {level: contract_tested, evidence: [tests/test_scene_batch_apis.py]}
+handler: cgi_pipeline.capabilities.maya.scene_batch:validate_graph_delta

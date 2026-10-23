@@ -1,0 +1,11 @@
+{
+  "packages": [
+    {
+      "id": "ysj_crowd",
+      "tool_card": "Projects/YSJ/docs/YSJ Crowd 工具部署说明.md",
+      "root": "Projects/YSJ/scripts",
+      "versions": ["5.7"],
+      "entrypoint": "ysj_ue_crowd_dcc_tool:register_tool_menus"
+    }
+  ]
+}

@@ -2,71 +2,18 @@
 
 import maya.cmds as cmds
 import os
-import re
-import sys
 import time
-from pathlib import Path
 
-from cgi_pipeline.core.path_guard import is_protected_path, ProtectedPathError
+from cgi_pipeline.core.path_guard import is_protected_path
 from cgi_pipeline.core.receipt import make_receipt
+from cgi_pipeline.core.scene_files import (directory_lock, is_managed_path as _is_managed_path,
+                                           next_version_path as _next_version_path)
 from cgi_pipeline.paths import REPOSITORY_ROOT
 
 
-try:
-    from filelock import FileLock
-except ImportError:
-    from contextlib import contextmanager
-
-    @contextmanager
-    def _noop_lock(*_a, **_kw):
-        yield
-
-    class FileLock:
-        def __init__(self, *a, **kw):
-            pass
-        def __enter__(self):
-            return self
-        def __exit__(self, *a):
-            pass
-
-
 def get_next_version_path(filepath: str) -> str:
-    """
-    给定一个路径，如果该路径已存在且包含 _vXXX 后缀，则自动递增版本号。
-    例如：asset_v001.ma -> asset_v002.ma
-    """
-    path_obj = Path(filepath)
-    if not path_obj.exists():
-        return filepath
-        
-    directory = path_obj.parent
-    stem = path_obj.stem
-    ext = path_obj.suffix
-
-    # 正则提取末尾的 _vXXX 或 vXXX
-    match = re.search(r'(_?v)(\d+)$', stem, re.IGNORECASE)
-    if match:
-        prefix = match.group(1)
-        version_num = int(match.group(2))
-        base_name = stem[:match.start()]
-        
-        while path_obj.exists():
-            version_num += 1
-            # 补齐对应的 0 位数，例如 001 -> 002
-            padding = len(match.group(2))
-            new_version_str = f"{version_num:0{padding}d}"
-            new_stem = f"{base_name}{prefix}{new_version_str}"
-            path_obj = directory / f"{new_stem}{ext}"
-    else:
-        # 如果没有版本号，强加 _v001
-        base_name = stem
-        version_num = 1
-        while path_obj.exists():
-            new_stem = f"{base_name}_v{version_num:03d}"
-            path_obj = directory / f"{new_stem}{ext}"
-            version_num += 1
-
-    return str(path_obj.resolve())
+    """Compatibility entry for the shared scene-file version naming owner."""
+    return _next_version_path(filepath)
 
 
 def _generate_report(*args, **kwargs):
@@ -76,18 +23,7 @@ def _generate_report(*args, **kwargs):
 
 def _is_under_project_sandbox(path: str) -> bool:
     """后台保存只允许落在项目沙盒目录内。"""
-    if not path:
-        return False
-    try:
-        p = Path(path).resolve()
-        root = REPOSITORY_ROOT.resolve()
-        projects_root = root / 'projects'
-        runs_root = root / 'runs'
-        return p.is_relative_to(projects_root) or p.is_relative_to(runs_root)
-    except Exception:
-        norm = path.replace('\\', '/').lower()
-        root = str(REPOSITORY_ROOT).replace('\\', '/').rstrip('/').lower()
-        return norm.startswith(f'{root}/projects/') or norm.startswith(f'{root}/runs/')
+    return _is_managed_path(path, REPOSITORY_ROOT)
 
 
 def execute(payload: dict) -> dict:
@@ -157,14 +93,13 @@ def execute(payload: dict) -> dict:
             
         # 2. 版本防覆盖检测（加锁保证原子性）
         final_save_path = save_path
-        version_lock = FileLock(os.path.join(out_dir or '.', '.version_lock'), timeout=10)
-        with version_lock:
+        with directory_lock(out_dir or '.', timeout=10):
             # 强制升版本：只要路径存在，一律递增，禁止覆盖！
             final_save_path = get_next_version_path(save_path)
 
             # 3. 最终保存路径再检查一次
-            if is_protected_path(final_save_path):
-                reason = f'版本递增后路径 "{final_save_path}" 仍在受保护区域。'
+            if is_protected_path(final_save_path) or not _is_under_project_sandbox(final_save_path):
+                reason = f'版本递增后路径 "{final_save_path}" 在受保护区域或任务沙盒之外。'
                 return make_receipt(
                     'save_scene', 'BLOCKED', t0,
                     summary_input=scene_name,

@@ -1,0 +1,31 @@
+api_id: maya.scene.nodes.inspect_many
+version: 1.0.2
+name: nodes_inspect_many
+executor: maya
+capability: scene.nodes
+operation: inspect
+stages: [modeling, rigging, animation]
+targets: [scene_object]
+access: read
+effects:
+  scene_read: Reads bounded Maya node identity and type metadata.
+execution_modes: [local, foreground, background]
+surfaces: [maya, service]
+modes: [inspect]
+inputs:
+  nodes: {type: array, required: true, description: Node names or patterns.}
+  max_nodes: {type: integer, default: 200, description: Positive maximum of resolved nodes; nonpositive values return ERROR.}
+preconditions: [Runs in one Maya scene context.]
+idempotent: true
+outputs:
+  nodes: Resolved long paths, UUIDs, types and parents.
+  count: Number of returned or processed items for this action.
+  truncated: True only when at least one resolved unique node was omitted by max_nodes.
+statuses: [SUCCESS, ERROR]
+errors: {MAYA_BATCH_OPERATION_FAILED: Invalid node query or Maya context.}
+recovery: [Reduce max_nodes or correct node patterns.]
+help: {summary: Inspect many Maya nodes in one main-thread call., usage: "execute_api(maya.scene.nodes.inspect_many, params={nodes})", scenario: Bounded rig-node discovery., safety: Read-only and bounded.}
+tests: {contract: tests/test_scene_batch_apis.py, smoke: Foreground Maya bounded query.}
+implementation: {status: implemented, module: maya.scene_batch:inspect_nodes_many}
+verification: {level: live_tested, evidence: [tests/test_scene_batch_apis.py, tests/test_maya_graph_bounds.py, audit/chain-c69daed7.json]}
+handler: cgi_pipeline.capabilities.maya.scene_batch:inspect_nodes_many

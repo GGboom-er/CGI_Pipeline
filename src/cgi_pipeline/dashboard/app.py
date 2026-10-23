@@ -4,8 +4,7 @@
 # 实时展示任务执行状态、审计账本和API注册表。
 # 使用 FastAPI + SSE（Server-Sent Events）推送实时更新。
 #
-# 服务自举：Dashboard 启动时自动拉起 Redis + Worker。
-# 启动：Y:\GGbommer\scripts\Notes\Tools\_managed\conda_envs\cgi_pipeline\python.exe -m dashboard.app
+# Dashboard 只是共享运行时客户端；正式提交入口按需确保 Worker。
 
 import json
 import os
@@ -20,33 +19,27 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from cgi_pipeline.core.bootstrap import cfg as _cfg
 from cgi_pipeline.core.service_manager import (
-    is_redis_alive, start_redis, is_worker_alive, start_worker,
-    get_service_status, ensure_ready, shutdown_all, get_celery_app,
-    install_exit_hooks,
+    get_service_status, ensure_ready, get_celery_app, share_worker_runtime,
 )
-from cgi_pipeline.core.task_status import TERMINAL_STATUSES
+from cgi_pipeline.core.task_status import TERMINAL_STATUSES, SUCCESS_STATUSES
+from cgi_pipeline.core.task_audit import find_audit_files, read_entries, task_state
+from cgi_pipeline.server.internals import _find_audit_file
 
 PROJECT_ROOT = Path(_cfg.PROJECT_ROOT)
 AUDIT_DIR = PROJECT_ROOT / 'audit'
 REPORT_DIR = PROJECT_ROOT / 'reports'
 
 
-# ── 服务自举生命周期 ──
+# ── 共享运行时生命周期 ──
 @asynccontextmanager
 async def lifespan(app):
-    """Dashboard 启动时自动拉起 Redis + Worker，关闭时回收"""
-    print('[Dashboard] 正在启动服务...')
-    start_redis()
-    start_worker('cgi')
-    print('[Dashboard] 服务就绪')
+    """Frontend shutdown must leave the shared queue and DCC runtime available."""
+    share_worker_runtime()
     yield
-    print('[Dashboard] 正在关闭...')
-    shutdown_all()
-    print('[Dashboard] 已关闭')
-
-install_exit_hooks()
 
 app = FastAPI(title='CGI Pipeline Dashboard', version='2.0', lifespan=lifespan)
+from cgi_pipeline.dashboard.workflows import router as workflow_router
+app.include_router(workflow_router)
 
 # ── 静态文件 ──
 DASHBOARD_DIR = Path(__file__).parent
@@ -57,20 +50,20 @@ app.mount('/static', StaticFiles(directory=str(DASHBOARD_DIR / 'static')), name=
 @app.get('/api/tasks')
 async def get_tasks():
     """获取所有审计账本中的任务"""
-    tasks = []
-    if not AUDIT_DIR.exists():
-        return {'tasks': tasks}
+    return await asyncio.to_thread(_read_task_list)
 
-    for f in sorted(AUDIT_DIR.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
+
+def _read_task_list():
+    """Run the bulk directory walk and journal reads outside the HTTP event loop."""
+    tasks = []
+    files = find_audit_files(AUDIT_DIR)
+    for f in sorted(files.values(), key=lambda x: x.stat().st_mtime, reverse=True):
         if not f.suffix == '.json':
             continue
         try:
-            entries = []
-            for line in f.read_text(encoding='utf-8').strip().split('\n'):
-                if line.strip():
-                    entries.append(json.loads(line))
+            entries = read_entries(f)
             if entries:
-                latest = entries[-1]
+                latest = task_state(entries)
                 tasks.append({
                     'task_id': latest.get('task_id', f.stem),
                     'api_id': latest.get('api_id', ''),
@@ -89,15 +82,12 @@ async def get_tasks():
 # ── API：获取单个任务详情 ──
 @app.get('/api/tasks/{task_id}')
 async def get_task_detail(task_id: str):
-    audit_file = AUDIT_DIR / f'{task_id}.json'
-    if not audit_file.exists():
+    audit_file = _find_audit_file(task_id, AUDIT_DIR)
+    if audit_file is None:
         return {'error': f'Task {task_id} not found'}
 
-    entries = []
-    for line in audit_file.read_text(encoding='utf-8').strip().split('\n'):
-        if line.strip():
-            entries.append(json.loads(line))
-    return {'task_id': task_id, 'entries': entries}
+    entries = read_entries(audit_file)
+    return {'task_id': task_id, 'entries': entries, **task_state(entries)}
 
 
 # ── API：获取 API 列表 ──
@@ -125,11 +115,11 @@ async def list_projects():
 @app.get('/api/worker_status')
 async def worker_status_api():
     """前端执行前检查 Worker 是否就绪。不就绪时尝试自动拉起。"""
-    ok, err = ensure_ready('cgi')
+    ok, err = await asyncio.to_thread(ensure_ready, 'cgi')
     if not ok:
         return {'online': False, 'error': err, 'count': 0}
     from cgi_pipeline.core.service_manager import get_worker_health
-    health = get_worker_health('cgi')
+    health = await asyncio.to_thread(get_worker_health, 'cgi')
     return {
         'online': health.get('state') == 'HEALTHY',
         'count': 1 if health.get('pid_alive') else 0,
@@ -142,7 +132,7 @@ async def worker_status_api():
 @app.get('/api/service_status')
 async def service_status_api():
     """返回所有后端服务的运行状态"""
-    status = get_service_status(include_heartbeat=True)
+    status = await asyncio.to_thread(get_service_status, include_heartbeat=True)
     return {
         'redis': status['redis'],
         'worker_cgi': status['worker_cgi'],
@@ -500,121 +490,31 @@ async def node_editor():
 # ── API：从节点编辑器执行 API ──
 @app.post('/api/execute_api')
 async def execute_api(request: Request):
-    """
-    接收节点编辑器的 API 执行请求。
-    优先通过 Celery 派发到 DCC Worker，Redis 不可用时降级为仅写审计账本。
-    """
-    import uuid
+    """Adapt the node editor request to the shared API submission owner."""
+    from cgi_pipeline.server.internals import _submit_api_to_celery
     body = await request.json()
-    task_id = str(uuid.uuid4())[:8]
-    api_id = body.get('api_id', 'unknown')
-    project = body.get('project', 'default')
-    asset_name = body.get('asset_name', 'unknown')
-    source_path = body.get('source_path', '')
-    parameters = body.get('parameters', {})
-
-    payload = {
-        'task_id': task_id,
-        'api_id': api_id,
-        'project': project,
-        'asset_name': asset_name,
-        'source_path': source_path,
-        'parameters': parameters,
-    }
-
-    dispatched = False
-    celery_task_id = None
-
-    # 尝试通过 Celery 派发
-    try:
-        _app = get_celery_app()
-        result = _app.send_task(
-            'cgi_pipeline.core.tasks.execute_api_operation',
-            args=[payload],
-            task_id=task_id,
-        )
-        celery_task_id = result.id
-        dispatched = True
-    except Exception as e:
-        # Redis 不可用 — 降级为仅审计
-        detail = f'Celery 派发失败（{type(e).__name__}: {e}），已降级为本地审计'
-
-        AUDIT_DIR.mkdir(parents=True, exist_ok=True)
-        audit_file = AUDIT_DIR / f'{task_id}.json'
-        entry = {
-            'task_id': task_id,
-            'api_id': api_id,
-            'status': 'DEGRADED',
-            'detail': detail,
-            'attempt': 1,
-            'ts': time.time(),
-        }
-        with open(audit_file, 'a', encoding='utf-8') as f:
-            f.write(json.dumps(entry, ensure_ascii=False) + '\n')
-
-    return {
-        'task_id': celery_task_id or task_id,
-        'status': 'DISPATCHED' if dispatched else 'DEGRADED',
-        'api_id': api_id,
-        'dispatched': dispatched,
-    }
+    payload = {key: body[key] for key in (
+        'project', 'asset_name', 'source_path', 'workspace_id', 'business_task_id', 'scene_action'
+    ) if key in body}
+    payload['params'] = body.get('parameters', {})
+    payload['context'] = {'execution_mode': 'background'}
+    result = await asyncio.to_thread(_submit_api_to_celery, body.get('api_id', ''), payload)
+    return {**result, 'dispatched': result.get('status') == 'SUBMITTED'}
 
 
 # ── API：图级执行（ComfyUI 风格）——一次性提交整张节点图 ──
 @app.post('/api/execute_graph')
 async def execute_graph(request: Request):
-    """
-    接收前端提交的完整节点图，提取API链后一次性派发到 Celery。
-    与 /api/execute_api（单 API）相比：
-    - 1 次 API 调用 vs N 次
-    - 1 次 Celery 任务 vs N 次
-    - Maya 只打开文件 1 次
-    """
-    import uuid
+    """Submit a literal same-DCC graph through the shared chain owner."""
+    from cgi_pipeline.server.internals import _submit_chain
     body = await request.json()
-    chain_task_id = f'chain-{str(uuid.uuid4())[:8]}'
+    payload = {key: body[key] for key in (
+        'project', 'asset_name', 'source_path', 'workspace_id', 'business_task_id', 'scene_action'
+    ) if key in body}
+    payload.update(api_chain=body.get('api_chain', []), batch_mode=True, atomic=True)
+    result = await asyncio.to_thread(_submit_chain, payload)
+    return {**result, 'dispatched': result.get('status') == 'SUBMITTED'}
 
-    api_chain = body.get('api_chain', [])
-    if not api_chain:
-        return {'error': 'API 链为空', 'dispatched': False}
-
-    payload = {
-        'task_id': chain_task_id,
-        'source_path': body.get('source_path', ''),
-        'project': body.get('project', 'default'),
-        'asset_name': body.get('asset_name', 'untitled'),
-        'category': body.get('category', ''),
-        'api_chain': api_chain,
-    }
-
-    dispatched = False
-    try:
-        _app = get_celery_app()
-        _app.send_task(
-            'cgi_pipeline.core.tasks.execute_api_chain',
-            args=[payload],
-            task_id=chain_task_id,
-        )
-        dispatched = True
-    except Exception as e:
-        # Redis 不可用 — 降级
-        AUDIT_DIR.mkdir(parents=True, exist_ok=True)
-        audit_file = AUDIT_DIR / f'{chain_task_id}.json'
-        entry = {
-            'task_id': chain_task_id,
-            'api_id': 'chain',
-            'status': 'DEGRADED',
-            'detail': f'Celery 派发失败: {e}',
-            'ts': time.time(),
-        }
-        with open(audit_file, 'a', encoding='utf-8') as f:
-            f.write(json.dumps(entry, ensure_ascii=False) + '\n')
-
-    return {
-        'task_id': chain_task_id,
-        'dispatched': dispatched,
-        'api_count': len(api_chain),
-    }
 
 # ── API：轮询任务状态（SSE 流）──
 @app.get('/api/tasks/{task_id}/poll')
@@ -629,21 +529,21 @@ async def poll_task(task_id: str, request: Request):
             if await request.is_disconnected():
                 break
 
-            audit_file = AUDIT_DIR / f'{task_id}.json'
-            if audit_file.exists():
-                entries = []
-                for line in audit_file.read_text(encoding='utf-8').strip().split('\n'):
-                    if line.strip():
-                        entries.append(json.loads(line))
+            audit_file = _find_audit_file(task_id, AUDIT_DIR)
+            if audit_file is not None:
+                entries = read_entries(audit_file)
 
                 # 只发送新的条目
                 new_entries = entries[seen_count:]
                 if new_entries:
                     seen_count = len(entries)
-                    for entry in new_entries:
+                    state = task_state(entries)
+                    for offset, entry in enumerate(new_entries):
                         event_data = json.dumps({
                             'task_id': task_id,
-                            'status': entry.get('status', 'STARTED'),
+                            'terminal': state['terminal'] and offset == len(new_entries) - 1,
+                            'successful': state['terminal'] and state['status'] in SUCCESS_STATUSES,
+                            'status': state['status'] if offset == len(new_entries) - 1 else entry.get('status', 'STARTED'),
                             'api_id': entry.get('api_id', ''),
                             'detail': str(entry.get('detail', ''))[:500],
                             'timestamp': entry.get('ts', 0),
@@ -653,14 +553,13 @@ async def poll_task(task_id: str, request: Request):
                         yield f'data: {event_data}\n\n'
 
                     # 检查最后一条是否终止状态
-                    last_status = entries[-1].get('status', '')
-                    if last_status in TERMINAL_STATUSES:
+                    if state['terminal']:
                         return  # 任务结束
 
             await asyncio.sleep(2)  # 2秒检查间隔（比原来3秒更及时）
 
         # 超时
-        yield f'data: {json.dumps({"task_id": task_id, "status": "TIMEOUT"})}\n\n'
+        yield f'data: {json.dumps({"task_id": task_id, "status": "WATCH_TIMEOUT", "terminal": False})}\n\n'
 
     return StreamingResponse(generate(), media_type='text/event-stream')
 
@@ -668,26 +567,31 @@ async def poll_task(task_id: str, request: Request):
 # ── API：取消任务 ──
 @app.post('/api/tasks/{task_id}/cancel')
 async def cancel_task(task_id: str):
-    """通过 Celery revoke 取消正在执行的任务"""
+    """Request cancellation; never claim that a running DCC has stopped."""
+    audit_file = _find_audit_file(task_id, AUDIT_DIR)
+    if audit_file is None:
+        return {'cancelled': False, 'requested': False, 'task_id': task_id,
+                'error': 'Task not found'}
     try:
-        _app = get_celery_app()
-        _app.control.revoke(task_id, terminate=True, signal='SIGTERM')
-
-        # 写入审计日志
-        AUDIT_DIR.mkdir(parents=True, exist_ok=True)
-        audit_file = AUDIT_DIR / f'{task_id}.json'
-        entry = {
-            'task_id': task_id,
-            'status': 'CANCELLED',
-            'detail': '用户手动取消',
-            'ts': time.time(),
-        }
-        with open(audit_file, 'a', encoding='utf-8') as f:
+        entries = read_entries(audit_file)
+        state = task_state(entries)
+        status = state['status']
+        if state['terminal']:
+            return {'cancelled': status == 'CANCELLED', 'requested': False,
+                    'task_id': task_id, 'status': status}
+        if status == 'CANCEL_REQUESTED':
+            return {'cancelled': False, 'requested': True, 'task_id': task_id, 'status': status}
+        # The executor acknowledges at a safe boundary, including queued work.
+        # Revoking the queue item would prevent that acknowledgment forever.
+        entry = {'task_id': task_id, 'status': 'CANCEL_REQUESTED',
+                 'detail': '取消请求已记录；执行器将在下一次调用前确认。当前调用或批次可能继续，尚未确认停止。',
+                 'ts': time.time()}
+        with audit_file.open('a', encoding='utf-8') as f:
             f.write(json.dumps(entry, ensure_ascii=False) + '\n')
-
-        return {'cancelled': True, 'task_id': task_id}
-    except Exception as e:
-        return {'cancelled': False, 'error': str(e)}
+        return {'cancelled': False, 'requested': True, 'task_id': task_id,
+                'status': 'CANCEL_REQUESTED', 'message': entry['detail']}
+    except Exception as exc:
+        return {'cancelled': False, 'requested': False, 'task_id': task_id, 'error': str(exc)}
 
 
 # ── API：生成报告（读取已由后端生成的报告路径）──
@@ -723,8 +627,8 @@ async def generate_report_api(request: Request):
 
     # 2. 如果没找到，从 audit log 文件读取最后一个 entry
     if not report_path and task_id:
-        audit_file = AUDIT_DIR / f'{task_id}.json'
-        if audit_file.exists():
+        audit_file = _find_audit_file(task_id, AUDIT_DIR)
+        if audit_file is not None:
             for line in reversed(audit_file.read_text(encoding='utf-8').splitlines()):
                 try:
                     entry = json.loads(line)

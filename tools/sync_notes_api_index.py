@@ -32,13 +32,20 @@ def _md_list(values: list[str]) -> str:
 
 def render_catalog(apis: list[dict[str, Any]], today: str) -> str:
     counts = {}
+    implementation_counts = {}
+    verification_counts = {}
     for api in apis:
         access = api.get("access", "")
         counts[access] = counts.get(access, 0) + 1
+        implementation = (api.get("implementation") or {}).get("status", "unknown")
+        verification = (api.get("verification") or {}).get("level", "untested")
+        implementation_counts[implementation] = implementation_counts.get(implementation, 0) + 1
+        verification_counts[verification] = verification_counts.get(verification, 0) + 1
     api_rows = []
     for api in sorted(apis, key=lambda item: item.get("api_id", "")):
+        evidence = (api.get("verification") or {}).get("evidence") or []
         api_rows.append(
-            "| {api_id} | {executor} | {capability} | {operation} | {stages} | {targets} | {access} | {surfaces} | {summary} |".format(
+            "| {api_id} | {executor} | {capability} | {operation} | {stages} | {targets} | {access} | {implementation} | {verification} | {evidence} | {surfaces} | {summary} |".format(
                 api_id=api.get("api_id", ""),
                 executor=api.get("executor", ""),
                 capability=api.get("capability", ""),
@@ -46,8 +53,27 @@ def render_catalog(apis: list[dict[str, Any]], today: str) -> str:
                 stages=_md_list(api.get("stages") or []),
                 targets=_md_list(api.get("targets") or []),
                 access=api.get("access", ""),
+                implementation=(api.get("implementation") or {}).get("status", "unknown"),
+                verification=(api.get("verification") or {}).get("level", "untested"),
+                evidence=_md_list(evidence),
                 surfaces=_md_list(api.get("surfaces") or []),
                 summary=str((api.get("help") or {}).get("summary", "")).replace("\n", " "),
+            )
+        )
+
+    facet_rows = []
+    facets = {}
+    for api in apis:
+        key = (api.get("executor", ""), api.get("capability", ""), api.get("operation", ""))
+        facets.setdefault(key, {"stages": set(), "apis": []})
+        facets[key]["stages"].update(api.get("stages") or [])
+        facets[key]["apis"].append(api.get("api_id", ""))
+    for (executor, capability, operation), data in sorted(facets.items()):
+        facet_rows.append(
+            "| `{}` | `{}` | `{}` | {} | {} |".format(
+                executor, capability, operation,
+                _md_list(sorted(data["stages"])),
+                _md_list(sorted(data["apis"])),
             )
         )
 
@@ -72,12 +98,34 @@ def render_catalog(apis: list[dict[str, Any]], today: str) -> str:
             f"- read：{counts.get('read', 0)}",
             f"- write：{counts.get('write', 0)}",
             f"- destructive：{counts.get('destructive', 0)}",
+            f"- 实现状态：implemented {implementation_counts.get('implemented', 0)} / placeholder {implementation_counts.get('placeholder', 0)} / unknown {implementation_counts.get('unknown', 0)}",
+            f"- 验证状态：live_tested {verification_counts.get('live_tested', 0)} / contract_tested {verification_counts.get('contract_tested', 0)} / untested {verification_counts.get('untested', 0)}",
+            "- 口径：verification 是 manifest 登记的证据级别，不是当前生产可用率；live_tested 仍须核对具体宿主、版本、输入和断言，contract_tested 只承诺登记的合同测试，untested 表示未登记验证，不证明从未运行。",
+            "- 读法：旧任务的汇总 PASS 不覆盖新增或变更 API；证据缺少版本或适用范围时标未确认，不从总数推导全量通过。",
             f"- 生成命令：`python tools/sync_notes_api_index.py --write`",
+            "",
+            "## 使用方式",
+            "",
+            "1. 未知契约时用 `list_apis` 按 executor / capability / operation / stages / targets / access / effects / execution_modes / surfaces / modes 渐进筛选，search 查用途；每项只含 api_id / access / modes / 一句话 summary，默认只返回 20 项，用 cursor 继续翻页；影响、输入、实现与验证状态在 `api_help`。已知且有效的契约直接复用；旧客户端须重连取得当前工具 schema。",
+            "2. 首次选择或契约过期时调用 `api_help(api_id)`；按 `mcp_call_template.requires_binding` 绑定实际数据，再使用其完整 `arguments`。已知契约执行时传 `expected_catalog_version`，不重复发现；工具 schema 与会话端口分别按客户端发现和实际会话状态确认。",
+            "3. 单个动作调用 `execute_api`；同一 DCC 的一组字面原子动作调用 `execute_batch`；可复用、多步骤或跨 DCC 流程调用 `pipeline_execute_workflow`。",
+            "4. 后台任务或超时任务保留 `task_id`，只用 `get_task_result` 恢复原任务，不重复提交。",
+            "5. 执行前在 `api_help` 或本目录同时检查 `implementation` 与 `verification`；unknown 表示未登记实现状态，不等于无实现。先核对该行证据与当前 API 版本、宿主和输入条件；合同测试、入口烟测、场景断言、GUI 与生产验收不能互相代替。不得只凭工具数量或标签宣称可用。",
+            "",
+            "> 七个固定门面：`list_apis` / `api_help` / `execute_api` / `execute_batch` / `get_task_result` / `list_workflows` / `pipeline_execute_workflow`。客户端若未注入某个门面，应先刷新客户端工具清单，不改用裸 socket 或临时代码绕过。",
+            "",
+            "## 分层地图（机器单一来源：capabilities.json）",
+            "",
+            "> 选择顺序：软件 executor → 能力域 capability → 动作 operation → 流程阶段 stages → api_id。Workflow 只组合 api_id，不复制 API 契约。",
+            "",
+            "| 软件 | 能力域 | 动作 | 流程阶段 | API |",
+            "|---|---|---|---|---|",
+            *facet_rows,
             "",
             "## API 明细",
             "",
-            "| api_id | executor | capability | operation | stages | targets | access | surfaces | 用途 |",
-            "|---|---|---|---|---|---|---|---|---|",
+            "| api_id | executor | capability | operation | stages | targets | access | implementation | verification | 验证证据 | surfaces | 用途 |",
+            "|---|---|---|---|---|---|---|---|---|---|---|---|",
             *api_rows,
             "",
         ]
@@ -86,9 +134,15 @@ def render_catalog(apis: list[dict[str, Any]], today: str) -> str:
 
 def render_project_block(apis: list[dict[str, Any]], today: str) -> str:
     counts = {}
+    implementation_counts = {}
+    verification_counts = {}
     for api in apis:
         access = api.get("access", "")
         counts[access] = counts.get(access, 0) + 1
+        implementation = (api.get("implementation") or {}).get("status", "unknown")
+        verification = (api.get("verification") or {}).get("level", "untested")
+        implementation_counts[implementation] = implementation_counts.get(implementation, 0) + 1
+        verification_counts[verification] = verification_counts.get(verification, 0) + 1
     return "\n".join(
         [
             START,
@@ -97,9 +151,14 @@ def render_project_block(apis: list[dict[str, Any]], today: str) -> str:
             f"- 更新时间：{today}",
             f"- API 总数：{len(apis)}",
             f"- 分级：read {counts.get('read', 0)} / write {counts.get('write', 0)} / destructive {counts.get('destructive', 0)}",
+            f"- 实现：implemented {implementation_counts.get('implemented', 0)} / placeholder {implementation_counts.get('placeholder', 0)} / unknown {implementation_counts.get('unknown', 0)}",
+            f"- 实测：live_tested {verification_counts.get('live_tested', 0)}（有真实 DCC 或服务运行 receipt）"
+            f" / contract_tested {verification_counts.get('contract_tested', 0)}"
+            f" / untested {verification_counts.get('untested', 0)}",
+            "- 读法：本行是 manifest 登记证据的计数，不是生产覆盖率；untested 不证明从未运行，旧矩阵不覆盖新增或变更 API。按明细证据核对版本、宿主、输入和断言，范围不明标未确认。",
             "- 明细：[[cgi_pipeline_api_catalog]]",
             "- 同步：`python tools/sync_notes_api_index.py --write`",
-            "- 入口：先 list_apis，再 api_help，最后 execute_api 或 workflow。",
+            "- 入口：未知契约用 list_apis → api_help 发现；已知有效契约直接 execute_api 或 workflow，过期才刷新。MCP 调用按 Help 模板绑定；工具 schema 与会话状态单独确认。",
             "",
             END,
         ]

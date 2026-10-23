@@ -1,0 +1,64 @@
+api_id: blender.asset.save_scene
+version: 1.0.1
+name: blender_save_scene_as_next_version
+executor: blender
+capability: scene.file
+operation: save
+stages: [modeling, rigging, animation]
+targets: [scene_file]
+access: write
+effects:
+  file_write: Saves a native .blend file under CGI projects/runs. Existing targets allocate the next version while holding the shared directory .version_lock OS lock.
+  host_state_write: Updates the current scene filename and reads is_saved/is_dirty after the native save completes.
+execution_modes: [local, background, foreground]
+surfaces: [blender, service]
+modes: [apply]
+inputs:
+  save_path:
+    type: string
+    default: ''
+    description: Optional target .blend path. Empty uses the current named scene; relative paths resolve beside the current named scene. An unnamed scene requires an absolute target. Existing files are never overwritten.
+preconditions:
+- Current named scene and target must both be unprotected paths inside CGI projects/ or runs/ managed roots; this is not per-workspace path authorization.
+- Existing targets allocate the next available _vNNN version using the shared Maya/Blender directory OS lock. Lock failure or timeout refuses saving; there is no unlocked fallback.
+- Run inside Blender on its main thread. Native save uses bpy.ops.wm.save_as_mainfile with copy=false; current scene path changes to the actual version.
+- SUCCESS means the native save completed and produced a verified non-empty file at the matching current saved path. This verifies the save action and file artifact, not every in-memory or callback-driven change.
+- In background Blender the native dirty flag depends on window-manager notifications that are not consumed by the headless adapter. Its raw value is reported and clean_state remains UNKNOWN; SUCCESS never authorizes release or discard.
+- Only an actual bool bpy.app.background establishes the host mode. Missing or non-bool mode information is reported as background null and clean_state UNKNOWN; a verified save action can still succeed.
+- Interactive Blender retains its native dirty protection. A dirty scene after a verified save returns NEEDS_ATTENTION. Release always performs its own fresh host check.
+idempotent: false
+outputs:
+  output_path: Actual resulting .blend file path when a file exists; may also be present on a failed verification or dirty post-save result. Check status and file_size_bytes.
+  scene: Actual current Blender scene filepath read after a FINISHED save.
+  is_saved: Actual bpy.data.is_saved flag read after saving.
+  save_completed: True only after native FINISHED, a non-empty resulting file, matching current path and actual is_saved have all been verified.
+  artifact_verified: True for the non-empty native file at the matching saved current path; this is not a full scene-content equivalence check.
+  native_dirty: Actual unmodified bpy.data.is_dirty flag read after saving.
+  dirty: Compatibility field containing the same raw native flag as native_dirty. Interactive true returns NEEDS_ATTENTION; background true does not negate a verified save action.
+  background: Actual bool bpy.app.background, or null when the mode is missing or is not a bool.
+  dirty_basis: native_notifier_unconsumed for confirmed background mode, background_mode_unknown for unconfirmed mode, or native for confirmed interactive mode.
+  clean_state: UNKNOWN in background Blender or when the actual host mode cannot be confirmed, regardless of the raw native flag. Only confirmed interactive mode reports CLEAN or DIRTY from the native flag. UNKNOWN never authorizes default release.
+  file_size_bytes: Actual resulting native file size after a FINISHED save.
+  blocked_target: Current or allocated target path refused before invoking Blender save.
+statuses: [SUCCESS, ERROR, BLOCKED, NEEDS_ATTENTION]
+errors:
+  BLENDER_SAVE_PATH_BLOCKED: Current or allocated target is protected or outside managed roots.
+  BLENDER_SAVE_NOT_FINISHED: Native save operator did not return FINISHED.
+  BLENDER_SAVE_VERIFICATION_FAILED: FINISHED did not yield a non-empty file and matching saved current scene.
+  BLENDER_SAVE_DIRTY: The file was saved but the interactive current scene remains natively dirty.
+  BLENDER_SAVE_OPERATION_FAILED: Invalid native path, missing host context, lock failure or native save exception.
+recovery:
+- Inspect output_path and actual scene state after any failure before deciding whether to retry. Writes are not automatically replayed.
+- For interactive NEEDS_ATTENTION, inspect the remaining scene edits; runtime release requires its own fresh clean check.
+- SUCCESS with background or unconfirmed mode and clean_state UNKNOWN proves only the verified save action. Default release remains blocked. Any separate explicit discard must be deliberately authorized after inspecting saved outputs; saving does not supply that authorization.
+help:
+  summary: Save a managed native Blender file with next-version allocation and shared directory locking; report verified save completion separately from scene cleanliness.
+  usage: execute_api(blender.asset.save_scene, params={save_path})
+  scenario: Save a resident workspace snapshot, inspect the actual artifact and reported clean_state, then separately decide whether release or explicit discard is appropriate.
+  safety: Writes only CGI projects/runs targets after protected-path checks. Existing files are not overwritten. Save and release are separate operations.
+tests: {contract: tests/test_blender_save_scene.py, concurrency: tests/test_scene_files.py}
+handler: cgi_pipeline.capabilities.blender.asset.save_scene.save_scene:execute
+implementation: {status: implemented}
+verification:
+  level: live_tested
+  evidence: [tests/test_blender_save_scene.py, tests/test_scene_files.py, projects/default/PL274/work/live_parallel/20261015_real_02/cleanup_ACD_20261015_132003_95e0ad/summary.json]

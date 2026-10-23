@@ -1,0 +1,33 @@
+api_id: blender.scene.nodes.rename
+version: 1.0.1
+name: nodes_rename
+executor: blender
+capability: scene.nodes
+operation: rename
+stages: [modeling, rigging, animation]
+targets: [scene_object]
+access: write
+effects:
+  scene_write: Renames bounded Blender objects.
+execution_modes: [local, foreground, background]
+surfaces: [blender, service]
+modes: [apply]
+inputs:
+  items: {type: array, required: true, description: "[{node, new_name}]"}
+  max_items: {type: integer, default: 200, description: Maximum renames; hard limit 2000.}
+preconditions: [Objects exist.]
+idempotent: false
+outputs:
+  items: Per-object before and after names.
+  count: Number of returned or processed items for this action.
+  succeeded: Number of successful per-item operations.
+  failed: Number of failed per-item operations.
+  truncated: Whether the operation reached its configured result or input bound.
+statuses: [SUCCESS, PARTIAL, ERROR]
+errors: {BLENDER_SCENE_CORE_OPERATION_FAILED: Invalid object name or context.}
+recovery: [Correct item definitions then retry.]
+help: {summary: Rename many Blender objects., usage: "execute_api(blender.scene.nodes.rename, params={items})", scenario: Normalize scene naming., safety: Writes object names.}
+tests: {contract: tests/test_blender_scene_core_apis.py}
+handler: cgi_pipeline.capabilities.blender.scene_core:rename_nodes
+implementation: {status: implemented}
+verification: {level: contract_tested, evidence: [tests/test_blender_scene_core_apis.py]}

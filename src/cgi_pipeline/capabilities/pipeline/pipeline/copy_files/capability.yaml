@@ -1,5 +1,5 @@
 api_id: pipeline.pipeline.copy_files
-version: 1.0.0
+version: 1.0.1
 name: pipeline_stage_file_to_sandbox
 executor: pipeline
 capability: pipeline.file
@@ -10,8 +10,8 @@ targets:
 - file
 access: write
 effects:
-  inspect: 只读取场景或标准数据，不改变资产。
-  apply: 按 API 实现对当前任务沙盒中的场景或数据执行操作。
+  file_read: Reads source files and directory contents.
+  file_write: Creates destination directories and copies files recursively; overwrite controls skip or replacement.
 execution_modes:
 - background
 surfaces:
@@ -34,12 +34,15 @@ inputs:
     description: 目标已存在时是否覆盖
 preconditions:
 - 项目配置通过统一 config/{project}_config.json 接口加载。
-- 后台模式由 CGI Worker 打开或复用对应 DCC 场景。
+- 纯文件系统操作；无需 Maya、Blender 或其他 DCC 场景，不启动 DCC 后台。
 idempotent: false
 outputs:
-- name: destination
-  type: any_file
-  label: 目标路径
+  output_path: Actual operation output path; present only when this branch produces
+    or identifies a file.
+  result: Underlying operation result; its internal fields belong to that operation.
+  summary: Optional framework operation summary; present when the adapter supplies
+    one.
+  items: Optional framework item records; present when the adapter supplies them.
 statuses:
 - SUCCESS
 - PARTIAL
@@ -58,8 +61,14 @@ help:
   summary: 通用文件拷贝：source → destination，文件或目录均可。纯文件系统操作，不启动任何 DCC。
   usage: execute_api(pipeline.pipeline.copy_files, params={...})
   scenario: 通用文件拷贝：source → destination，文件或目录均可。纯文件系统操作，不启动任何 DCC。
-  safety: read API 只读；write/destructive API 仅写入任务沙盒。
+  safety: 具体副作用见本契约 effects；运行上下文、路径与恢复边界见 docs/architecture/pipeline_runtime_contract_v1.md。
 tests:
   contract: api.registry loads this manifest and api.runner validates its receipt.
   smoke: 代表性 workflow 统一验收。
+implementation:
+  status: implemented
+verification:
+  level: live_tested
+  evidence:
+  - audit/api-e88b16f47cda.json
 handler: cgi_pipeline.capabilities.pipeline.pipeline.copy_files.adapter:execute

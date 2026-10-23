@@ -1,0 +1,32 @@
+api_id: maya.scene.nodes.find
+version: 1.0.1
+name: nodes_find
+executor: maya
+capability: scene.nodes
+operation: find
+stages: [modeling, rigging, animation]
+targets: [scene_object]
+access: read
+effects:
+  scene_read: Finds bounded Maya nodes and returns long paths.
+execution_modes: [local, foreground, background]
+surfaces: [maya, service]
+modes: [inspect]
+inputs:
+  patterns: {type: array, default: ['*'], description: Name or path patterns.}
+  node_type: {type: string, default: '', description: Optional Maya node type.}
+  max_items: {type: integer, default: 200, description: "Maximum results, hard limit 2000."}
+preconditions: [Runs in one Maya scene context.]
+idempotent: true
+outputs:
+  items: Long paths, types and per-item status.
+  count: Number of returned or processed items for this action.
+  truncated: Whether matches exceeded max_items.
+statuses: [SUCCESS, ERROR]
+errors: {MAYA_SCENE_CORE_OPERATION_FAILED: "Invalid pattern, type or Maya context."}
+recovery: [Correct the query or reduce max_items.]
+help: {summary: Find Maya nodes by bounded patterns and type., usage: "execute_api(maya.scene.nodes.find, params={patterns, node_type})", scenario: Discover DAG or DG nodes before edits., safety: Read-only and bounded.}
+tests: {contract: tests/test_maya_scene_core_apis.py, smoke: Foreground Maya query.}
+implementation: {status: implemented}
+verification: {level: live_tested, evidence: [tests/test_maya_scene_core_apis.py, audit/2026-08-30/api-e36cbf5dc11a.json]}
+handler: cgi_pipeline.capabilities.maya.scene_core:find_nodes

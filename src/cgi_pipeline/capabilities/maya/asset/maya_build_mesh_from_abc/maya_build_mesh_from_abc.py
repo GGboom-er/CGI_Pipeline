@@ -8,6 +8,7 @@ import maya.cmds as cmds
 import maya.api.OpenMaya as om2
 
 from cgi_pipeline.core.receipt import make_receipt
+from cgi_pipeline.core.abc_reader import validate_mesh_entry
 
 
 MAX_DETAIL_ITEMS = 20
@@ -22,14 +23,15 @@ def create_mesh(name, mesh_data, parent_path=""):
         parent_path: 父节点 DAG 路径（可选）
 
     返回:
-        str: 构建后的节点 fullPath，失败返回 None
+        tuple: 构建后的节点 fullPath 和非关键警告；无效几何/必要写入失败抛异常。
     """
+    validate_mesh_entry(mesh_data)
     num_v = mesh_data.get("vertices", 0)
     pos = mesh_data.get("vert_positions", [])
     fc = mesh_data.get("face_counts", [])
     fi = list(mesh_data.get("face_indices", []))
     if not (num_v and pos and fc and fi):
-        return None
+        raise ValueError(f"{name}: mesh construction requires points and polygon topology")
 
     pos_arr = om2.MFloatPointArray([(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]) for i in range(num_v)])
 
@@ -38,7 +40,7 @@ def create_mesh(name, mesh_data, parent_path=""):
     temp_name = cmds.rename(om2.MFnDependencyNode(new_obj).name(), "TEMP_" + name)
 
     warnings = []
-    uv_ids = list(mesh_data.get("uv_indices", []))
+    uv_ids = list(mesh_data.get("uv_indices") or [])
 
     try:
         cmds.sets(temp_name, edit=True, forceElement="initialShadingGroup")
@@ -46,52 +48,28 @@ def create_mesh(name, mesh_data, parent_path=""):
         warnings.append(f"分配 initialShadingGroup 失败: {e}")
 
     # UV 写入
-    u_arr = mesh_data.get("u_array", [])
-    v_arr = mesh_data.get("v_array", [])
+    u_arr = mesh_data.get("u_array") or []
+    v_arr = mesh_data.get("v_array") or []
     if u_arr and v_arr and uv_ids:
-        shapes = cmds.listRelatives(temp_name, shapes=True, fullPath=True)
-        if shapes:
-            sel = om2.MSelectionList()
-            sel.add(shapes[0])
-            dag = sel.getDagPath(0)
-            fn2 = om2.MFnMesh(dag)
-            u = om2.MFloatArray(u_arr)
-            v = om2.MFloatArray(v_arr)
-            fn2.setUVs(u, v, "map1")
-            uv_c = om2.MIntArray(fc)
-            uv_i = om2.MIntArray(uv_ids)
-            fn2.assignUVs(uv_c, uv_i, "map1")
+        fn.setUVs(om2.MFloatArray(u_arr), om2.MFloatArray(v_arr), "map1")
+        fn.assignUVs(om2.MIntArray(fc), om2.MIntArray(uv_ids), "map1")
 
     # 与 Maya AbcImport 一致：只消费 reader 已按面序转换的显式 normals。
-    # 法线缺失或不可用不是构建失败条件，Maya 会按现有拓扑自动生成。
-    normals_fv = list(mesh_data.get("normals_fv", []))
-    if normals_fv and len(normals_fv) == len(fi) * 3:
-        try:
-            shapes = cmds.listRelatives(
-                temp_name, shapes=True, fullPath=True, ni=True
-            ) or []
-            if shapes:
-                sel = om2.MSelectionList()
-                sel.add(shapes[0])
-                mesh_fn = om2.MFnMesh(sel.getDagPath(0))
-                normals = om2.MVectorArray()
-                for i in range(0, len(normals_fv), 3):
-                    normals.append(om2.MVector(*normals_fv[i:i + 3]))
-                face_ids = om2.MIntArray()
-                vertex_ids = om2.MIntArray()
-                offset = 0
-                for face_id, face_count in enumerate(fc):
-                    for _unused in range(face_count):
-                        face_ids.append(face_id)
-                        vertex_ids.append(fi[offset])
-                        offset += 1
-                mesh_fn.setFaceVertexNormals(normals, face_ids, vertex_ids)
-        except Exception as e:
-            warnings.append(f"显式法线写入失败，已回退 Maya 自动法线: {e}")
+    # 仅合法缺失允许自动法线；作者法线写入失败必须使调用失败。
+    normals_fv = list(mesh_data.get("normals_fv") or [])
+    if normals_fv:
+        normals = om2.MVectorArray()
+        for i in range(0, len(normals_fv), 3):
+            normals.append(om2.MVector(*normals_fv[i:i + 3]))
+        face_ids = om2.MIntArray()
+        for face_id, face_count in enumerate(fc):
+            for _unused in range(face_count):
+                face_ids.append(face_id)
+        fn.setFaceVertexNormals(normals, face_ids, om2.MIntArray(fi))
 
     # 放入父层级
     if parent_path:
-        temp_name = cmds.parent(temp_name, parent_path)[0]
+        temp_name = cmds.parent(temp_name, parent_path, absolute=True)[0]
     final_name = cmds.rename(temp_name, name)
 
     # 构建 fullPath
@@ -126,10 +104,15 @@ def _ensure_hierarchy(parts, root_group=""):
         return matches[0] if matches else node
 
     if root_group:
-        current = root_group
+        root_name = root_group.rstrip("|").split("|")[-1]
+        current = root_group if root_group.startswith("|") else f"|{root_group}"
         if not cmds.objExists(current):
-            current = cmds.group(empty=True, name=current)
+            current = cmds.group(empty=True, name=root_name)
         current = _as_long_path(current)
+        if root_name in parts:
+            parts = parts[parts.index(root_name) + 1:]
+        else:
+            parts = parts[1:]
     else:
         current = parts[0]
         if not cmds.objExists(current):
@@ -200,6 +183,12 @@ def execute(payload: dict) -> dict:
         else:
             target_meshes = all_meshes
 
+        # 全部外部几何必须在创建任何层级/mesh 之前通过预检。
+        for dag_path, mesh_data in target_meshes.items():
+            validate_mesh_entry(mesh_data)
+            if not mesh_data.get('vertices') or not mesh_data.get('face_counts'):
+                raise ValueError(f'{dag_path}: mesh construction requires polygon topology')
+
         # 构建
         cmds.undoInfo(openChunk=True, chunkName="build_mesh_from_abc")
         built = []
@@ -228,7 +217,9 @@ def execute(payload: dict) -> dict:
                 if result:
                     built.append(result)
                     if len(items) < MAX_DETAIL_ITEMS:
-                        detail = "BUILT"
+                        detail = "BUILT; smoothing=" + (
+                            "authored_normals" if mesh_data.get('normals_fv') else "generated_normals"
+                        )
                         if build_warnings:
                             detail += "; " + "; ".join(build_warnings)
                         items.append({"name": mesh_name, "detail": detail})

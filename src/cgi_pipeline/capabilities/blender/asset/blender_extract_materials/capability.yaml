@@ -1,5 +1,5 @@
 api_id: blender.asset.blender_extract_materials
-version: 1.0.0
+version: 1.0.2
 name: blender_extract_cache_materials
 executor: blender
 capability: lookdev.material
@@ -11,8 +11,9 @@ targets:
 - texture
 access: write
 effects:
-  inspect: 只读取场景或标准数据，不改变资产。
-  apply: 按 API 实现对当前任务沙盒中的场景或数据执行操作。
+  scene_read: Reads materials and texture assignments.
+  file_read: Reads image paths. S-drive textures use only the exact same relative path on X; absent X files are omitted from texture output.
+  file_write: Creates the output directory and writes the business _materials.json.
 execution_modes:
 - local
 - background
@@ -36,9 +37,12 @@ preconditions:
 - 后台模式由 CGI Worker 打开或复用对应 DCC 场景。
 idempotent: false
 outputs:
-- name: output_path
-  type: json_file
-  label: _materials.json
+  output_path: Actual operation output path; present only when this branch produces
+    or identifies a file.
+  result: Underlying operation result; its internal fields belong to that operation.
+  summary: Optional framework operation summary; present when the adapter supplies
+    one.
+  items: Optional framework item records; present when the adapter supplies them.
 statuses:
 - SUCCESS
 - PARTIAL
@@ -54,11 +58,18 @@ recovery:
 - 读取 api_help 获取参数、前置条件和输出。
 - 失败时检查任务报告中的错误与恢复建议。
 help:
-  summary: 从 Blender 场景 cache 组采集最终 Color/Alpha 与 per-face 对应关系；仅 UDIM 输入按 UV 象限拆分，输出 schema v3 _materials.json。与 maya_apply_materials 配对。
+  summary: 从 Blender 场景 cache 组采集 Color/Alpha 与 per-face 关系并输出 schema v3。S盘贴图只查X盘同相对路径，有则输出X路径供正常打包，无则省略该贴图并沿用缺图降级，不回退S或另搜目录；texture_path_remaps和missing_tiles记录结果。不保存源Blend。与maya_apply_materials配对。
   usage: execute_api(blender.asset.blender_extract_materials, params={...})
-  scenario: 从 Blender 场景 cache 组采集最终 Color/Alpha 与 per-face 对应关系；仅 UDIM 输入按 UV 象限拆分，输出 schema v3 _materials.json。与 maya_apply_materials 配对。
-  safety: read API 只读；write/destructive API 仅写入任务沙盒。
+  scenario: 原工作流内统一解析S盘到X盘同相对贴图路径；X存在则正常提取并交打包，X缺失则不输出该纹理，沿用缺图降级并记录，不回退S，不保存原Blend。
+  safety: 具体副作用见本契约 effects；运行上下文、路径与恢复边界见 docs/architecture/pipeline_runtime_contract_v1.md。
 tests:
   contract: api.registry loads this manifest and api.runner validates its receipt.
-  smoke: 代表性 workflow 统一验收。
+  smoke: Blender 5.0.1原S盘引用真实采集19材质/14张X盘纹理，缺图0；X缺失及UDIM逐tile规则由定向测试覆盖。
+implementation:
+  status: implemented
+verification:
+  level: live_tested
+  evidence:
+  - tests/test_material_mapping.py
+  - audit/chain-615cf0b7.json
 handler: cgi_pipeline.capabilities.blender.asset.blender_extract_materials.adapter:execute

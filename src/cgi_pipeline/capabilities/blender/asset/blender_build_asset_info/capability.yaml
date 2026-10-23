@@ -1,5 +1,5 @@
 api_id: blender.asset.blender_build_asset_info
-version: 1.0.0
+version: 1.0.1
 name: Blender 资产信息采集
 executor: blender
 capability: asset.metadata
@@ -9,10 +9,10 @@ stages:
 targets:
 - asset
 - mesh
-access: read
+access: write
 effects:
-  inspect: 只读取场景或标准数据，不改变资产。
-  apply: 按 API 实现对当前任务沙盒中的场景或数据执行操作。
+  scene_read: Reads root-group geometry and asset metadata.
+  file_write: Creates the output directory and writes the business _info.json.
 execution_modes:
 - local
 - background
@@ -36,9 +36,11 @@ preconditions:
 - 后台模式由 CGI Worker 打开或复用对应 DCC 场景。
 idempotent: true
 outputs:
-- name: info
-  type: json_file
-  label: _info.json
+  output_path: Actual operation output path; present only when this branch produces
+    or identifies a file.
+  summary: Optional framework operation summary; present when the adapter supplies
+    one.
+  items: Optional framework item records; present when the adapter supplies them.
 statuses:
 - SUCCESS
 - PARTIAL
@@ -57,8 +59,14 @@ help:
   summary: 遍历指定 Blender 几何根组下所有 mesh，采集拓扑指纹（顶点数+世界空间坐标），输出标准 _info.json。只负责几何信息，不采集贴图或面级材质。
   usage: execute_api(blender.asset.blender_build_asset_info, params={...})
   scenario: 遍历指定 Blender 几何根组下所有 mesh，采集拓扑指纹（顶点数+世界空间坐标），输出标准 _info.json。只负责几何信息，不采集贴图或面级材质。
-  safety: read API 只读；write/destructive API 仅写入任务沙盒。
+  safety: 具体副作用见本契约 effects；运行上下文、路径与恢复边界见 docs/architecture/pipeline_runtime_contract_v1.md。
 tests:
   contract: api.registry loads this manifest and api.runner validates its receipt.
   smoke: 代表性 workflow 统一验收。
+implementation:
+  status: implemented
+verification:
+  level: live_tested
+  evidence:
+  - audit/api-11ffdecaeccc.json
 handler: cgi_pipeline.capabilities.blender.asset.blender_build_asset_info.adapter:execute

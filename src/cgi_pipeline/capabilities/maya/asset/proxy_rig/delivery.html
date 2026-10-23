@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>%%TITLE%%</title>
+<style>
+:root{font:16px/1.6 system-ui,"Microsoft YaHei",sans-serif;color:#243548;background:#f4f6f8}
+body{max-width:1800px;margin:auto;padding:24px}h1,h2,h3{color:#15283c}h2{margin-top:32px}
+section{background:white;border:1px solid #dce3e9;border-radius:10px;padding:18px;margin:20px 0}
+table{border-collapse:collapse;background:white;width:100%;font-size:15px}
+td,th{padding:12px;border-bottom:1px solid #dce3e9;text-align:left;vertical-align:top;overflow-wrap:anywhere;white-space:pre-line}
+th{background:#e9eff4}.metric{font-size:24px;font-weight:650}.metric span{font-size:16px;font-weight:400;margin-left:14px}
+.note{color:#52677b}.path{overflow-wrap:anywhere}.toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0}
+button{font:inherit;padding:7px 14px;border:1px solid #acbdcc;border-radius:6px;background:#fff;color:#243548;cursor:pointer}
+button[aria-pressed="true"]{background:#173d60;color:white;border-color:#173d60}
+.toolbar span{margin-left:auto;color:#52677b;font-size:14px}.pair{display:block;background:#252525}
+figure{margin:0}figure img{display:block;width:100%;height:auto;cursor:zoom-in}
+figcaption{padding:6px;text-align:center;background:#f4f6f8;color:#52677b}
+.compare[data-mode="after"] figure:first-child,.compare[data-mode="before"] figure:last-child{display:none}
+.compare[data-mode="split"] .pair{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+dialog{width:calc(100vw - 32px);max-width:none;height:calc(100vh - 32px);max-height:none;padding:0;border:0;background:#16191d;color:#eaf1f6}
+dialog::backdrop{background:#000c}dialog .toolbar{padding:10px;margin:0;border-bottom:1px solid #49545e}
+dialog .toolbar span{color:#c3ced8}.canvas{height:calc(100% - 68px);overflow:auto;display:flex;align-items:flex-start;justify-content:center}
+.canvas img{display:block;max-width:100%;max-height:100%;width:auto;height:auto;object-fit:contain}
+.canvas.native{display:block}.canvas.native img{max-width:none;max-height:none;width:auto;height:auto;margin:auto}
+.empty{padding:20px}.visual-warning{border:2px solid #c58224;background:#fff7e7}
+.review[data-decision="needs_revision"]{border:2px solid #c58224;background:#fff7e7}.review-checks{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px}
+.review-check[data-status="fail"]{color:#a32821}.review-check[data-status="pass"]{color:#24633c}summary{cursor:pointer;color:#52677b;padding:8px 0}
+@media(max-width:900px){body{padding:12px}td,th{padding:8px}.compare[data-mode="split"] .pair{grid-template-columns:1fr}}
+</style>
+<h1>%%TITLE%%</h1>
+<p class="metric">%%TOTAL%%</p>
+<p class="path">候选：<a href="%%FILE_URI%%">%%FILE_PATH%%</a></p>
+<p>%%SOURCE_NOTE%%</p>
+%%VISUAL_NOTES%%
+<h2>执行步骤与耗时</h2>
+<table><tr><th>步骤</th><th>输入与参数</th><th>结果</th><th>耗时</th></tr>%%TIMING%%</table>
+<p class="note">%%BUILD_SCOPE%%</p>
+<h2>部位结果</h2>
+<table><tr><th>部位</th><th>参与合并模型</th><th>优化前面数</th><th>优化后面数</th><th>减少比例</th></tr>%%SUMMARY%%</table>
+%%REGIONS%%
+%%PARTS%%
+%%WINGS_SECTION%%
+%%THREE_SECTION%%
+<dialog id="viewer" aria-label="原尺寸模型对比">
+ <div class="toolbar">
+  <button data-view="before">优化前</button><button data-view="after">优化后</button>
+  <button id="fit" aria-pressed="true">适应窗口</button><button id="native" aria-pressed="false">原尺寸100%</button>
+  <span id="dimensions"></span><button id="close">关闭 Esc</button>
+ </div>
+ <div class="canvas"><img id="large" alt="模型对比原图"></div>
+</dialog>
+<script>
+const viewer=document.querySelector('#viewer'),large=document.querySelector('#large');let active=null;
+function setMode(group,mode){
+ group.dataset.mode=mode;
+ group.querySelectorAll('[data-mode-button]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.modeButton===mode)));
+}
+function show(stage){
+ const source=active.querySelectorAll('figure img')[stage==='before'?0:1];large.src=source.src;large.alt=source.alt;
+ viewer.querySelectorAll('[data-view]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.view===stage)));
+}
+document.querySelectorAll('.compare').forEach(group=>{
+ group.querySelectorAll('[data-mode-button]').forEach(button=>button.addEventListener('click',()=>setMode(group,button.dataset.modeButton)));
+ group.querySelectorAll('figure img').forEach((img,index)=>img.addEventListener('click',()=>{active=group;show(index?'after':'before');viewer.showModal()}));
+});
+large.addEventListener('load',()=>document.querySelector('#dimensions').textContent=large.naturalWidth+' × '+large.naturalHeight+' · PNG原图');
+viewer.querySelectorAll('[data-view]').forEach(b=>b.addEventListener('click',()=>show(b.dataset.view)));
+function zoom(native){document.querySelector('.canvas').classList.toggle('native',native);document.querySelector('#native').setAttribute('aria-pressed',String(native));document.querySelector('#fit').setAttribute('aria-pressed',String(!native))}
+document.querySelector('#native').addEventListener('click',()=>zoom(true));document.querySelector('#fit').addEventListener('click',()=>zoom(false));
+document.querySelector('#close').addEventListener('click',()=>viewer.close());
+document.addEventListener('keydown',e=>{if(viewer.open&&e.key==='1')show('before');if(viewer.open&&e.key==='2')show('after')});
+</script>
+</html>

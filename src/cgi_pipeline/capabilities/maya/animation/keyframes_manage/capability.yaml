@@ -1,0 +1,45 @@
+api_id: maya.animation.keyframes.manage
+version: 1.0.0
+executor: maya
+capability: animation.keyframes
+operation: manage
+stages: [animation, rigging]
+targets:
+- keyframes
+- animation_curve
+access: destructive
+effects:
+  scene_read: 'action=query: Reads key times.'
+  scene_write: 'action=set: Creates or replaces keys. action=delete: Deletes keys in the requested range.'
+execution_modes: [local, foreground, background]
+surfaces: [maya, service]
+modes: [inspect, apply]
+mode_binding:
+  input: action
+  cases:
+  - value: query
+    mode: inspect
+  - value: set
+    mode: apply
+  - value: delete
+    mode: apply
+inputs:
+  action: {type: string, required: true, choices: [query, set, delete], description: Keyframe action.}
+  nodes: {type: array, required: true, description: Explicit nodes resolved to unambiguous long paths.}
+  attributes: {type: array, default: [], description: Optional attribute names shared by all nodes.}
+  time: {type: number, description: Optional frame for set; current frame is used when omitted.}
+  value: {type: number, description: Optional value for exactly one node and one attribute.}
+  start_time: {type: number, description: Optional query or delete range start.}
+  end_time: {type: number, description: Optional query or delete range end.}
+  max_items: {type: integer, default: 200, description: "Maximum node count, hard limit 2000."}
+preconditions: [Nodes must resolve unambiguously., Value writes require exactly one node and one attribute., Explicit node times attribute targets are bounded to 65536.]
+idempotent: true
+outputs: {action: Executed action., items: Per-node times or changed counts., count: Processed node count.}
+statuses: [SUCCESS, ERROR]
+errors: {MAYA_ANIMATION_OPERATION_FAILED: "Node, attribute, frame range, action, or native key write is invalid."}
+recovery: [Query the same long paths and attributes before retrying a write.]
+help: {summary: "Query, set, or delete bounded Maya keyframes without exposing separate MCP tools.", usage: "execute_api(maya.animation.keyframes.manage, params={action, nodes, attributes, time})", scenario: Reuse one animation contract for controller tests and pipeline edits., safety: Set and delete actions use one Maya undo chunk; delete without a range removes all matching keys.}
+tests: {contract: tests/test_maya_p1_apis.py, smoke: Foreground key query plus reversible set and delete.}
+implementation: {status: implemented}
+verification: {level: contract_tested, evidence: [tests/test_maya_p1_apis.py]}
+handler: cgi_pipeline.capabilities.maya.animation_core:manage_keyframes

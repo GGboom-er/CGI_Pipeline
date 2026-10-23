@@ -1,5 +1,5 @@
 api_id: maya.rig.maya_clean_skinweights
-version: 1.0.0
+version: 4.0.0
 name: 清理蒙皮权重
 executor: maya
 capability: rigging.skin
@@ -10,8 +10,9 @@ targets:
 - skin_weights
 access: destructive
 effects:
-  inspect: 只读取场景或标准数据，不改变资产。
-  apply: 按 API 实现对当前任务沙盒中的场景或数据执行操作。
+  scene_read: Batch-reads explicit skinCluster weights, influences, locks and binding context for preflight and verification.
+  scene_write: Apply proportionally removes threshold weights, then fits only still-over-cap vertices and their bounded topology neighborhood. Threshold-only neighbors receive bounded edit-delta propagation without fitting. No primary edits means no smoothing. ng_proportional keeps its validated path. Both optionally detach exact zero relations and set requested maxInfluences/maintainMaxInfluences. Native writes use one undoable MPxCommand and bulk OpenMaya arrays, full or changed-component subsets; ordinary influence editing locks are restored. No joints are deleted and no scene is opened or saved.
+  host_state_write: dair_inspired may register the bundled Python weight-write command and run one hidden external numerical process using solver_runtime.json and the registered Notes brain runtime; Maya only uses its own NumPy and scene I/O, never imports external SciPy. Numeric request/result artifacts remain in a unique managed-workspace subfolder. ng_proportional requires already loaded ngSkinTools2. Selection is restored; no dependency installation, Maya restart or scene reopen.
 execution_modes:
 - local
 - background
@@ -20,23 +21,68 @@ surfaces:
 - maya
 - service
 modes:
+- inspect
 - apply
+mode_binding:
+  input: mode
+  cases:
+  - {value: inspect, mode: inspect}
+  - {value: apply, mode: apply}
 inputs:
+  method:
+    type: string
+    default: dair_inspired
+    choices: [dair_inspired, ng_proportional]
+    description: Tiered independent adaptation first performs proportional threshold cleanup; only remaining over-cap rows and their neighborhood enter synthetic bind-skeleton LBS fitting. Small bounded QPs use a direct active-set linear solve with SciPy SLSQP fallback in the registered external numeric process. Maya NumPy is not replaced. This is not the author's DAIR implementation. ng_proportional preserves the previously verified proportional filtering engine.
+  solver_workdir:
+    type: string
+    description: Optional absolute directory inside an existing managed CGI workspace for numeric request/result artifacts. Public CGI calls default to run_dir/work/skin_solver. Direct Maya Python calls infer the owner of the current managed scene, otherwise require this parameter. Failed owned request folders are retained.
+  skin_clusters:
+    type: array
+    default: []
+    description: Explicit unique skinCluster names. A non-empty scene requires this scope; no implicit selection or whole-scene cleanup.
+  mode:
+    type: string
+    default: inspect
+    choices: [inspect, apply]
+    description: Inspect checks explicit source skins, actual weights and input membership without solver geometry or synthetic-pose preparation. Apply prepares solver inputs only when primary vertices exist, then solves and verifies within one recoverable native undo boundary.
   threshold:
     type: number
     default: 0.001
-    description: 噪声阈值，低于此值的权重将被清零
+    description: Original effective weights at or below this value are excluded before capping. Every positive output effective weight must also be strictly above it. DAIR-inspired fits within a guarded output floor inside the same coupled objective (tau plus max(1e-10,32 ULP), capped by 1/support_count); neighbors keep their original feasible positive support and box constraints. Finite [0,1); all-empty rows are refused. ng_proportional preserves retained ratios and filters its documented sub-1e-9 numeric noise.
+  max_influences:
+    type: integer
+    default: 12
+    description: Positive maximum number of nonzero influences per vertex, not total attached influences on the skinCluster.
+  neighbor_rings:
+    type: integer
+    default: 1
+    choices: [0, 1, 2]
+    description: Topology rings around actual edits; 0 disables neighbors. Threshold-only rows use proportional cleanup and bounded edit-delta propagation. Only rows still above K enter local deformation fitting; second-ring adjustment is tapered. Disconnected shells are never crossed.
+  neighbor_max_delta:
+    type: number
+    default: 0.02
+    description: DAIR-inspired only. Finite absolute effective-weight adjustment bound in (0,1] for each neighboring weight. Neighbors retain their original positive support and sum-one simplex; no new influence is added. Default 0.02 is an independent adaptation policy, not an original DAIR author parameter.
+  remove_unused_influences:
+    type: boolean
+    default: true
+    description: Detach actual all-zero skin influence relations after filtering. Does not delete joint nodes.
 preconditions:
 - 项目配置通过统一 config/{project}_config.json 接口加载。
 - 后台模式由 CGI Worker 打开或复用对应 DCC 场景。
+- dair_inspired requires native Maya NumPy and the explicitly registered external numerical runtime in solver_runtime.json; a real constrained-solve dependency probe is cached by runtime/source fingerprint. Maya never imports the worker's SciPy. Native LBS skinningMethod=0, relativeSpaceMode=0, full polygon membership and no existing ng layer data are required. Neutral Rig Master DAG offsets anchor synthetic ancestor pivots; finite generated poses do not guarantee unseen animation quality.
+- ng_proportional requires ngSkinTools2 2.4.0 already loaded, no active painting, no existing target layer data, and unlocked weighted influences when filtering changes rows.
+- Explicit unique polygon skinCluster scope; finite nonempty rows (DAIR clips negative tails only when total negative mass per vertex is at most 1e-7, then proportionally normalizes positive weights; larger negative mass is rejected), supported normalization and at most 32000000 stored weight values per batch. Unwritable/driven weights are refused. DAIR's compressed active coefficient buffer is bounded to 16000000 values.
 idempotent: false
 outputs:
-- name: scene
-  type: scene_file
-  label: 处理后场景
-- name: report
-  type: report
-  label: 清理报告 (.md)
+  engine: Actual method identity, host NumPy and external numeric-worker dependency versions, runtime owner/fingerprint and algorithm_version for DAIR-inspired; engine_version for ngSkinTools2.
+  mode: Inspect or apply, with effective threshold and max_influences.
+  skins: Per-target counts, changed vertices, before/after influence cap, detached influence UUIDs and write verification. Tiered metrics separate threshold rows, over-cap rows and solver vertices; numeric_solver_skipped identifies proportional-only processing. Cap-fitting energy compares against its local proportional baseline after threshold cleanup, not the entire original character. Metrics are not animation speed or unseen-motion bounds.
+  timing_seconds: DAIR capture-and-solve, apply-and-verify and total durations, plus non-overlapping detail phases. Detail phases are subsets of their parent durations and must not be added again.
+  warnings: Method-specific numeric margins, strict source/output threshold semantics and independent-adaptation/synthetic-pose limits. Numerical guards do not permit a positive output weight at or below the business threshold.
+  summary: Optional framework operation summary; present when the adapter supplies
+    one.
+  items: Optional framework item records; present when the adapter supplies them.
 statuses:
 - SUCCESS
 - PARTIAL
@@ -46,17 +92,30 @@ statuses:
 - TIMEOUT
 - CANCELLED
 errors:
+  SKIN_CLEANUP_PRECONDITION: Unsupported scope, weights, locks, layer state or parameters; refused before scene writes.
+  SKIN_CLEANUP_ENGINE_REQUIRED: The selected engine dependencies must be available in the Maya host.
+  SKIN_CLEANUP_FAILED: Execution or verification failed; inspect explicit native-undo rollback result before retry.
   API_OPERATION_ERROR: 操作执行失败，详见报告。
   API_IMPLEMENTATION_MISSING: 目录存在但没有本地实现。
 recovery:
 - 读取 api_help 获取参数、前置条件和输出。
 - 失败时检查任务报告中的错误与恢复建议。
 help:
-  summary: 移除蒙皮权重中的微量噪声（低于阈值），规范化权重总和为 1.0。需要提供包含蒙皮网格的源场景文件。
+  summary: Prune explicit skin weights with DAIR-inspired LBS deformation-aware fitting or ngSkinTools2 proportional filtering. Inspect by default; max-influence and original-weight thresholds are configurable.
   usage: execute_api(maya.rig.maya_clean_skinweights, params={...})
-  scenario: 移除蒙皮权重中的微量噪声（低于阈值），规范化权重总和为 1.0。需要提供包含蒙皮网格的源场景文件。
-  safety: read API 只读；write/destructive API 仅写入任务沙盒。
+  scenario: Final Proxy Rig cleanup after the last weight transfer or compatible merge, or reusable explicit skin cleanup. Version 3 defaults to the independent dair_inspired method; select ng_proportional for the previously verified engine. Neither implicitly opens source_path or cleans the whole scene.
+  safety: 具体副作用见本契约 effects；运行上下文、路径与恢复边界见 docs/architecture/pipeline_runtime_contract_v1.md。
 tests:
   contract: api.registry loads this manifest and api.runner validates its receipt.
   smoke: 代表性 workflow 统一验收。
+implementation: {status: implemented}
+verification:
+  level: contract_tested
+  evidence:
+  - tests/test_maya_rigging_contracts.py
+  - tests/test_ng_skin_engine.py
+  - tests/test_dair_skin_engine.py
+  - projects/default/PL295/work/tests/skin_cleanup/ACCEPTANCE.md
+  - projects/default/PL295/work/tests/skin_cleanup/public_state_9e698583aa.json
+  - projects/default/PL295/work/tests/skin_cleanup/public_state_838a413ed7.json
 handler: cgi_pipeline.capabilities.maya.rig.maya_clean_skinweights.adapter:execute

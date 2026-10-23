@@ -1,0 +1,39 @@
+api_id: maya.scene.display.inherit
+version: 1.0.0
+executor: maya
+capability: scene.display
+operation: inherit
+stages: [rigging]
+targets: [mesh]
+access: write
+effects:
+  scene_read: Reads source and target identity, transform/shape/ancestor display inputs and set/layer membership.
+  scene_write: Apply copies compatible local display inputs and membership; ancestor groups remain intact.
+execution_modes: [local, foreground, background]
+surfaces: [maya, service]
+modes: [inspect, apply]
+mode_binding:
+  input: mode
+  cases:
+  - {value: inspect, mode: inspect}
+  - {value: apply, mode: apply}
+inputs:
+  mode: {type: string, default: inspect, choices: [inspect, apply], description: Inspect batch compatibility or inherit display.}
+  groups: {type: array, required: true, description: 'Each group contains sources and target; identities are {path: absolute leaf mesh transform, expected_uuid: UUID}. All sources must share display mechanisms, ancestors and membership.'}
+preconditions: [UUID guarded leaf meshes with common ancestors., Target drivers must be absent or identical to source drivers., Native undo enabled for apply.]
+idempotent: true
+outputs:
+  mode: Requested mode.
+  rows: Source and target identities, preserved ancestors, display layers, local and shape inputs/values and applied flag.
+statuses: [SUCCESS, ERROR]
+errors: {DISPLAY_INHERIT_FAILED: Invalid identity or incompatible display mechanism or failed verification.}
+recovery: [Inspect target drivers and parent groups before retrying.]
+help:
+  summary: Inherit mesh transform and shape visibility, LOD and display overrides while preserving ancestor controls and layers.
+  usage: 'execute_api(maya.scene.display.inherit, params={mode: apply, groups: [...]})'
+  scenario: Mesh replacement after modeling or skin processing.
+  safety: Entire batch preflight and native undo; no scene open/save or ancestor deletion.
+implementation: {status: implemented}
+verification: {level: contract_tested, evidence: [tests/test_display_inheritance.py]}
+tests: {contract: tests/test_display_inheritance.py, smoke: Foreground sandbox public API inheritance and undo.}
+handler: cgi_pipeline.capabilities.maya.display_inheritance:inherit

@@ -1,7 +1,8 @@
 # ── CGI Pipeline ──
 
 # ── 运行时产物（禁止提交）──
-runtime/
+# 只忽略仓库根的 runtime/；src/.../capabilities/pipeline/runtime/ 是 API 源码。
+/runtime/
 sandbox/
 publish/
 audit/

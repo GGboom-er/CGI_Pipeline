@@ -1,0 +1,29 @@
+api_id: ue.scene.selection.get
+version: 1.0.1
+executor: ue
+capability: scene.selection
+operation: get
+stages: [editor]
+targets: [level_actor]
+access: read
+effects:
+  scene_read: Reads bounded selected loaded-level actors.
+execution_modes: [foreground]
+surfaces: [ue, service]
+modes: [inspect]
+inputs:
+  max_items: {type: integer, default: 200, description: "Maximum actors, hard limit 1000."}
+preconditions: [Runs in UE5 Editor with a loaded level.]
+idempotent: true
+outputs:
+  items: Selected actor identity rows.
+  count: Number of returned or processed items for this action.
+  truncated: Whether selection exceeded max_items.
+statuses: [SUCCESS, ERROR]
+errors: {UE_SCENE_CORE_OPERATION_FAILED: Invalid editor context.}
+recovery: [Verify the active editor level.]
+help: {summary: Get selected UE actors., usage: "execute_api(ue.scene.selection.get, params={})", scenario: Capture actor selection for later operations., safety: Read-only and bounded.}
+tests: {contract: tests/test_ue_scene_core_apis.py, smoke: UE5 Editor selection query.}
+handler: cgi_pipeline.capabilities.ue.scene_core:get_selection
+implementation: {status: implemented}
+verification: {level: contract_tested, evidence: [tests/test_ue_scene_core_apis.py]}

@@ -1,0 +1,104 @@
+{
+  "fragment_id": "tex_to_rig_geometry",
+  "steps": [
+    {
+      "step_id": "resolve_files",
+      "parameters": {},
+      "api_id": "pipeline.pipeline.resolve_asset_files"
+    },
+    {
+      "step_id": "export_abc",
+      "source_path": "{{outputs.resolve_files.result.source_path}}",
+      "parameters": {
+        "abc_path": "{{input.info_dir}}/{{outputs.resolve_files.result.source_stem}}.abc",
+        "cache_group": "{{config.stages.tex.geom_roots.0}}"
+      },
+      "api_id": "blender.asset.blender_export_abc"
+    },
+    {
+      "step_id": "check_hierarchy_pre",
+      "source_path": "{{outputs.resolve_files.result.rig_path}}",
+      "parameters": {
+        "stage": "rig",
+        "phase": "pre_sync",
+        "block_on_fail": false,
+        "block_extra_top_nodes": false
+      },
+      "api_id": "maya.rig.maya_check_asset_hierarchy"
+    },
+    {
+      "step_id": "fix_hierarchy_pre",
+      "parameters": {
+        "check_result": "{{outputs.check_hierarchy_pre.result}}",
+        "delete_extra_top_nodes": true
+      },
+      "api_id": "maya.rig.maya_fix_asset_hierarchy"
+    },
+    {
+      "step_id": "compare_pre",
+      "parameters": {
+        "input_source": "{{outputs.export_abc.output_path}}",
+        "output_path": "{{input.info_dir}}/{{outputs.resolve_files.result.rig_stem}}_pre_compare_result.json",
+        "cache_group": "{{outputs.fix_hierarchy_pre.result.active_rig_root}}",
+        "label_source": "tex",
+        "label_target": "rig"
+      },
+      "api_id": "maya.asset.maya_compare_asset_in_scene"
+    },
+    {
+      "step_id": "sync",
+      "parameters": {
+        "source_abc": "{{outputs.export_abc.output_path}}",
+        "compare_result": "{{outputs.compare_pre.compare_result}}",
+        "cache_group": "{{outputs.fix_hierarchy_pre.result.active_rig_root}}"
+      },
+      "api_id": "maya.rig.maya_sync_rig_incremental"
+    },
+    {
+      "step_id": "check_hierarchy_post",
+      "parameters": {
+        "stage": "rig",
+        "phase": "post_sync",
+        "block_on_fail": true,
+        "block_extra_top_nodes": false
+      },
+      "api_id": "maya.rig.maya_check_asset_hierarchy",
+      "failure_policy": {
+        "action": "repair_then_retry",
+        "repair_step": {
+          "api_id": "maya.rig.maya_fix_asset_hierarchy",
+          "parameters": {
+            "check_result": "{{outputs.__failed__.result}}",
+            "delete_extra_top_nodes": false
+          }
+        },
+        "max_attempts": 1,
+        "on_exhausted": "needs_attention"
+      }
+    },
+    {
+      "step_id": "fix_shapes",
+      "parameters": {
+        "target_group": "{{outputs.fix_hierarchy_pre.result.active_rig_root}}"
+      },
+      "api_id": "maya.rig.maya_fix_shape_names"
+    },
+    {
+      "step_id": "verify",
+      "parameters": {
+        "input_source": "{{outputs.export_abc.output_path}}",
+        "output_path": "{{input.info_dir}}/{{outputs.resolve_files.result.rig_stem}}_post_compare_result.json",
+        "cache_group": "{{outputs.fix_hierarchy_pre.result.active_rig_root}}",
+        "label_source": "tex",
+        "label_target": "rig_post"
+      },
+      "api_id": "maya.asset.maya_compare_asset_in_scene"
+    },
+    {
+      "step_id": "save",
+      "when": {"save_result": true},
+      "parameters": {},
+      "api_id": "maya.asset.save_scene"
+    }
+  ]
+}

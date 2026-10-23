@@ -1,0 +1,11 @@
+{
+  "packages": [
+    {
+      "id": "cache_sequence_binder",
+      "tool_card": "Tools/Blender_Cache_Sequence_Binder.md",
+      "root": "DCC/blender/cache_sequence_binder",
+      "versions": ["5.0"],
+      "entrypoint": "cache_sequence_binder:register"
+    }
+  ]
+}

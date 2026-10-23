@@ -57,6 +57,17 @@ def _as_existing_path(path_value: str, allowed_exts: tuple[str, ...], role: str)
     path = Path(value)
     if not path.exists():
         return None, f"{role} 显式路径不存在: {path}"
+    if path.is_dir():
+        candidates = [p for p in path.rglob("*") if p.is_file() and p.suffix.lower() in allowed_exts]
+        if not candidates:
+            return None, f"{role} 显式目录内未找到符合要求扩展名的文件: {path}，允许 {', '.join(allowed_exts)}"
+        preferred_role = "rig" if role == "rig" else "tex"
+        def _score(p: Path):
+            parts = [part.lower() for part in p.parts]
+            role_match = 1 if (preferred_role in parts or (role == "source" and "srf" in parts)) else 0
+            return (role_match, _version_num(p), p.stat().st_mtime, p.name)
+        candidates.sort(key=_score, reverse=True)
+        return candidates[0], ""
     if path.suffix.lower() not in allowed_exts:
         return None, f"{role} 显式路径扩展名不符合要求: {path.suffix}，允许 {', '.join(allowed_exts)}"
     return path, ""

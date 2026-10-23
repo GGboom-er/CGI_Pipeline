@@ -1,5 +1,5 @@
 api_id: maya.asset.maya_apply_materials
-version: 1.0.0
+version: 1.0.1
 name: maya_apply_materials_to_cache
 executor: maya
 capability: lookdev.material
@@ -11,8 +11,10 @@ targets:
 - mesh
 access: write
 effects:
-  inspect: 只读取场景或标准数据，不改变资产。
-  apply: 按 API 实现对当前任务沙盒中的场景或数据执行操作。
+  file_read: Reads the supplied materials JSON.
+  scene_read: Reads mesh/material assignments and existing shading networks.
+  scene_write: Creates shader, shading-group, file, UV and reverse networks; resets face assignments and removes obsolete
+    groupId, empty shading groups and unused material nodes.
 execution_modes:
 - local
 - background
@@ -36,9 +38,32 @@ preconditions:
 - 后台模式由 CGI Worker 打开或复用对应 DCC 场景。
 idempotent: false
 outputs:
-- name: scene
-  type: scene_file
-  label: 已赋材场景
+  materials_path: 'Optional by action: materials path returned by the source implementation.'
+  target_group: 'Optional by action: target group returned by the source implementation.'
+  material_count: 'Optional by action: material count returned by the source implementation.'
+  material_names: 'Optional by action: material names returned by the source implementation.'
+  assigned_mesh_count: 'Optional by action: assigned mesh count returned by the source
+    implementation.'
+  assigned_meshes: 'Optional by action: assigned meshes returned by the source implementation.'
+  assignment_count: 'Optional by action: assignment count returned by the source implementation.'
+  failed_count: 'Optional by action: failed count returned by the source implementation.'
+  failed_assignments: 'Optional by action: failed assignments returned by the source
+    implementation.'
+  removed_old_sg_count: 'Optional by action: removed old sg count returned by the
+    source implementation.'
+  removed_old_node_count: 'Optional by action: removed old node count returned by
+    the source implementation.'
+  shared_old_sg_count: 'Optional by action: shared old sg count returned by the source
+    implementation.'
+  removed_old_sgs: 'Optional by action: removed old sgs returned by the source implementation.'
+  shared_old_sgs: 'Optional by action: shared old sgs returned by the source implementation.'
+  approximation_count: 'Optional by action: approximation count returned by the source
+    implementation.'
+  approximation_items: 'Optional by action: approximation items returned by the source
+    implementation.'
+  summary: Optional framework operation summary; present when the adapter supplies
+    one.
+  items: Optional framework item records; present when the adapter supplies them.
 statuses:
 - SUCCESS
 - PARTIAL
@@ -57,8 +82,10 @@ help:
   summary: 消费 blender_extract_materials 导出的 schema v3 Color/Alpha _materials.json，为 Maya 场景中的 mesh 按面新建共享 lambert 材质球并赋予。
   usage: execute_api(maya.asset.maya_apply_materials, params={...})
   scenario: 消费 blender_extract_materials 导出的 schema v3 Color/Alpha _materials.json，为 Maya 场景中的 mesh 按面新建共享 lambert 材质球并赋予。
-  safety: read API 只读；write/destructive API 仅写入任务沙盒。
+  safety: 具体副作用见本契约 effects；运行上下文、路径与恢复边界见 docs/architecture/pipeline_runtime_contract_v1.md。
 tests:
   contract: api.registry loads this manifest and api.runner validates its receipt.
   smoke: 代表性 workflow 统一验收。
+implementation: {status: implemented, module: maya_apply_materials.maya_apply_materials}
+verification: {level: contract_tested, evidence: [tests/test_maya_asset_remaining_contracts.py]}
 handler: cgi_pipeline.capabilities.maya.asset.maya_apply_materials.adapter:execute

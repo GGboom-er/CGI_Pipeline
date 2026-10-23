@@ -1,0 +1,34 @@
+api_id: blender.scene.transforms.set_many
+version: 1.0.1
+name: transforms_set_many
+executor: blender
+capability: scene.transforms
+operation: set
+stages: [modeling, rigging, animation]
+targets: [transform]
+access: write
+effects:
+  scene_write: Writes bounded local or world object transforms.
+execution_modes: [local, foreground, background]
+surfaces: [blender, service]
+modes: [apply]
+inputs:
+  items: {type: array, required: true, description: "[{node, translation?, rotation_euler?, scale?}]"}
+  space: {type: string, default: world, choices: [world, local], description: Transform space.}
+  max_items: {type: integer, default: 200, description: Maximum objects; hard limit 2000.}
+preconditions: [Objects exist; world space requires mathutils in host context.]
+idempotent: true
+outputs:
+  items: Per-object transforms before and after.
+  count: Number of returned or processed items for this action.
+  succeeded: Number of successful per-item operations.
+  failed: Number of failed per-item operations.
+  truncated: Whether the operation reached its configured result or input bound.
+statuses: [SUCCESS, PARTIAL, ERROR]
+errors: {BLENDER_SCENE_CORE_OPERATION_FAILED: Invalid transform object space or context.}
+recovery: [Undo the host transaction or restore before values.]
+help: {summary: Set many Blender object transforms without UI operators., usage: "execute_api(blender.scene.transforms.set_many, params={items, space})", scenario: Apply local or world object transforms., safety: Writes transforms and world space composes matrix_world.}
+tests: {contract: tests/test_blender_scene_core_apis.py}
+handler: cgi_pipeline.capabilities.blender.scene_core:set_transforms_many
+implementation: {status: implemented}
+verification: {level: contract_tested, evidence: [tests/test_blender_scene_core_apis.py]}

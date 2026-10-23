@@ -1,0 +1,31 @@
+api_id: ue.scene.actors.delete
+version: 1.0.1
+executor: ue
+capability: scene.actors
+operation: delete
+stages: [editor]
+targets: [level_actor]
+access: destructive
+effects:
+  scene_write: Deletes loaded-level actors in one editor transaction.
+execution_modes: [foreground]
+surfaces: [ue, service]
+modes: [apply]
+inputs:
+  actors: {type: array, required: true, description: "Actor object paths, names, or labels."}
+  max_items: {type: integer, default: 200, description: "Maximum actors, hard limit 1000."}
+preconditions: [Runs in UE5 Editor with a loaded writable level.]
+idempotent: false
+outputs:
+  items: Per-item before identity and null after.
+  count: Number of returned or processed items for this action.
+  error_count: Number of failed per-item operations.
+  truncated: Whether input exceeded max_items.
+statuses: [SUCCESS, PARTIAL, ERROR]
+errors: {UE_SCENE_CORE_OPERATION_FAILED: Invalid actor or editor delete failure.}
+recovery: [Use object paths and restore via editor undo if needed.]
+help: {summary: Delete loaded-level UE actors., usage: "execute_api(ue.scene.actors.delete, params={actors})", scenario: Remove explicitly identified actors., safety: Destructive but wrapped in editor transaction.}
+tests: {contract: tests/test_ue_scene_core_apis.py, smoke: UE5 Editor delete and undo.}
+handler: cgi_pipeline.capabilities.ue.scene_core:delete_actors
+implementation: {status: implemented}
+verification: {level: contract_tested, evidence: [tests/test_ue_scene_core_apis.py]}

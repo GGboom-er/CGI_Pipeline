@@ -1,0 +1,48 @@
+api_id: maya.animation.retarget.transfer
+version: 1.0.0
+name: retarget_transfer
+executor: maya
+capability: animation.retarget
+operation: transfer
+stages: [animation]
+targets: [controller]
+access: write
+effects:
+  scene_read: Both dry_run values sample the mapped source channels and validate target channels.
+  scene_write: Both paths temporarily step current time and restore it in finally; dry_run=false additionally writes mapped
+    target keys in the owned undo chunk.
+  host_state_write: Temporarily suspends and resumes Maya refresh while sampling and applying.
+execution_modes: [local, foreground, background]
+surfaces: [maya, service]
+modes:
+- preview
+- apply
+mode_binding:
+  input: dry_run
+  cases:
+  - value: true
+    mode: preview
+  - value: false
+    mode: apply
+inputs:
+  mapping: {type: object, required: true, description: Validated channel-space mapping version 1 with explicitly calibrated bases.}
+  frames: {type: array, required: true, description: Increasing source sample frames.}
+  time_offset: {type: number, default: 0, description: Offset added to target key times.}
+  interpolation: {type: string, default: linear, choices: [linear, step], description: Target key interpolation.}
+  existing: {type: string, default: reject, choices: [reject, replace_range], description: Existing animation policy.}
+  dry_run: {type: boolean, default: true, description: Preview without writing keys.}
+preconditions: [Calibrated mapping; no automatic axis guesses., Do not wrap this operation in an atomic batch or caller-owned Undo chunk., Registered pipeline_shelf source is accessible.]
+idempotent: false
+outputs: {clip: Converted animation data., report: Preview or applied key counts and scope., dry_run: Whether this call was a preview.}
+statuses: [SUCCESS, ERROR]
+errors: {TOOLBOX_OPERATION_FAILED: Invalid mapping or incompatible destination channels.}
+recovery: [Correct mapping or destination based on error; preview again., Successful writes can be undone once in Maya.]
+help:
+  summary: Transfer calibrated controller animation using the same implementation as the retarget window.
+  usage: "execute_api(maya.animation.retarget.transfer, params={mapping, frames})"
+  scenario: Preview or apply a reusable mapped animation transfer.
+  safety: Rejects ambiguous targets, locks and unsupported drivers; does not save the scene.
+tests: {contract: tests/test_toolbox_api.py, smoke: DCC/maya/anim_tools/retarget/test_retarget.py}
+implementation: {status: implemented}
+verification: {level: contract_tested, evidence: [tests/test_toolbox_api.py]}
+handler: cgi_pipeline.capabilities.maya.toolbox_api:execute

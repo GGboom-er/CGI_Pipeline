@@ -1,0 +1,50 @@
+api_id: pipeline.window.discover
+version: 1.1.0
+executor: pipeline
+capability: pipeline.window
+operation: discover
+stages: [pipeline]
+targets: [host_session]
+access: read
+effects:
+  service_read: Enumerates local top-level windows and process identities without activation or DCC calls.
+execution_modes: [background]
+surfaces: [service]
+modes: [inspect]
+inputs:
+  process_names:
+    type: array
+    default: [maya.exe, blender.exe, houdini.exe, houdinifx.exe, unrealeditor.exe]
+    description: Between 1 and 100 executable basenames, compared case-insensitively.
+  max_windows: {type: integer, default: 50, description: 'Maximum returned matching windows, from 1 to 200.'}
+  include_monitors: {type: boolean, default: false, description: 'Include physical monitor identities, one-based WGC indices and virtual-desktop rectangles without changing windows.'}
+preconditions: [Windows desktop session with process inspection permission.]
+idempotent: true
+outputs:
+  windows: Exact hwnd/pid/process_started_at identities with process_name/title/class/visible/minimized/rect.
+  monitors: When include_monitors=true, up to 16 active displays in native WGC enumeration order with index/handle/device/primary/rect. Negative coordinates and portrait orientation are preserved.
+  window_count: Number of returned windows.
+  truncated: True only when an additional matching window exceeds max_windows.
+  unavailable_window_count: Windows skipped because their identity became unavailable during enumeration.
+  session: CGI process session ID and observed WTS connection state; discovery remains available when the session is not Active or the state query fails.
+statuses: [SUCCESS, ERROR]
+errors: {WINDOW_DISCOVERY_FAILED: Invalid parameters or unavailable native window enumeration.}
+recovery: [Inspect the error and select one returned explicit identity for capture.]
+help:
+  summary: Discover Windows windows and optional physical monitors for background observation.
+  usage: 'execute_api(pipeline.window.discover, params={process_names: [chrome.exe], include_monitors: true, max_windows: 50})'
+  scenario: Find a Maya, Blender, Houdini or Unreal window without activating it.
+  safety: No scene operations, focus changes, window restore, capture or file writes.
+tests: {contract: tests/test_pipeline_window_capture.py}
+implementation: {status: implemented}
+verification:
+  level: live_tested
+  scope: Windows10 Pro19045 active session with existing Maya/Chrome/ordinary windows and three monitors; physical negative coordinates and portrait dimensions verified through actual WGC capture.
+  evidence:
+  - tests/test_pipeline_window_capture.py
+  - tests/test_pipeline_observation_branches.py
+  - audit/api-2a427be75572.json
+  - projects/default/PL298/work/observe_branches/fresh_acceptance.json
+  - projects/default/PL294/work/connected_desktop_receipts.json
+  - projects/default/PL294/CONNECTED_CAPTURE_REPORT.md
+handler: cgi_pipeline.capabilities.pipeline.window.discover.handler:execute

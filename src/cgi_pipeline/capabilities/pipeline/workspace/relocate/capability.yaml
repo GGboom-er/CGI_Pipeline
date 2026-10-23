@@ -1,0 +1,64 @@
+api_id: pipeline.workspace.relocate
+version: 1.1.0
+executor: pipeline
+capability: pipeline.workspace
+operation: relocate
+execution_strategy: control
+stages: [pipeline]
+targets: [file, metadata]
+access: write
+effects:
+  file_write: Renames sealed idle workspace members and publishes native relocation identity and recovery witnesses; never edits DCC file content.
+  service_read: Reads complete broker/process ownership and reachable foreground scene and reference paths; a sealed exact human scope confirmation may account for an ordinary unregistered Maya or Blender process, without overriding machine reads or CGI ownership.
+execution_modes: [background]
+surfaces: [service]
+modes: [preview, apply]
+mode_binding:
+  input: mode
+  cases:
+  - {value: preview, mode: preview}
+  - {value: apply, mode: apply}
+  - {value: reconcile, mode: apply}
+inputs:
+  mode: {type: string, default: preview, choices: [preview, apply, reconcile], description: Preview validates; apply commits the sealed scope; reconcile rolls back an interrupted original operation without replay.}
+  original_task_id: {type: string, default: '', description: Original relocation operation ID; required only for explicit interrupted-operation reconciliation.}
+  source_project: {type: string, required: true, description: Exact original storage namespace.}
+  target_project: {type: string, required: true, description: Exact destination storage namespace; independent of business project.}
+  business_task_id: {type: string, required: true, description: Stable source and destination workspace identity.}
+  target_policy: {type: string, default: refuse, choices: [refuse, preserve_members], description: Existing destinations are refused unless sealed disjoint top-level members can retain their exact relative paths.}
+  manifest_relpath: {type: string, default: '', description: 'Required for preview/apply; sealed source and optional target member manifest relative to maintenance. Optional foreground_confirmation: schema_version=1, kind=cgi_workspace_foreground_scope_confirmation, exact maintenance_root, finite recorded_at/expires_at Unix times (nonfuture, at most 4 hours), nonempty original statement/evidence, processes=[{pid,create_time,exe}], scopes=[{source_root,target_root}]. Identities, exact managed roots and fixed expiry are rechecked before rename; human evidence never overrides readable scenes/references or CGI ownership. Reconcile rereads the original operation manifest.'}
+  manifest_sha256: {type: string, default: '', description: Required approved manifest SHA256 for preview/apply. Reconcile cannot change the original approved scope.}
+  activity_relpath: {type: string, required: true, description: Fresh complete original-storage activity attestation relative to maintenance workspace.}
+  activity_sha256: {type: string, required: true, description: Activity attestation SHA256.}
+  target_activity_relpath: {type: string, default: '', description: Fresh complete destination activity for preserve_members.}
+  target_activity_sha256: {type: string, default: '', description: Destination activity SHA256 for preserve_members.}
+preconditions: [Independent valid maintenance binding, sealed exact source and target scope, no active or unresolved operation and no resident owning runtime.]
+idempotent: false
+outputs:
+  preview: Present and true for preview; no migration commit.
+  foreground_evidence: Preflight evidence distinguishes machine_inspected scene paths from operator_recorded_confirmation; successful apply also rechecks the same sealed scope before rename and records that result in the native journal.
+  binding: Verified new native binding; its project is the storage namespace.
+  old_binding: Original native identity preserved for Notes compare-and-swap maintenance.
+  relocation_task_id: Original server operation identity; never resubmit an unknown outcome.
+  receipt_manifest_relpath: Flat maintenance proof manifest used by read-only binding verification.
+  receipt_manifest_sha256: SHA256 of both sealed proof manifest and target commit witness.
+  commit_witness_sha256: Durable target commit witness SHA256.
+  rolled_back: True after explicit original-ID reconciliation safely restores both precommit roots.
+  original_task_id: Original interrupted relocation ID; reconciliation never replays it.
+statuses: [SUCCESS, BLOCKED, ERROR]
+errors:
+  WORKSPACE_RELOCATION_CONFLICT: Existing target members or another relocation conflict with this operation.
+  WORKSPACE_RELOCATION_FOREGROUND_UNKNOWN: Complete scene inspection or a valid exact ordinary-process human confirmation is unavailable; no generic foreground bypass is supported.
+  WORKSPACE_RELOCATION_FOREGROUND_OWNED: A machine-read scene or Maya reference belongs to the relocation roots; human statements cannot override it.
+recovery: [Use get_task_result with the original control operation ID; a prepared operation without a commit returns attention and must not be replayed.]
+help:
+  summary: Relocate a sealed idle stable workspace with original operation recovery and exact member preservation.
+  usage: execute_api(pipeline.workspace.relocate, params={mode,source_project,target_project,business_task_id,manifest_relpath,manifest_sha256,activity_relpath,activity_sha256})
+  scenario: Change workspace storage while preserving the business project and immutable historical receipts.
+  safety: No generic overwrite or recursive merge, no DCC mutation, runtime release or automatic allocation policy change. Human scope confirmation is limited to exact unregistered non-CGI Maya or Blender process identities and never overrides readable scene or reference ownership; missing, changed or expired coverage is refused.
+tests: {contract: tests/test_workspace_relocation.py}
+handler: cgi_pipeline.capabilities.pipeline.workspace.relocate.handler:relocate
+implementation: {status: implemented}
+verification:
+  level: contract_tested
+  evidence: [tests/test_workspace_relocation.py]

@@ -1,9 +1,12 @@
 # cgi_pipeline/hosts/maya/worker.py
 # ── Maya 每链一进程生命周期 ──
-import subprocess, json, os, sysconfig, time, uuid, psutil, shutil
+import subprocess, json, os, time, uuid, psutil, math
 from pathlib import Path
 from dotenv import load_dotenv
 from cgi_pipeline.paths import REPOSITORY_ROOT, SOURCE_ROOT
+from cgi_pipeline.contracts import validate_batch_result
+from cgi_pipeline.hosts.file_ipc import FileIpcTransport
+from cgi_pipeline.hosts.runtime import build_host_env, host_runtime, record_host_process, record_host_launch
 
 load_dotenv()
 
@@ -15,8 +18,8 @@ IPC_TIMEOUT  = float(os.getenv('IPC_TIMEOUT_SEC', '0') or 0)
 RPYC_SYNC_TIMEOUT = float(os.getenv('RPYC_SYNC_TIMEOUT_SEC', '3600') or 3600)
 
 
-def _build_env(worker_id: str) -> dict:
-    env = os.environ.copy()
+def _build_env(worker_id: str, environ=None) -> dict:
+    env = build_host_env('maya', PROJECT_ROOT, environ)
     env.update({
         'PATH':                f'{MAYA_BIN_DIR};{env.get("PATH", "")}',
         'MAYA_NO_HOME':        '1',
@@ -33,43 +36,39 @@ def _build_env(worker_id: str) -> dict:
     })
     existing_pythonpath = [item for item in env.get('PYTHONPATH', '').split(os.pathsep) if item]
     env['PYTHONPATH'] = os.pathsep.join([str(SOURCE_ROOT), *existing_pythonpath])
-    # mayapy is CPython-compatible but must not rely on per-user packages.
-    # Inherit the one managed Brain environment used by the CGI Worker instead.
-    shared_purelib = sysconfig.get_paths()['purelib']
-    existing_paths = [item for item in env.get('PYTHONPATH', '').split(os.pathsep) if item]
-    env['PYTHONPATH'] = os.pathsep.join(dict.fromkeys([shared_purelib, *existing_paths]))
     return env
 
 
 class MayaWorker:
-    """一次性 Maya 进程：start → run_api × N → shutdown"""
+    """可复用 Maya 进程：start → run_api/run_batch × N → shutdown。"""
 
     def __init__(self):
         self.worker_id  = str(uuid.uuid4())[:8]
         self.process    = None
-        self.cmd_file   = PROJECT_ROOT / 'ipc' / 'cmd' / self.worker_id / 'pending.json'
-        self.result_dir = PROJECT_ROOT / 'ipc' / 'result' / self.worker_id
-        self.cmd_file.parent.mkdir(parents=True, exist_ok=True)
-        self.result_dir.mkdir(parents=True, exist_ok=True)
-        self._clean_stale_ipc()
-
-    def _clean_stale_ipc(self):
-        if self.cmd_file.exists():
-            self.cmd_file.unlink(missing_ok=True)
-        for f in self.result_dir.glob('*.json'):
-            f.unlink(missing_ok=True)
+        self._environment = os.environ.copy()
+        self.runtime = host_runtime(PROJECT_ROOT, self._environment)
+        self.ipc = FileIpcTransport(self.worker_id, self.runtime.root, clean_stale=True)
+        self.cmd_file = self.ipc.cmd_file
+        self.result_dir = self.ipc.result_dir
 
     def start(self):
-        env = _build_env(self.worker_id)
-        log_dir = PROJECT_ROOT / 'logs'
+        env = _build_env(self.worker_id, self._environment)
+        log_dir = self.runtime.root / 'logs'
         log_dir.mkdir(parents=True, exist_ok=True)
         self._stderr_log = open(log_dir / f'mayapy_{self.worker_id}.log', 'w')
         flags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+        record_host_launch(self.runtime, 'maya', self.worker_id)
         self.process = subprocess.Popen(
             [MAYAPY, ADAPTER],
             env=env, stdout=subprocess.DEVNULL, stderr=self._stderr_log,
             creationflags=flags
         )
+        try:
+            record_host_process(self.runtime, 'maya', self.worker_id, self.process)
+        except Exception:
+            self._kill_process_tree()
+            self._stderr_log.close()
+            raise
         time.sleep(20)
         if self.process.poll() is not None:
             self._stderr_log.close()
@@ -78,25 +77,41 @@ class MayaWorker:
 
     def run_api(self, payload: dict) -> dict:
         task_id = payload['task_id']
-        result_file = self.result_dir / f'{task_id}.json'
-        tmp = self.cmd_file.with_suffix('.tmp')
-        tmp.write_text(json.dumps(payload))
-        os.replace(tmp, self.cmd_file)
         timeout = payload.get('timeout', IPC_TIMEOUT)
-        deadline = time.time() + timeout if timeout and timeout > 0 else None
-        while deadline is None or time.time() < deadline:
-            if self.process and self.process.poll() is not None:
-                return {
-                    'status': 'ERROR',
-                    'detail': f'Maya 进程已退出 (exit code: {self.process.returncode})，任务 {task_id} 中断'
-                }
-            if result_file.exists():
-                result = json.loads(result_file.read_text())
-                result_file.unlink()
-                return result
-            time.sleep(0.5)
-        self._kill_process_tree()
-        raise TimeoutError(f'Task {task_id} IPC timeout after {timeout}s')
+        try:
+            return self.ipc.exchange(payload, timeout=timeout,
+                                     check_process=lambda: self._check_process(task_id))
+        except TimeoutError:
+            self._kill_process_tree()
+            raise TimeoutError(f'Task {task_id} IPC timeout after {timeout}s') from None
+
+    def _check_process(self, task_id: str, *, batch: bool = False) -> dict | None:
+        if self.process and self.process.poll() is not None:
+            if batch:
+                raise RuntimeError(f'Maya 进程已退出 (exit code: {self.process.returncode})')
+            return {'status': 'ERROR',
+                    'detail': f'Maya 进程已退出 (exit code: {self.process.returncode})，任务 {task_id} 中断'}
+        return None
+
+    def run_batch(self, payloads: list[dict], atomic: bool = True) -> dict:
+        """Execute literal API payloads in one Maya IPC round-trip."""
+        if not payloads:
+            return {'status': 'ERROR', 'error_code': 'BATCH_EMPTY',
+                    'error': 'batch 至少需要一个 API 调用', 'results': [], 'completed': 0, 'requested': 0,
+                    'atomic': bool(atomic), 'rolled_back': False}
+        task_id = payloads[0].get('task_id', f'batch-{uuid.uuid4().hex[:8]}')
+        command = {'api_id': '__BATCH__', 'task_id': task_id,
+                   'batch': payloads, 'atomic': bool(atomic)}
+        timeout = payloads[0].get('timeout', IPC_TIMEOUT)
+        try:
+            result = self.ipc.exchange(command, timeout=timeout,
+                                       check_process=lambda: self._check_process(task_id, batch=True))
+        except TimeoutError:
+            self._kill_process_tree()
+            raise TimeoutError(f'Batch task {task_id} IPC timeout after {timeout}s') from None
+        detail = result['detail']
+        detail = json.loads(detail) if isinstance(detail, str) else detail
+        return validate_batch_result(detail, len(payloads), atomic)
 
     def get_memory_gb(self) -> float:
         try:
@@ -110,10 +125,7 @@ class MayaWorker:
         """优雅退出：发送 __DIE__ → 等待退出 → 清理 IPC"""
         if self.process and self.process.poll() is None:
             try:
-                die_payload = json.dumps({'api_id': '__DIE__'})
-                tmp = self.cmd_file.with_suffix('.tmp')
-                tmp.write_text(die_payload)
-                os.replace(tmp, self.cmd_file)
+                self.ipc.send({'api_id': '__DIE__'})
                 self.process.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 self._kill_process_tree()
@@ -133,13 +145,7 @@ class MayaWorker:
             pass
 
     def _cleanup_ipc_dirs(self):
-        try:
-            if self.cmd_file.parent.exists():
-                shutil.rmtree(self.cmd_file.parent, ignore_errors=True)
-            if self.result_dir.exists():
-                shutil.rmtree(self.result_dir, ignore_errors=True)
-        except Exception:
-            pass
+        self.ipc.close()
 
 
 # ══════════════════════════════════════════════════════════════
@@ -170,10 +176,10 @@ def is_maya_commandport_available(host=MAYA_CMD_HOST, port=MAYA_CMD_PORT) -> boo
     except (ConnectionRefusedError, TimeoutError, OSError):
         return False
 
-def is_rpyc_available(host, port) -> bool:
+def is_rpyc_available(host, port, timeout=0.5) -> bool:
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(0.5)
+        s.settimeout(timeout)
         s.connect((host, port))
         s.close()
         return True
@@ -198,12 +204,10 @@ class MayaCommandPortWorker:
         self._consecutive_failures = 0
         self._max_failures = 3
         self._conn = None  # 持久化连接
+        self._remote_func = None  # 当前 RPyC 连接对应的远程执行入口
+        self._remote_batch_func = None
 
-    def _send_bootstrap(self):
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(3)
-        s.connect((self.host, self.port))
-
+    def _send_bootstrap(self, deadline):
         # 读取 RPyC 服务器脚本，并把 MCP server 进程的 site-packages 路径
         # 注入到脚本顶部的占位常量 _CGI_INJECT_SITE_PACKAGES 里。
         # 这样 Maya 会沿仓库 conda env 找到 rpyc，不需要往 mayapy pip install。
@@ -225,12 +229,55 @@ class MayaCommandPortWorker:
         import base64
         b64_script = base64.b64encode(server_script.encode('utf-8')).decode('ascii')
 
-        # 终极一阳指：单行注入拉起服务
-        payload = f"exec(__import__('base64').b64decode('{b64_script}').decode('utf-8'), globals())\n"
+        # A non-None eval result prevents commandPort from exec'ing it again.
+        marker = f'CGI_RPYC_BOOTSTRAP_{uuid.uuid4().hex}'
+        payload = (f"(exec(__import__('base64').b64decode('{b64_script}').decode('utf-8'), "
+                   f"globals()), {marker!r})[1]\n")
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return 'bootstrap 发送前等待期限已结束。', False
+            s.settimeout(min(3, remaining))
+            s.connect((self.host, self.port))
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return 'bootstrap 发送前等待期限已结束。', False
+            s.settimeout(remaining)
             s.sendall(payload.encode('utf-8'))
+            return self._read_bootstrap_reply(s, marker, deadline)
         finally:
             s.close()
+
+    def _read_bootstrap_reply(self, sock, marker, deadline):
+        """Ignore echoes until a complete nonce frame or the RPyC endpoint is ready."""
+        reply, pending, truncated = '', b'', False
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return f'{reply}\n{pending.decode("utf-8", errors="replace")}\ncommandPort 等待期限已结束；命令可能仍在 Maya 主线程等待。'[-2000:], False
+            if is_rpyc_available(self.host, self.rpyc_port, min(0.5, remaining)):
+                return f'{reply}\nRPyC 端口已就绪。', True
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                continue
+            sock.settimeout(min(0.5, remaining))
+            try:
+                chunk = sock.recv(8192)
+            except socket.timeout:
+                continue
+            if not chunk:
+                return f'{reply}\n{pending.decode("utf-8", errors="replace")}\ncommandPort EOF：连接已关闭，未收到关联完成帧。'[-2000:], False
+            pending += chunk
+            while b'\x00' in pending:
+                frame, pending = pending.split(b'\x00', 1)
+                frame = frame.decode('utf-8', errors='replace').strip('\r\n')
+                reply = f'{reply}\n{frame}'[-2000:]
+                if not truncated and frame == marker:
+                    return reply, False
+                truncated = False
+            if len(pending) > 2000:
+                pending, truncated = pending[-2000:], True
 
     def _ensure_connection(self):
         """获取或创建持久化 RPyC 连接。连接断开时自动重建。"""
@@ -240,17 +287,64 @@ class MayaCommandPortWorker:
                 return self._conn
             except Exception:
                 # 连接已死，清理后重建
-                try:
-                    self._conn.close()
-                except Exception:
-                    pass
-                self._conn = None
-        
-        self._conn = rpyc.classic.connect(self.host, self.rpyc_port)
-        self._conn._config['sync_request_timeout'] = RPYC_SYNC_TIMEOUT
+                self.shutdown()
+
+        self.start()
         return self._conn
 
+    def _get_remote_func(self, conn, batch=False):
+        """Install both entrypoints once per connection; refresh code on change."""
+        attribute = '_remote_batch_func' if batch else '_remote_func'
+        cached = getattr(self, attribute, None)
+        if cached is not None:
+            return cached
+
+        remote_run_code = f"""
+def _cgi_execute_json(payload_json, batch=False):
+    import sys, json
+    payload = json.loads(payload_json)
+    source_path = r'{str(SOURCE_ROOT)}'
+    if source_path not in sys.path:
+        sys.path.insert(0, source_path)
+    from cgi_pipeline.core.code_reload import capability_session
+    with capability_session() as snapshot:
+        import cgi_pipeline.execution as execution
+        import maya.cmds as cmds
+        first = (payload.get('batch') or [{{}}])[0] if batch else payload
+        context = dict(first.get('api_context') or {{}})
+        context['execution_mode'] = 'foreground'
+        context.setdefault('source_path', first.get('source_path', ''))
+        context.setdefault('project', first.get('project', ''))
+        context.setdefault('asset_name', first.get('asset_name', ''))
+        context['cmds_module'] = cmds
+        if batch:
+            res = execution.execute_batch(payload.get('batch') or [], context=context,
+                                          atomic=bool(payload.get('atomic', True)),
+                                          catalog_snapshot=snapshot)
+        else:
+            res = execution.execute_api(payload['api_id'], payload.get('api_params') or {{}},
+                                        context, catalog_snapshot=snapshot)
+    return json.dumps(res, ensure_ascii=False, default=str)
+
+def _cgi_run_api_json(payload_json):
+    return _cgi_execute_json(payload_json)
+
+def _cgi_run_batch_json(payload_json):
+    return _cgi_execute_json(payload_json, batch=True)
+"""
+        conn.execute(remote_run_code)
+        self._remote_func = conn.namespace['_cgi_run_api_json']
+        self._remote_batch_func = conn.namespace['_cgi_run_batch_json']
+        return getattr(self, attribute)
+
     def start(self):
+        if self._conn is not None:
+            return
+        self._bootstrap_server()
+        self._conn = rpyc.classic.connect(self.host, self.rpyc_port)
+        self._conn._config['sync_request_timeout'] = RPYC_SYNC_TIMEOUT
+
+    def _bootstrap_server(self):
         if is_rpyc_available(self.host, self.rpyc_port):
             self._consecutive_failures = 0
             return
@@ -261,28 +355,39 @@ class MayaCommandPortWorker:
                 f'请在 Maya 中执行: cmds.commandPort(name=":{self.port}", sourceType="python")'
             )
         
-        # 引导启动 RPyC Server
-        self._send_bootstrap()
+        try:
+            timeout = float(os.getenv('RPYC_BOOTSTRAP_TIMEOUT_SEC', '30'))
+        except ValueError as exc:
+            raise ValueError('RPYC_BOOTSTRAP_TIMEOUT_SEC 必须是有限正数。') from exc
+        if not math.isfinite(timeout) or timeout <= 0:
+            raise ValueError('RPYC_BOOTSTRAP_TIMEOUT_SEC 必须是有限正数。')
 
-        # 轮询等待 RPyC 服务器上线 (最多等 5 秒)
-        for _ in range(10):
-            time.sleep(0.5)
-            if is_rpyc_available(self.host, self.rpyc_port):
+        # A busy Maya main thread can accept the command before running it.
+        deadline = time.monotonic() + timeout
+        reply, ready = self._send_bootstrap(deadline)
+        if ready:
+            self._consecutive_failures = 0
+            return
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            if is_rpyc_available(self.host, self.rpyc_port, min(0.5, remaining)):
                 self._consecutive_failures = 0
                 return
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            time.sleep(min(0.5, remaining))
 
-        # Bootstrap 失败。此时 Maya 已收到注入脚本但 rpyc 没起——
-        # 99% 是 conda env 里没 rpyc（被人手动删了 / environment.yml 没同步）。
-        # 不再尝试往 mayapy 装：那是不可移植的蠢招，且写 Program Files 要管理员权限。
-        import site as _site
-        hint_paths = [p for p in _site.getsitepackages() if p] + [_site.getusersitepackages()]
+        # This observation cannot identify missing dependencies or prove that the
+        # accepted bootstrap command will never finish. Preserve actual evidence.
         raise RuntimeError(
-            f'RPyC Server bootstrap failed on port {self.rpyc_port}。\n'
-            f'Maya commandPort 活着，但 RPyC 服务在 5 秒内没起来。\n'
-            f'最常见原因：当前 MCP server 进程的 Python 环境里没装 rpyc。\n'
-            f'检查过的 site-packages：\n  - ' + '\n  - '.join(hint_paths) + '\n'
-            f'修复方法：在仓库根目录跑 `bin\\setup.bat`，或用 `Y:/GGbommer/scripts/.conda_envs/brain/python.exe -m pip install rpyc==6.0.2`。\n'
-            f'注意：rpyc 必须装进 MCP server 运行的那个 Python 环境，不是 mayapy。'
+            f'RPyC bootstrap 尚未就绪 ({self.host}:{self.rpyc_port})，等待窗口 {timeout:g} 秒已结束。\n'
+            f'bootstrap 调用未观察到服务就绪；不能据此判断 Maya 执行完成或依赖缺失。\n'
+            f'MCP 已加载 rpyc {rpyc.__version__}: {rpyc.__file__}\n'
+            f'commandPort 响应: {reply or "无执行响应"}\n'
+            f'请先核对 Maya 主线程/Script Editor 和当前端口状态；不自动重发任务或重装依赖。'
         )
 
     def get_memory_gb(self) -> float:
@@ -296,6 +401,8 @@ class MayaCommandPortWorker:
             except Exception:
                 pass
             self._conn = None
+            self._remote_func = None
+        self._remote_batch_func = None
 
     def run_api(self, payload: dict) -> dict:
         task_id = payload['task_id']
@@ -308,28 +415,7 @@ class MayaCommandPortWorker:
         
         try:
             conn = self._ensure_connection()
-            
-            # 注入一个代理执行函数：为了保证管线数据的安全切断，边界通信依然使用 JSON
-            remote_run_code = f"""
-def _cgi_run_api_json(payload_json):
-    import sys, json
-    source_path = r'{str(SOURCE_ROOT)}'
-    if source_path not in sys.path:
-        sys.path.insert(0, source_path)
-    from cgi_pipeline.execution import execute_api
-    import maya.cmds as cmds
-    payload = json.loads(payload_json)
-    context = dict(payload.get('api_context') or {{}})
-    context.setdefault('execution_mode', 'foreground')
-    context.setdefault('source_path', payload.get('source_path', ''))
-    context.setdefault('project', payload.get('project', ''))
-    context.setdefault('asset_name', payload.get('asset_name', ''))
-    context['cmds_module'] = cmds
-    res = execute_api(payload['api_id'], payload.get('api_params') or {{}}, context)
-    return json.dumps(res, ensure_ascii=False, default=str)
-"""
-            conn.execute(remote_run_code)
-            remote_func = conn.namespace['_cgi_run_api_json']
+            remote_func = self._get_remote_func(conn)
             
             # 在 Maya 主线程安全调度执行，杜绝崩溃风险
             result_json = conn.modules['maya.utils'].executeInMainThreadWithResult(
@@ -344,7 +430,7 @@ def _cgi_run_api_json(payload_json):
             tb = traceback.format_exc()
             self._consecutive_failures += 1
             # 连接可能已损坏，标记为 None 以便下次重建
-            self._conn = None
+            self.shutdown()
             if self._consecutive_failures >= self._max_failures:
                 return {
                     'status': 'ERROR',
@@ -354,3 +440,22 @@ def _cgi_run_api_json(payload_json):
                 'status': 'ERROR',
                 'detail': f'RPyC 执行失败: {e}\n{tb}'
             }
+
+    def run_batch(self, payloads: list[dict], atomic: bool = True) -> dict:
+        """Execute a literal batch through one persistent RPyC/main-thread call."""
+        if not payloads:
+            return {'status': 'ERROR', 'error_code': 'BATCH_EMPTY',
+                    'error': 'batch 至少需要一个 API 调用', 'results': [], 'completed': 0, 'requested': 0,
+                    'atomic': bool(atomic), 'rolled_back': False}
+        try:
+            conn = self._ensure_connection()
+            fn = self._get_remote_func(conn, batch=True)
+            raw = conn.modules['maya.utils'].executeInMainThreadWithResult(
+                fn, json.dumps({'batch': payloads, 'atomic': atomic}))
+            result = json.loads(raw)
+            validate_batch_result(result, len(payloads), atomic)
+            self._consecutive_failures = 0
+            return result
+        except Exception as exc:
+            self.shutdown()
+            raise RuntimeError(f'RPyC 批量执行失败: {exc}') from exc

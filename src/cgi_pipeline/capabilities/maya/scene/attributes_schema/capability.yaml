@@ -1,0 +1,37 @@
+api_id: maya.scene.attributes.schema
+version: 1.0.0
+name: attributes_schema
+executor: maya
+capability: scene.attributes
+operation: schema
+stages: [modeling, rigging, animation]
+targets: [attribute]
+access: destructive
+effects:
+  scene_write: Adds or deletes bounded user-defined Maya attributes in one undo transaction.
+execution_modes: [local, foreground, background]
+surfaces: [maya, service]
+modes: [apply]
+inputs:
+  items: {type: array, required: true, description: "Actions with node, attribute, and optional type/default metadata."}
+  max_items: {type: integer, default: 100, description: "Maximum actions, hard limit 500."}
+preconditions: [Nodes resolve unambiguously., Delete only accepts user-defined attributes.]
+idempotent: false
+outputs:
+  items: Ordered add/delete results with before and after types.
+  count: Completed action count.
+statuses: [SUCCESS, ERROR]
+errors:
+  MAYA_SCENE_P2_OPERATION_FAILED: Validation, Maya edit, or readback failed and the transaction was rolled back.
+recovery: [Correct the complete action list and retry after inspecting existing attributes.]
+help:
+  summary: Add or delete bounded user-defined Maya attributes.
+  usage: execute_api(maya.scene.attributes.schema, params={items, max_items})
+  scenario: Define controller or pipeline metadata before setting values.
+  safety: Fail-loud and atomic; built-in attributes cannot be deleted.
+tests:
+  contract: tests/test_maya_scene_p2.py
+  smoke: Foreground add/delete on a disposable transform followed by undo.
+implementation: {status: implemented}
+verification: {level: contract_tested, evidence: [tests/test_maya_scene_p2.py]}
+handler: cgi_pipeline.capabilities.maya.scene_p2:manage_attribute_schema

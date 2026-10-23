@@ -2,40 +2,53 @@
 # 用法：mayapy.exe -script src\cgi_pipeline\hosts\maya\adapter.py
 # ── Maya 批处理适配器 ──
 
-import maya.standalone
-maya.standalone.initialize(name='python')
-import maya.cmds as cmds
-# ── 批处理模式防弹窗设置 ──
-cmds.optionVar(iv=('fileIgnoreVersion', 1))         # 忽略文件版本不匹配
-cmds.optionVar(iv=('useSaveScenePanelLayout', 0))   # 不弹存储面板布局
 import json, os, time, sys, traceback
 from pathlib import Path
 
 WORKER_ID = os.environ.get('CGI_WORKER_ID', 'default')
 PROJECT_ROOT = Path(os.environ.get('CGI_PROJECT_ROOT', '.'))
-SOURCE_ROOT = PROJECT_ROOT / 'src'
+SOURCE_ROOT = Path(__file__).resolve().parents[3]
 if str(SOURCE_ROOT) not in sys.path:
     sys.path.insert(0, str(SOURCE_ROOT))
 
-CMD_FILE  = PROJECT_ROOT / 'ipc' / 'cmd'    / WORKER_ID / 'pending.json'
-RESULT_DIR = PROJECT_ROOT / 'ipc' / 'result' / WORKER_ID
+from cgi_pipeline.hosts.file_ipc import FileIpcTransport
+from cgi_pipeline.hosts.runtime import host_runtime
+
+RUNTIME = host_runtime(PROJECT_ROOT)
+
+import maya.standalone
+maya.standalone.initialize(name='python')
+import maya.cmds as cmds
+if RUNTIME.threads is not None:
+    # Maya 2025 threadCount is called once on this adapter's startup main thread.
+    cmds.threadCount(numberOfThreads=RUNTIME.threads)
+# ── 批处理模式防弹窗设置 ──
+cmds.optionVar(iv=('fileIgnoreVersion', 1))         # 忽略文件版本不匹配
+cmds.optionVar(iv=('useSaveScenePanelLayout', 0))   # 不弹存储面板布局
+
+IPC = FileIpcTransport(WORKER_ID, RUNTIME.root)
+CMD_FILE = IPC.cmd_file
+RESULT_DIR = IPC.result_dir
 POLL_INTERVAL = float(os.environ.get('IPC_POLL_INTERVAL_SEC', '0.2'))
 
-CMD_FILE.parent.mkdir(parents=True, exist_ok=True)
-RESULT_DIR.mkdir(parents=True, exist_ok=True)
-
 def _write_result(task_id: str, status: str, detail: str = ''):
-    result = {'task_id': task_id, 'status': status, 'detail': detail}
-    tmp = RESULT_DIR / f'{task_id}.tmp'
-    final = RESULT_DIR / f'{task_id}.json'
-    tmp.write_text(json.dumps(result))
-    os.replace(tmp, final)  # 原子操作，防止宿主进程读到半写文件
+    IPC.publish_result(task_id, status, detail)
 
 def _dispatch_api(payload: dict):
     '''在 Maya 主线程内执行 API，由 evalDeferred 调用'''
     task_id = payload.get('task_id', 'unknown')
     api_id = payload.get('api_id', '')
     try:
+        if api_id == '__BATCH__':
+            from cgi_pipeline.execution import execute_batch
+            api_context = dict(payload.get('batch', [{}])[0].get('api_context') or {}) if payload.get('batch') else {}
+            api_context.setdefault('execution_mode', 'background')
+            api_context['cmds_module'] = cmds
+            batch_result = execute_batch(payload.get('batch') or [], context=api_context,
+                                         atomic=bool(payload.get('atomic', True)))
+            _write_result(task_id, 'SUCCESS' if batch_result.get('status') == 'SUCCESS' else 'ERROR',
+                          json.dumps(batch_result, ensure_ascii=False, default=str))
+            return
         if not api_id:
             _write_result(task_id, 'ERROR', '缺少 api_id；Maya 适配器只接受 API 调用。')
             return
@@ -70,9 +83,8 @@ def _dispatch_api(payload: dict):
         except Exception:
             pass
 
-        result_status = 'SUCCESS'
-        if api_status in ('ERROR', 'BLOCKED', 'NEEDS_ATTENTION', 'TIMEOUT', 'CANCELLED'):
-            result_status = api_status
+        from cgi_pipeline.contracts import API_STATUSES
+        result_status = api_status if api_status in API_STATUSES else 'ERROR'
         _write_result(task_id, result_status, json.dumps(api_result, ensure_ascii=False, default=str))
     except Exception as e:
         _write_result(task_id, 'ERROR', traceback.format_exc())
@@ -80,21 +92,21 @@ def _dispatch_api(payload: dict):
 def _poll_loop():
     '''主线程轮询，修复了读写竞态条件'''
     print(f'[Adapter] Worker {WORKER_ID} ready. Polling {CMD_FILE}')
-    processing_file = CMD_FILE.with_name('processing.json')
     while True:
         try:
-            if CMD_FILE.exists():
-                try:
-                    os.replace(CMD_FILE, processing_file)
-                except OSError:
-                    time.sleep(0.01)
-                    continue
-                raw = processing_file.read_text()
-                processing_file.unlink()
-                payload = json.loads(raw)
+            payload = IPC.claim()
+            if payload is not None:
                 if payload.get('api_id') == '__DIE__':
                     import os as _os
                     _os._exit(0)
+                if payload.get('api_id') == '__RELOAD__':
+                    # 剔除第一方模块，下次 execute_api 重新 import 到新代码；
+                    # maya.cmds 与当前场景是 Maya 自身状态，不受影响。
+                    from cgi_pipeline.core.code_reload import evict_capability_modules
+                    evicted = evict_capability_modules()
+                    _write_result(payload.get('task_id', 'reload'), 'SUCCESS',
+                                  f'evicted {evicted} modules')
+                    continue
                 _dispatch_api(payload)
         except Exception as e:
             sys.stderr.write(f'[Adapter Poll Error] {traceback.format_exc()}\n')

@@ -427,3 +427,42 @@ def execute_action(port, action, payload=None, timeout=120.0):
         }
     except (TimeoutError, UEBridgeError, OSError, ConnectionError, WebSocketException) as exc:
         return _error_result(port, session, started, exc, action=action, connected=connected)
+
+
+def submit_foreground_task(payload: dict, sync: bool = True) -> dict:
+    """Run registered editor APIs through the existing UE bridge and receipt owner."""
+    from cgi_pipeline.catalog import snapshot
+    from cgi_pipeline.contracts import ApiContractError, validate_receipt
+    from cgi_pipeline.paths import REPOSITORY_ROOT
+    from cgi_pipeline.server.internals import _append_submission_audit
+
+    task_id, api_id = payload['task_id'], payload['api_id']
+    context = dict(payload.get('api_context') or {})
+    port = context.get('foreground_port')
+    if not port:
+        return {'task_id': task_id, 'status': 'ERROR', 'error_code': 'FOREGROUND_PORT_REQUIRED',
+                'error': 'UE foreground APIs require an explicit foreground_port.'}
+    spec = snapshot()[0][api_id]
+    code = '\n'.join([
+        'import sys, json, unreal',
+        f'_cgi_source = {str(REPOSITORY_ROOT / "src")!r}',
+        'if _cgi_source not in sys.path: sys.path.insert(0, _cgi_source)',
+        'from cgi_pipeline.execution import execute_api',
+        f'_cgi_context = json.loads({json.dumps(context)!r})',
+        "_cgi_context['unreal_module'] = unreal",
+        f'result = execute_api({api_id!r}, json.loads({json.dumps(payload.get("api_params") or {})!r}), _cgi_context)',
+    ])
+    _append_submission_audit(task_id, api_id, 'foreground', 'STARTED')
+    response = execute_python(int(port), code, description=f'CGI API {api_id}')
+    if response.get('status') == 'SUCCESS':
+        try:
+            receipt = validate_receipt(response.get('result'), api_id=api_id, api_version=spec['version'])
+        except (ApiContractError, TypeError) as exc:
+            receipt = {'status': 'ERROR', 'error_code': 'UE_RECEIPT_INVALID', 'error': str(exc)}
+    else:
+        receipt = {key: response[key] for key in ('status', 'error', 'error_code', 'error_type') if key in response}
+    _append_submission_audit(task_id, api_id, 'foreground', receipt['status'],
+                             json.dumps(receipt, ensure_ascii=False, default=str))
+    return {'task_id': task_id, 'api_id': api_id, 'status': receipt['status'],
+            'receipt': receipt, 'detail': receipt, 'execution_mode': 'foreground',
+            'foreground_port': int(port), 'sync': sync}

@@ -1,0 +1,41 @@
+{
+  "steps": [
+    {
+      "step_id": "export_abc",
+      "parameters": {
+        "abc_path": "{{input.info_dir}}/{{input.source_name | stem}}.abc",
+        "cache_group": "{{config.stages.tex.geom_roots.0}}"
+      },
+      "api_id": "blender.asset.blender_export_abc"
+    },
+    {
+      "step_id": "extract_materials",
+      "parameters": {
+        "output_path": "{{input.info_dir}}/{{input.source_name | stem}}_materials.json",
+        "cache_group": "{{config.stages.tex.geom_roots.0}}"
+      },
+      "api_id": "blender.asset.blender_extract_materials"
+    },
+    {
+      "step_id": "build_mesh",
+      "parameters": {
+        "abc_path": "{{outputs.export_abc.output_path}}"
+      },
+      "api_id": "maya.asset.maya_build_mesh_from_abc"
+    },
+    {
+      "step_id": "apply_materials",
+      "parameters": {
+        "materials_path": "{{outputs.extract_materials.output_path}}"
+      },
+      "api_id": "maya.asset.maya_apply_materials"
+    },
+    {
+      "step_id": "save",
+      "parameters": {
+        "save_path": "{{input.run_dir}}/{{input.source_name | stem}}.ma"
+      },
+      "api_id": "maya.asset.save_scene"
+    }
+  ]
+}

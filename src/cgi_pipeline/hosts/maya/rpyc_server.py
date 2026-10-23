@@ -37,9 +37,26 @@ for _p in _CGI_INJECT_SITE_PACKAGES:
 
 import threading
 import socket
-from contextlib import closing
+import errno
+import logging
 import rpyc
+from rpyc.utils.authenticators import AuthenticationError
 from rpyc.utils.server import ThreadedServer
+
+
+def _server_logger(port, level=logging.WARNING):
+    """Keep routine RPyC connection chatter out of the host's root logger."""
+    logger = logging.getLogger('cgi_pipeline.maya.rpyc.{}'.format(port))
+    logger.setLevel(level)
+    return logger
+
+
+def _is_disconnect(error):
+    if isinstance(error, (EOFError, ConnectionError)):
+        return True
+    return isinstance(error, OSError) and error.errno in {
+        errno.ECONNRESET, errno.ECONNABORTED, errno.EPIPE, errno.ENOTCONN,
+    }
 
 
 class _GracefulClassicService(rpyc.classic.ClassicService):
@@ -65,48 +82,58 @@ class _SilentThreadedServer(ThreadedServer):
     - 对其他异常（如编码错误、认证错误）：保留原始日志以便排查真正的 bug
     """
     def _authenticate_and_serve_client(self, sock):
+        sock2 = sock
         try:
             if self.authenticator:
-                addrinfo = sock.getpeername()
                 try:
                     sock2, credentials = self.authenticator(sock)
-                except Exception:
-                    self.logger.info("authentication failed, rejecting connection")
+                except AuthenticationError:
+                    self.logger.warning("authentication failed, rejecting connection")
                     return
                 else:
-                    self.logger.info("authenticated successfully")
+                    self.logger.debug("authenticated successfully")
             else:
                 credentials = None
-                sock2 = sock
-            try:
-                self._serve_client(sock2, credentials)
-            except (EOFError, ConnectionError, ConnectionAbortedError, 
-                    ConnectionResetError, BrokenPipeError, OSError):
-                # ── 客户端断连 = 管线正常行为，完全静默 ──
-                pass
-            except Exception:
-                # ── 真正的异常，保留日志但不 raise（避免 threading 二次打印）──
+            self._serve_client(sock2, credentials)
+        except Exception as error:
+            if not _is_disconnect(error):
                 self.logger.exception("client connection terminated with unexpected error")
         finally:
             try:
-                sock.shutdown(socket.SHUT_RDWR)
-            except Exception:
-                pass
-            closing(sock)
-            self.clients.discard(sock)
+                if sock2 is not sock:
+                    self._close_client_socket(sock2)
+                self._close_client_socket(sock)
+            finally:
+                self.clients.discard(sock)
+
+    def _close_client_socket(self, sock):
+        try:
+            sock.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+        try:
+            sock.close()
+        except OSError:
+            self.logger.exception("failed to close client socket")
 
 
-def _start_rpyc_server(port=18812):
+def _start_rpyc_server(port=18812, log_level=logging.WARNING):
     """在 Maya 的后台线程中启动一个纯粹的 RPyC 服务"""
     existing_servers = getattr(sys, '_cgi_rpyc_servers', {})
     if not isinstance(existing_servers, dict):
         existing_servers = {}
+    logger = _server_logger(port, log_level)
     if port in existing_servers:
-        return
+        server = existing_servers[port]
+        server.logger = logger
+        server.protocol_config['logger'] = logger
+        server.registrar.logger = logger
+        return server
 
     server = _SilentThreadedServer(
         _GracefulClassicService, 
         port=port, 
+        logger=logger,
         protocol_config={
             'allow_all_attrs': True, 
             'allow_getattr': True, 
@@ -125,12 +152,12 @@ def _start_rpyc_server(port=18812):
     def run_server():
         try:
             server.start()
-        except Exception as e:
-            import traceback
-            traceback.print_exc()
+        except Exception:
+            logger.exception("Maya RPyC server stopped unexpectedly")
 
     t = threading.Thread(target=run_server, name="CGI_RPyC_Server")
     t.daemon = True
     t.start()
     
-    print(f"CGI RPyC Server started on port {port}")
+    logger.debug("Maya RPyC server started on port %s", port)
+    return server

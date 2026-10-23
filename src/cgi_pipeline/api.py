@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from typing import Any, Iterable, Mapping
 
-from .catalog import capability_help, get_capability, list_capabilities
+from .catalog import capability_help, list_capabilities, snapshot
 from .contracts import make_api_receipt
 from .execution import execute_api
 
@@ -13,9 +13,13 @@ from .execution import execute_api
 def list(*, executor: str | None = None, capability: str | None = None,
          operation: str | None = None, stages: Iterable[str] | None = None,
          targets: Iterable[str] | None = None, access: str | None = None,
-         surfaces: Iterable[str] | None = None) -> list[dict[str, Any]]:
+         surfaces: Iterable[str] | None = None,
+         execution_modes: Iterable[str] | None = None,
+         modes: Iterable[str] | None = None,
+         effects: Iterable[str] | None = None) -> list[dict[str, Any]]:
     return list_capabilities(executor=executor, capability=capability, operation=operation,
-                             stages=stages, targets=targets, access=access, surfaces=surfaces)
+                             stages=stages, targets=targets, access=access, surfaces=surfaces,
+                             execution_modes=execution_modes, modes=modes, effects=effects)
 
 
 def help(api_id: str) -> dict[str, Any]:
@@ -27,7 +31,8 @@ def execute_local(api_id: str, params: Mapping[str, Any] | None = None, *, host:
                   context: Mapping[str, Any] | None = None) -> dict[str, Any]:
     started_at = time.perf_counter()
     try:
-        spec = get_capability(api_id)
+        catalog_snapshot = snapshot()
+        spec = catalog_snapshot[0][api_id]
     except KeyError as exc:
         return make_api_receipt(api_id, "", "ERROR", started_at,
                                 error_code="API_NOT_FOUND", error=str(exc))
@@ -44,4 +49,4 @@ def execute_local(api_id: str, params: Mapping[str, Any] | None = None, *, host:
     if "cmds" in modules:
         raw_context["cmds_module"] = modules["cmds"]
     raw_context["host_modules"] = modules
-    return execute_api(api_id, params, raw_context)
+    return execute_api(api_id, params, raw_context, catalog_snapshot=catalog_snapshot)

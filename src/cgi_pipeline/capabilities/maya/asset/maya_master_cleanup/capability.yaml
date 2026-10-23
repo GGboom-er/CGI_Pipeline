@@ -1,5 +1,5 @@
 api_id: maya.asset.maya_master_cleanup
-version: 1.0.0
+version: 1.1.0
 name: 管线全自动清理与优化
 executor: maya
 capability: scene.cleanup
@@ -12,8 +12,10 @@ targets:
 - scene
 access: destructive
 effects:
-  inspect: 只读取场景或标准数据，不改变资产。
-  apply: 按 API 实现对当前任务沙盒中的场景或数据执行操作。
+  scene_read: mode=check or fix scans project scene quality.
+  scene_write: mode=check can change currentUVSet without restoration; mode=fix deletes supported residual nodes, cameras,
+    keys and UV data and runs native cleanup. The native deletion set is not statically exhaustive.
+  host_state_write: mode=fix changes cleanup optionVars and calls native host cleanup commands; results are returned in the receipt. This API does not save the scene or write a separate Markdown report.
 execution_modes:
 - local
 - background
@@ -22,32 +24,42 @@ surfaces:
 - maya
 - service
 modes:
+- inspect
 - apply
+mode_binding:
+  input: mode
+  cases:
+  - value: check
+    mode: inspect
+  - value: fix
+    mode: apply
 inputs:
+  profile:
+    type: string
+    default: master
+    choices: [master, proxy_authoring]
+    description: proxy_authoring only lists/removes existing ngSkinTools authoring data; skips all Master cleanup, UV, camera and animation operations. Current native skin weights remain the runtime binding.
   mode:
     type: string
     default: check
-    description: 操作模式：'check' 生成质检报告（只读安全），'fix' 会产生破坏性修复动作
-  save_path:
-    type: string
-    default: ''
-    description: 另存路径，清理后保存到此路径，MD报告自动输出在旁边
+    choices:
+    - check
+    - fix
+    description: check 返回诊断；检查可切换 currentUVSet 且当前未恢复。fix 执行清理；本 API 不保存场景。
 preconditions:
 - 项目配置通过统一 config/{project}_config.json 接口加载。
 - 后台模式由 CGI Worker 打开或复用对应 DCC 场景。
 idempotent: false
 outputs:
-- name: scene
-  type: scene_file
-  label: 清理后场景
-- name: report
-  type: report
-  label: 清理报告 (.md)
+  report: output.report 为结构化检查或清理结果，报告随 receipt 返回，不另写 Markdown 文件。
+  summary: output.summary 为操作摘要。
+  items: output.items 为逐项检查或清理结果。
 statuses:
 - SUCCESS
 - PARTIAL
 - ERROR
 - BLOCKED
+- AUDIT_FAILED
 - NEEDS_ATTENTION
 - TIMEOUT
 - CANCELLED
@@ -58,11 +70,13 @@ recovery:
 - 读取 api_help 获取参数、前置条件和输出。
 - 失败时检查任务报告中的错误与恢复建议。
 help:
-  summary: 基于管线项目上下文，扫描或清理未知节点、插件残留、野生相机、多余UV集、死动画帧与空骨骼权重。支持 Check（只读诊断）和 Fix（执行清理）两种模式。
+  summary: 基于管线项目上下文，扫描或清理未知节点、插件残留、野生相机、多余UV集、死动画帧与空骨骼权重。支持 Check（诊断，可能切换当前 UV 集）和 Fix（执行清理）两种模式；均不保存场景。
   usage: execute_api(maya.asset.maya_master_cleanup, params={...})
-  scenario: 基于管线项目上下文，扫描或清理未知节点、插件残留、野生相机、多余UV集、死动画帧与空骨骼权重。支持 Check（只读诊断）和 Fix（执行清理）两种模式。
-  safety: read API 只读；write/destructive API 仅写入任务沙盒。
+  scenario: 基于管线项目上下文，扫描或清理未知节点、插件残留、野生相机、多余UV集、死动画帧与空骨骼权重。支持 Check（诊断，可能切换当前 UV 集）和 Fix（执行清理）两种模式；均不保存场景。
+  safety: 具体副作用见本契约 effects；运行上下文、路径与恢复边界见 docs/architecture/pipeline_runtime_contract_v1.md。
 tests:
   contract: api.registry loads this manifest and api.runner validates its receipt.
   smoke: 代表性 workflow 统一验收。
+implementation: {status: implemented, module: maya_master_cleanup.maya_master_cleanup}
+verification: {level: contract_tested, evidence: [tests/test_maya_asset_high_value_contracts.py]}
 handler: cgi_pipeline.capabilities.maya.asset.maya_master_cleanup.adapter:execute

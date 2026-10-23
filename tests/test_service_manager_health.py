@@ -238,11 +238,13 @@ def test_http_owner_cleanup_is_scoped():
     print("\n=== Test: HTTP Worker owner cleanup stays scoped ===")
     original_runtime = sm.RUNTIME_DIR
     original_stop_worker = sm.stop_worker
+    original_is_pid_alive = sm._is_pid_alive
     stopped = []
     with tempfile.TemporaryDirectory() as tmp:
         try:
             sm.RUNTIME_DIR = Path(tmp)
             sm.stop_worker = lambda dcc: stopped.append(dcc) or True
+            sm._is_pid_alive = lambda pid, expected_name="python": True
             sm.claim_worker_owner(1001)
 
             _check("非 owner 不停止 Worker", not sm.shutdown_worker_owned_by(2002))
@@ -255,6 +257,24 @@ def test_http_owner_cleanup_is_scoped():
         finally:
             sm.RUNTIME_DIR = original_runtime
             sm.stop_worker = original_stop_worker
+            sm._is_pid_alive = original_is_pid_alive
+
+
+def test_stale_http_owner_is_discarded():
+    print("\n=== Test: stale HTTP Worker owner is discarded ===")
+    original_runtime = sm.RUNTIME_DIR
+    original_is_pid_alive = sm._is_pid_alive
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            sm.RUNTIME_DIR = Path(tmp)
+            sm._is_pid_alive = lambda pid, expected_name="python": False
+            sm.claim_worker_owner(1001)
+
+            _check("死亡 owner 不再有效", sm.get_worker_owner() is None)
+            _check("死亡 owner 记录已清理", not sm._worker_owner_path().exists())
+        finally:
+            sm.RUNTIME_DIR = original_runtime
+            sm._is_pid_alive = original_is_pid_alive
 
 
 def test_start_worker_loser_awaits_not_popen():

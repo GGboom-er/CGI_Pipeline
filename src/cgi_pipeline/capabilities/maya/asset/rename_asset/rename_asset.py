@@ -12,7 +12,6 @@ import time
 import datetime
 
 from cgi_pipeline.core.config_loader import load_project_config
-from cgi_pipeline.core.asset_resolver import AssetResolver
 from cgi_pipeline.core.path_guard import is_protected_path
 from cgi_pipeline.core.receipt import make_receipt
 
@@ -68,8 +67,8 @@ def execute(payload: dict) -> dict:
     try:
         # ── 解析 primary_task ──
         cfg = load_project_config(project)
-        resolver = AssetResolver(cfg)
-        task_name = task or resolver._get_primary_task(stage)
+        stage_cfg = cfg.get('stages', {}).get(stage, {})
+        task_name = task or stage_cfg.get('primary_task', f'{stage}Master')
 
         # ── 推算版本号：从当前文件名提取，否则默认 v001 ──
         current_basename = os.path.basename(current_scene)

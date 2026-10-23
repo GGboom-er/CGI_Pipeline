@@ -4,6 +4,7 @@
 # 叶子模块（只依赖 os/socket），任何 mcp_server 模块可安全 import，无循环依赖。
 
 import os
+import re
 import socket
 from concurrent.futures import ThreadPoolExecutor
 
@@ -15,6 +16,21 @@ def maya_port_range() -> range:
     if end < start:
         start, end = end, start
     return range(start, end + 1)
+
+
+def maya_scan_ports() -> list[int]:
+    """Return the bounded scan range plus explicitly registered Maya ports."""
+    ports = set(maya_port_range())
+    raw = os.getenv('MAYA_FOREGROUND_PORTS', '')
+    for token in filter(None, re.split(r'[\s,;]+', raw.strip())):
+        try:
+            port = int(token)
+        except ValueError as exc:
+            raise ValueError(f'invalid MAYA_FOREGROUND_PORTS entry: {token!r}') from exc
+        if port < 1 or port > 65535:
+            raise ValueError(f'Maya foreground port must be between 1 and 65535: {port}')
+        ports.add(port)
+    return sorted(ports)
 
 
 def _probe_maya_port(port: int, timeout: float) -> bool:
@@ -33,7 +49,7 @@ def discover_maya_ports(timeout: float = 0.2, max_workers: int = 20) -> list[int
     if max_workers <= 0:
         raise ValueError('max_workers must be greater than zero')
 
-    ports = list(maya_port_range())
+    ports = maya_scan_ports()
     if not ports:
         return []
 

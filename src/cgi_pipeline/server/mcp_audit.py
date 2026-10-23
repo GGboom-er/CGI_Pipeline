@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import asyncio
+from contextlib import ExitStack
 import logging
 import os
 import threading
@@ -13,6 +15,8 @@ from pathlib import Path
 from typing import Any
 
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
+from fastmcp.tools.base import ToolResult
+from cgi_pipeline.server.http_lifecycle import lifecycle, LifecycleError
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -27,6 +31,7 @@ _CORRELATION_KEYS = {
     "session_id",
     "trace_id",
 }
+_AUDIT_ID_KEYS = ("api_id", "workflow_id", "task_id", "workspace_id", "business_task_id")
 
 
 def _env_int(name: str, default: int) -> int:
@@ -74,6 +79,21 @@ def _correlation_metadata(message: Any) -> dict[str, Any]:
     return result
 
 
+def _call_identifiers(message: Any) -> dict[str, str]:
+    arguments = getattr(message, "arguments", None)
+    if not isinstance(arguments, Mapping):
+        return {}
+    nested = arguments.get("params")
+    nested = nested if isinstance(nested, Mapping) else {}
+
+    result = {}
+    for key in _AUDIT_ID_KEYS:
+        value = arguments.get(key, nested.get(key))
+        if isinstance(value, str) and value.strip():
+            result[key] = value.strip()[:256]
+    return result
+
+
 def _result_status(result: Any) -> str:
     if bool(getattr(result, "isError", False)):
         return "ERROR"
@@ -81,6 +101,32 @@ def _result_status(result: Any) -> str:
     if isinstance(structured, Mapping) and structured.get("status"):
         return str(structured["status"]).upper()
     return "SUCCESS"
+
+
+def _result_metadata(result: Any) -> dict:
+    """Whitelist returned links and diagnostics; never copy params, code, outputs or logs."""
+    data = getattr(result, 'structured_content', None)
+    if not isinstance(data, Mapping):
+        return {}
+    record = {key: value[:256] for key in _AUDIT_ID_KEYS
+              if isinstance((value := data.get(key)), str) and value}
+    receipt = data.get('receipt') or data.get('detail')
+    receipt = receipt if isinstance(receipt, Mapping) else {}
+    for key in ('error_code', 'error_type'):
+        value = data.get(key) or receipt.get(key)
+        if isinstance(value, (str, int)) and value != '':
+            record[key] = str(value)[:128]
+    # Keep arbitrary error text in its existing receipt, not a second privacy-sensitive log.
+    if data.get('error') or receipt.get('error'):
+        record['error'] = 'Business error; inspect the linked task receipt.'
+    timings = data.get('timings_ms')
+    if isinstance(timings, Mapping):
+        record['timings_ms'] = {key: round(value, 2) for key in ('dispatch_return_ms', 'recovery_wait_ms')
+                                if isinstance((value := timings.get(key)), (int, float))}
+    elapsed = receipt.get('elapsed_sec')
+    if isinstance(elapsed, (int, float)):
+        record.setdefault('timings_ms', {})['api_execution_ms'] = round(elapsed * 1000, 2)
+    return record
 
 
 def _rotate(path: Path, max_bytes: int, backup_count: int, incoming: int) -> None:
@@ -130,10 +176,28 @@ class McpCallAuditMiddleware(Middleware):
         context: MiddlewareContext[Any],
         call_next: CallNext[Any, Any],
     ) -> Any:
+        # A disconnected/cancelled caller must not release ownership while the
+        # accepted invocation, its thread work, or receipt audit is still active.
+        task = asyncio.create_task(self._owned_call(context, call_next))
+        task.add_done_callback(lambda done: None if done.cancelled() else done.exception())
+        return await asyncio.shield(task)
+
+    async def _owned_call(self, context, call_next):
+        with ExitStack() as owned:
+            try:
+                owned.enter_context(lifecycle.activity('mcp:' + str(context.message.name)))
+            except LifecycleError as exc:
+                return ToolResult(structured_content={
+                    'status': 'ERROR', 'error_code': exc.code, 'submitted': False,
+                    'recovery_hint': 'HTTP frontend is updating; retry after it resumes. No work was submitted.',
+                })
+            return await self._audited_call(context, call_next)
+
+    async def _audited_call(self, context, call_next):
         started_at = datetime.now(timezone.utc)
         started_clock = time.perf_counter()
         record = {
-            "schema_version": 1,
+            "schema_version": 2,
             "timestamp": started_at.isoformat(),
             "tool": str(getattr(context.message, "name", "unknown")),
             "request_id": _context_value(context, "request_id"),
@@ -142,6 +206,7 @@ class McpCallAuditMiddleware(Middleware):
             "transport": _context_value(context, "transport"),
             "correlation": _correlation_metadata(context.message),
         }
+        record.update(_call_identifiers(context.message))
         try:
             result = await call_next(context)
         except Exception as exc:
@@ -151,7 +216,7 @@ class McpCallAuditMiddleware(Middleware):
                 error_type=type(exc).__name__,
                 error=str(exc),
             )
-            self._write_safely(record)
+            await lifecycle.run_sync(self._write_safely, record)
             raise
 
         record.update(
@@ -160,7 +225,8 @@ class McpCallAuditMiddleware(Middleware):
             error_type=None,
             error=None,
         )
-        self._write_safely(record)
+        record.update(_result_metadata(result))
+        await lifecycle.run_sync(self._write_safely, record)
         return result
 
 

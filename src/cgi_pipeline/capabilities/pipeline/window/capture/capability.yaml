@@ -1,0 +1,89 @@
+api_id: pipeline.window.capture
+version: 1.1.1
+executor: pipeline
+capability: pipeline.window
+operation: capture
+stages: [pipeline]
+targets: [host_session, file, viewport]
+access: write
+effects:
+  service_read: Verifies explicit window/process identity or physical monitor topology before and after WGC capture.
+  host_state_write: Starts a disposable hidden WGC worker. Default rejects minimized windows; explicit minimized_policy=restore temporarily displays the target without activation and restores its placement/minimized state. The temporary window may become visible and Windows may show a capture border. Desktop scope never changes windows.
+  file_write: Writes one unique validated PNG under the current task outputs/captures directory.
+execution_modes: [background]
+surfaces: [service]
+modes: [apply]
+inputs:
+  scope: {type: string, default: window, choices: [window, desktop], description: Window uses an explicit identity; desktop captures selected or all physical displays without changing windows.}
+  hwnd: {type: integer, required: false, description: Required for scope=window. Positive exact HWND from discovery; no active-window default.}
+  expected_pid: {type: integer, required: false, description: Required for scope=window. Positive exact process ID from discovery.}
+  expected_process_started_at: {type: number, required: false, description: Required for scope=window. Exact process creation timestamp from discovery.}
+  minimized_policy: {type: string, default: reject, choices: [reject, restore], description: Window only. restore explicitly permits temporary non-activating display and original placement/minimized-state restoration on success or failure; default makes no window changes.}
+  monitor_indices: {type: array, required: false, description: Desktop only. 1 to 16 distinct positive one-based monitor indices from discovery; omitted selects all current monitors.}
+  expected_monitors: {type: array, required: false, description: Optional complete monitors snapshot from include_monitors discovery; rejects stale display topology before capture.}
+  combine: {type: boolean, default: true, description: Desktop only. Also return one coordinate-preserving RGBA composite; gaps outside displays are transparent. Individual display PNGs are always returned.}
+  settle_ms: {type: integer, required: false, description: 'Window only. Collect the latest delivered frame for 0..3000 milliseconds after the first frame; defaults to 750 after temporary restoration and 0 otherwise. This allows repaint but does not certify page loading.'}
+  timeout_sec: {type: number, default: 8, description: 'Wait up to 1 to 30 seconds for worker result and normal exit, followed by a separate 2 second collection grace after termination. Process creation and OS termination calls, CGI queueing and parent file I/O are outside this wait budget.'}
+preconditions:
+- Windows desktop session and windows-capture 2.0.1 with compatible OpenCV installed in the CGI host runtime.
+- CGI process session must be observed WTSActive before starting a worker or creating output directories; Active does not prove unlocked or guarantee frame delivery.
+- Window identity is alive and visible; minimized requires explicit restore policy. Desktop selection must match current physical display topology.
+- Absolute existing context.run_dir is a writable task directory outside protected paths.
+idempotent: false
+outputs:
+  output_path: Unique decodable PNG under context.run_dir/outputs/captures, only on success.
+  target: Verified hwnd/pid/process_started_at snapshot before capture, in the worker before WGC construction and first-frame copy, and after capture. Same-process HWND reuse cannot be excluded by this snapshot identity.
+  scope: window or desktop.
+  window_state: Window restore policy, whether temporary display was performed, original and final placement, restored status and any restoration error. On user activation or move, restoration refuses to overwrite the user's new state and returns failure with evidence.
+  captures: Desktop only. Per-monitor identity, unique PNG path, dimensions and native frame/acquisition timestamps. Displays are captured sequentially in one worker, not as a simultaneous frame.
+  monitors: Full native monitor topology used for desktop capture.
+  desktop_rect: Composite bounds in physical virtual-desktop coordinates, including negative origins.
+  simultaneous: false for desktop captures; individual acquisition times distinguish sequential frames.
+  settle_ms: Actual bounded frame collection interval for a window; acquisition timestamp belongs to the retained frame.
+  session: CGI process session ID and observed WTS connection state; non-Active or unknown state is returned immediately without worker or output-directory side effects.
+  backend: windows-graphics-capture.
+  width: Actual pixel width.
+  height: Actual pixel height.
+  frame_pixel_format: BGRA8 source buffer.
+  image_mode: Decoded PNG image mode.
+  timespan_qpc_100ns: Native frame timestamp in QPC 100 nanosecond units, not UTC.
+  acquired_at: UTC timestamp when the frame callback acquired the pixels.
+  acquired_monotonic: Worker monotonic timestamp when the frame callback acquired the pixels.
+  foreground_hwnd_before: Foreground window before capture.
+  foreground_hwnd_after: Foreground window after capture.
+  foreground_unchanged: Observation only; a concurrent user focus change is not attributed to the capture tool.
+  worker_pid: Exact disposable worker process ID.
+  worker_exited: Observed process exit state; false on incomplete termination or collection, never claimed reaped in that case.
+  worker_lifecycle_elapsed_sec: Parent-measured worker lifecycle duration including creation and collection.
+  worker_diagnostics: Bounded stage names and elapsed times from worker stderr; no image pixels or target titles.
+  worker_cleanup_error: Empty after complete collection, otherwise bounded termination or collection error for the owned worker.
+  attempted_output_path: Diagnostic path on failure; partial files are never successful artifacts.
+statuses: [SUCCESS, ERROR, TIMEOUT]
+errors:
+  WINDOW_CAPTURE_FAILED: Identity, dependency, native capture, child process or PNG validation failed.
+  WINDOW_CAPTURE_TIMEOUT: The worker result wait expired and the worker then exited and was reaped within the separate collection grace.
+  WINDOW_CAPTURE_CLEANUP_FAILED: Termination or bounded collection failed; inspect worker_pid and worker_exited before further capture.
+  WINDOW_CAPTURE_RESTORE_FAILED: Window restoration failed or conflicted with user activity. Inspect window_state and retained worker cleanup evidence; do not blindly retry or force focus.
+  WINDOW_CAPTURE_SESSION_UNAVAILABLE: CGI process session is not observed WTSActive; no worker or output directory was created. Connection state alone does not diagnose whether a desktop is locked.
+recovery:
+- 'Inspect worker and window_state cleanup evidence before another call. An explicit restore branch attempts original state restoration even after worker timeout. Never replay an unknown restore outcome or force foreground focus.'
+help:
+  summary: Background WGC window or multi-monitor screenshots, with explicit minimized-window restoration.
+  usage: 'Window: params={hwnd, expected_pid, expected_process_started_at, minimized_policy: restore}; displays: params={scope: desktop, expected_monitors: discovery.monitors, combine: true}. Default scope is window and all three identity fields are required for it.'
+  scenario: Observe occluded or explicitly permitted minimized windows; inspect one/all monitors and the actual composited desktop without switching apps.
+  safety: No activation or input injection. Temporary restore changes target visibility and is opt-in, not a guarantee of invisible operation. Desktop screenshots include whatever is actually on screen. Window capture alone does not prove screen occlusion or DCC semantics.
+tests: {contract: tests/test_pipeline_window_capture.py}
+implementation: {status: implemented}
+verification:
+  level: live_tested
+  scope: 'Windows10 Pro19045 active session: three physical displays including negative-origin portrait, individual/composite PNGs, and existing minimized Chrome restored without activation then re-minimized. Maya non-minimized path retained. HDR, mixed-DPI, locked desktops and other minimized applications remain unverified.'
+  evidence:
+  - tests/test_pipeline_window_capture.py
+  - tests/test_pipeline_observation_branches.py
+  - projects/default/PL298/.info/operations/api-7bf71a66d8e2/REPORT.md
+  - projects/default/PL298/.info/operations/api-6df90fb0dc76/REPORT.md
+  - projects/default/PL298/work/observe_branches/fresh_acceptance.json
+  - projects/default/PL294/work/connected_desktop_receipts.json
+  - projects/default/PL294/work/connected_focus_samples.json
+  - projects/default/PL294/CONNECTED_CAPTURE_REPORT.md
+handler: cgi_pipeline.capabilities.pipeline.window.capture.handler:execute

@@ -1,5 +1,5 @@
 api_id: pipeline.pipeline.resolve_asset_files
-version: 1.0.0
+version: 1.0.1
 name: pipeline_resolve_tex_rig_paths
 executor: pipeline
 capability: pipeline.resolve
@@ -11,8 +11,8 @@ targets:
 - file
 access: read
 effects:
-  inspect: 只读取场景或标准数据，不改变资产。
-  apply: 按 API 实现对当前任务沙盒中的场景或数据执行操作。
+  file_read: Reads project configuration and version-directory candidates to resolve explicit/latest asset paths; no copy
+    or DCC open.
 execution_modes:
 - background
 surfaces:
@@ -25,6 +25,14 @@ inputs:
     type: string
     default: chr
     description: 资产类型，如 chr/prp/env。为空时优先读取 input.category，最后回退 chr。
+  source_path:
+    type: string
+    default: ''
+    description: 显式指定 source 文件路径（支持 .blend）。提供后跳过自动版本搜索。
+  rig_path:
+    type: string
+    default: ''
+    description: 显式指定 target rig 绑定文件或包含绑定的目录路径（支持 .ma/.mb）。提供后跳过自动版本搜索。
   source_stage:
     type: string
     default: tex
@@ -54,9 +62,14 @@ preconditions:
 - 后台模式由 CGI Worker 打开或复用对应 DCC 场景。
 idempotent: true
 outputs:
-- name: result
-  type: any_file
-  label: 解析结果字典
+  result: Underlying operation result; its internal fields belong to that operation.
+  resolved_files: 'Optional by action: resolved files returned by the source implementation.'
+  searched_paths: 'Optional by action: searched paths returned by the source implementation.'
+  missing_inputs: 'Optional by action: missing inputs returned by the source implementation.'
+  error_count: Number of failed per-item operations.
+  summary: Optional framework operation summary; present when the adapter supplies
+    one.
+  items: Optional framework item records; present when the adapter supplies them.
 statuses:
 - SUCCESS
 - PARTIAL
@@ -75,8 +88,14 @@ help:
   summary: 根据项目配置解析资产 source tex 文件与 target rig 文件。支持只传资产名自动查服务器最新版本，也支持传入明确文件路径直接透传。
   usage: execute_api(pipeline.pipeline.resolve_asset_files, params={...})
   scenario: 根据项目配置解析资产 source tex 文件与 target rig 文件。支持只传资产名自动查服务器最新版本，也支持传入明确文件路径直接透传。
-  safety: read API 只读；write/destructive API 仅写入任务沙盒。
+  safety: 具体副作用见本契约 effects；运行上下文、路径与恢复边界见 docs/architecture/pipeline_runtime_contract_v1.md。
 tests:
   contract: api.registry loads this manifest and api.runner validates its receipt.
   smoke: 代表性 workflow 统一验收。
+implementation:
+  status: implemented
+verification:
+  level: live_tested
+  evidence:
+  - audit/wf-96a64ab7.json
 handler: cgi_pipeline.capabilities.pipeline.pipeline.resolve_asset_files.adapter:execute

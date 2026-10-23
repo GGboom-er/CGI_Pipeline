@@ -1,5 +1,5 @@
 api_id: maya.asset.exec_code
-version: 1.0.0
+version: 1.2.1
 name: 动态代码执行
 executor: maya
 capability: runtime.code
@@ -12,8 +12,8 @@ targets:
 - host_runtime
 access: destructive
 effects:
-  inspect: 只读取场景或标准数据，不改变资产。
-  apply: 按 API 实现对当前任务沙盒中的场景或数据执行操作。
+  code_execute: Executes caller-provided Python. Scene, file and host effects depend on the code; the wrapper does not prove
+    complete sandbox isolation.
 execution_modes:
 - local
 - background
@@ -27,19 +27,22 @@ inputs:
   code:
     type: string
     default: ''
-    description: 待执行的 Python 代码字符串
+    description: Python 代码；将返回数据赋给 result。context 提供 task_id、workspace_id、run_dir、source_path、project、asset_name 的字符串副本；task_id 标识本次操作，workspace_id/run_dir 标识共用业务沙盒，非 Maya workspace。前台/本地未提供的字段为空，不得猜测路径。
   description:
     type: string
     default: ''
     description: 代码用途描述（用于审计日志）
 preconditions:
 - 项目配置通过统一 config/{project}_config.json 接口加载。
-- 后台模式由 CGI Worker 打开或复用对应 DCC 场景。
+- 后台首次调用创建业务沙盒并初始化场景；source_path 提供源文件时先复制至沙盒再打开，否则创建空场景。资产定位须由明确的 API 或 workflow 步骤执行。
+- 后续调用传返回的 workspace_id 和相同 project，scene_action=continue 保留当前场景，只执行本次 code，不复制、不重开、不重放先前 API。场景丢失则返回 WORKSPACE_SCENE_UNAVAILABLE。
+- scene_action=open 明确重建后台场景；恢复时传已保存的实际 source_path。本 API 不自动保存场景。
 idempotent: false
 outputs:
-- name: scene
-  type: scene_file
-  label: 处理后场景
+  result: Underlying operation result; its internal fields belong to that operation.
+  summary: Optional framework operation summary; present when the adapter supplies
+    one.
+  items: Optional framework item records; present when the adapter supplies them.
 statuses:
 - SUCCESS
 - PARTIAL
@@ -55,11 +58,13 @@ recovery:
 - 读取 api_help 获取参数、前置条件和输出。
 - 失败时检查任务报告中的错误与恢复建议。
 help:
-  summary: 在当前 Maya 会话中执行任意 Python 代码并返回结果。代码中将结果赋值给 result 变量即可。
+  summary: 在指定 Maya 执行上下文运行 Python；context 提供本调用沙盒等元数据，result 作为 output.result 返回。不自动保存场景。
   usage: execute_api(maya.asset.exec_code, params={...})
   scenario: 在当前 Maya 会话中执行任意 Python 代码并返回结果。代码中将结果赋值给 result 变量即可。
-  safety: read API 只读；write/destructive API 仅写入任务沙盒。
+  safety: 具体副作用见本契约 effects；运行上下文、路径与恢复边界见 docs/architecture/pipeline_runtime_contract_v1.md。
 tests:
   contract: api.registry loads this manifest and api.runner validates its receipt.
   smoke: 代表性 workflow 统一验收。
+implementation: {status: implemented, module: exec_code.exec_code}
+verification: {level: contract_tested, evidence: [tests/test_maya_asset_high_value_contracts.py]}
 handler: cgi_pipeline.capabilities.maya.asset.exec_code.adapter:execute

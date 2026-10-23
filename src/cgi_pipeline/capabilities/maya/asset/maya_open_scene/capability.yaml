@@ -1,5 +1,5 @@
 api_id: maya.asset.maya_open_scene
-version: 1.0.0
+version: 1.0.1
 name: maya_open_scene
 executor: maya
 capability: scene.file
@@ -10,10 +10,11 @@ stages:
 - animation
 targets:
 - scene_file
-access: write
+access: destructive
 effects:
-  inspect: 只读取场景或标准数据，不改变资产。
-  apply: 按 API 实现对当前任务沙盒中的场景或数据执行操作。
+  file_read: new_scene=false reads the selected Maya scene file.
+  scene_write: Opens the selected scene or creates an empty one; force=true can discard unsaved scene changes.
+  host_state_write: Changes the currently open scene identity.
 execution_modes:
 - local
 - background
@@ -23,12 +24,32 @@ surfaces:
 - service
 modes:
 - apply
-inputs: {}
+inputs:
+  file_path:
+    type: string
+    default: ''
+    description: 要打开的 .ma/.mb 场景；仅允许 CGI projects/ 或 runs/ 任务沙盒内的绝对路径。new_scene=true 时忽略。
+  new_scene:
+    type: boolean
+    default: false
+    description: 创建新的空 Maya 场景，并忽略 file_path。
+  force:
+    type: boolean
+    default: true
+    description: 是否丢弃当前未保存修改并继续打开或新建场景。
 preconditions:
 - 项目配置通过统一 config/{project}_config.json 接口加载。
-- 后台模式由 CGI Worker 打开或复用对应 DCC 场景。
+- file_path 必须是 CGI projects/ 或 runs/ 任务沙盒中的 .ma/.mb 文件。
 idempotent: false
-outputs: {}
+outputs:
+  scene: Current Maya scene path from the independent XGen source.
+  modified: 'Optional by action: modified returned by the source implementation.'
+  mesh_count: 'Optional by action: mesh count returned by the source implementation.'
+  joint_count: 'Optional by action: joint count returned by the source implementation.'
+  blocked_target: 'Optional by action: blocked target returned by the source implementation.'
+  summary: Optional framework operation summary; present when the adapter supplies
+    one.
+  items: Optional framework item records; present when the adapter supplies them.
 statuses:
 - SUCCESS
 - PARTIAL
@@ -39,16 +60,18 @@ statuses:
 - CANCELLED
 errors:
   API_OPERATION_ERROR: 操作执行失败，详见报告。
-  API_IMPLEMENTATION_MISSING: 目录存在但没有本地实现。
+  API_CONTRACT_ERROR: 参数类型或名称不符合 manifest 合同。
 recovery:
 - 读取 api_help 获取参数、前置条件和输出。
 - 失败时检查任务报告中的错误与恢复建议。
 help:
-  summary: maya_open_scene
-  usage: execute_api(maya.asset.maya_open_scene, params={...})
-  scenario: maya_open_scene
-  safety: read API 只读；write/destructive API 仅写入任务沙盒。
+  summary: 打开任务沙盒中的 Maya 场景，或创建新的空场景。
+  usage: execute_api(maya.asset.maya_open_scene, params={file_path, new_scene, force})
+  scenario: 切换前台或后台 Maya 到明确的任务沙盒场景，并返回基础场景状态。
+  safety: file_path 仅允许 CGI 任务沙盒；force=true 会丢弃当前未保存修改。
 tests:
-  contract: api.registry loads this manifest and api.runner validates its receipt.
-  smoke: 代表性 workflow 统一验收。
+  contract: api.registry loads this manifest and validates file_path/new_scene/force before dispatch.
+  smoke: tests/test_maya_open_scene.py 覆盖沙盒打开、新建、拒绝越界路径、格式、缺失文件和 force=false。
+implementation: {status: implemented, module: maya_open_scene.maya_open_scene}
+verification: {level: contract_tested, evidence: [tests/test_maya_open_scene.py]}
 handler: cgi_pipeline.capabilities.maya.asset.maya_open_scene.adapter:execute

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from unittest.mock import patch
+from contextlib import nullcontext
 
 from cgi_pipeline.core.pipeline_worker import PipelineWorker
 
@@ -30,7 +31,8 @@ def test_pipeline_worker_uses_catalog_runner_for_dotted_api_id():
         "extra_params": {"info_dir": "C:/runs/pipeline-worker-test/info"},
     }
 
-    with patch("cgi_pipeline.core.pipeline_worker.execute_api", return_value=receipt) as execute:
+    with patch("cgi_pipeline.core.pipeline_worker.execute_api", return_value=receipt) as execute, \
+            patch("cgi_pipeline.core.pipeline_worker.capability_session", return_value=nullcontext('pinned-catalog')):
         result = PipelineWorker().run_api(payload)
 
     execute.assert_called_once_with(
@@ -45,6 +47,7 @@ def test_pipeline_worker_uses_catalog_runner_for_dotted_api_id():
             "task_id": "pipeline-worker-test",
             "extra_params": {"info_dir": "C:/runs/pipeline-worker-test/info"},
         },
+        catalog_snapshot='pinned-catalog',
     )
     assert result["task_id"] == "pipeline-worker-test"
     assert result["status"] == "SUCCESS"

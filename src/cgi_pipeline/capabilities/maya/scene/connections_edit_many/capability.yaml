@@ -1,0 +1,30 @@
+api_id: maya.scene.connections.edit_many
+version: 1.0.1
+name: connections_edit_many
+executor: maya
+capability: scene.connections
+operation: edit
+stages: [modeling, rigging, animation]
+targets: [dependency_graph]
+access: destructive
+effects:
+  scene_write: Connects or disconnects explicit Maya plugs; grouped batch can undo atomically.
+execution_modes: [local, foreground, background]
+surfaces: [maya, service]
+modes: [apply]
+inputs:
+  items: {type: array, required: true, description: "[{action, source, destination, optional force}]"}
+  max_items: {type: integer, default: 500, description: Maximum connection edits.}
+preconditions: [Explicit plugs exist and requested edits are valid.]
+idempotent: false
+outputs:
+  items: Applied connection edits.
+  count: Number of returned or processed items for this action.
+statuses: [SUCCESS, ERROR]
+errors: {MAYA_BATCH_OPERATION_FAILED: Connection edit failed.}
+recovery: [Inspect connections first and use atomic foreground batch.]
+help: {summary: Edit many Maya DG connections in one call., usage: "execute_api(maya.scene.connections.edit_many, params={items})", scenario: Controlled MFace graph rewiring., safety: Destructive; explicit plugs and bounded edits only.}
+tests: {contract: tests/test_scene_batch_apis.py, smoke: Foreground Maya atomic connect and undo.}
+implementation: {status: implemented, module: maya.scene_batch:edit_connections_many}
+verification: {level: contract_tested, evidence: [tests/test_scene_batch_apis.py]}
+handler: cgi_pipeline.capabilities.maya.scene_batch:edit_connections_many

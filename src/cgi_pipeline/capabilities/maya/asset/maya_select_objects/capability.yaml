@@ -1,5 +1,5 @@
 api_id: maya.asset.maya_select_objects
-version: 1.0.0
+version: 1.1.5
 name: maya_select_objects
 executor: maya
 capability: scene.edit
@@ -12,8 +12,8 @@ targets:
 - scene_object
 access: write
 effects:
-  inspect: 只读取场景或标准数据，不改变资产。
-  apply: 按 API 实现对当前任务沙盒中的场景或数据执行操作。
+  scene_write: Changes Maya active selection according to the business mode replace/add/remove/clear.
+  host_state_write: Explicit panel frame changes only its independently used writable camera via native viewFit, with optional near_clip_plane preset 0.1/1/10. Clip changes share the native undo chunk and restore capsule. restore_view restores recorded changes after same-session compare-and-set checks. Legacy frame without panel retains its original implicit-view behavior.
 execution_modes:
 - local
 - background
@@ -23,12 +23,39 @@ surfaces:
 - service
 modes:
 - apply
-inputs: {}
+inputs:
+  objects: {type: array, default: [], description: "节点名、长路径或通配模式列表。"}
+  nodes: {type: array, description: "objects 的兼容别名。"}
+  mode: {type: string, default: replace, choices: [replace, add, remove, clear], description: "选择合并方式。"}
+  frame: {type: boolean, default: false, description: "完成后是否 frame 视图。"}
+  near_clip_plane: {type: number, choices: [0.1, 1, 1.0, 10, 10.0], description: "可选近裁剪档位0.1/1/10；1和10接受JSON整数或浮点表示，bool不接受。要求 frame=true 和显式 panel，省略保留原值。单位沿当前Maya场景长度单位，必须小于现有远裁剪值。写入/回读/恢复归同一取景操作，不自动修改far或保证消除斑驳；操作后看图确认未裁掉目标。不可与restore_view组合。"}
+  panel: {type: string, default: '', description: "显式 frame 或 restore_view 必须明确提供 modelPanel；恢复时使用 capsule.before.panel，只传capsule不推断panel。frame=true 时还须非空 exact long DAG paths，不接受通配/组件/截断；当前选择须为空或对象级完整DAG；相机须独立、无引用/锁/输入连接。"}
+  restore_view: {type: object, default: {}, description: "原显式 frame 返回的完整 v2 inline capsule，含前后 selection_identities(path+UUID)。调用必须同时传 panel=capsule.before.panel；需同进程/scene epoch且 current==expected_after，在任何恢复写前验证原选择身份；不可与 objects 或 frame=true 组合。缺身份旧capsule拒绝。"}
+  max_items: {type: integer, default: 200, description: "最多解析的对象数量。"}
 preconditions:
 - 项目配置通过统一 config/{project}_config.json 接口加载。
 - 后台模式由 CGI Worker 打开或复用对应 DCC 场景。
+- 显式 panel/restore_view 分支要求 Maya GUI 主线程、独立可写且无引用/锁/输入连接的 panel 当前相机；不自动创建相机或切换面板绑定。
+- 显式分支首版仅支持空选择或对象级完整 DAG 选择；关节、控制器等对象按 path+UUID 固定，组件/plug/非DAG选择拒绝且不自动清空。
 idempotent: false
-outputs: {}
+outputs:
+  before: 'Optional by action: before returned by the source implementation.'
+  after: 'Optional by action: after returned by the source implementation.'
+  resolved: 'Optional by action: resolved returned by the source implementation.'
+  mode: 'Optional by action: mode returned by the source implementation.'
+  truncated: Whether the operation reached its configured result or input bound.
+  world_bbox: Native world-space bounds of the explicit frame targets.
+  clip_planes: Actual camera path/UUID, requested_near (null when omitted), near/far readback and visual-coverage limitation. Does not certify absence of clipping or z-fighting.
+  view_restore: Self-contained v2 JSON capsule with before/expected_after, actual changed camera fields, camera paths/UUIDs, session identity, selection_identities(path+UUID), selection and time; no global store. Missing-identity old capsules are rejected.
+  selection_conflict: Original selection identities versus current path/UUID identities when restoration is refused before any camera/selection/undo write.
+  restored: Whether explicit restoration readback matched the recorded before state.
+  restore_errors: Original restoration errors, if any; never silently ignored.
+  restore_differences: Restoration readback differences, if any.
+  readback: Explicit restoration readback state, or null with a retained readback error.
+  operation_error: Original frame failure type and message, retained alongside any automatic-restoration errors.
+  summary: Optional framework operation summary; present when the adapter supplies
+    one.
+  items: Optional framework item records; present when the adapter supplies them.
 statuses:
 - SUCCESS
 - PARTIAL
@@ -38,17 +65,23 @@ statuses:
 - TIMEOUT
 - CANCELLED
 errors:
+  VIEW_CONTRACT_ERROR: 显式面板、目标、相机可写性或恢复 capsule 不符合契约；未通过预检不写入。
+  VIEW_RESTORE_CONFLICT: 当前状态与 expected_after 不同，或原选择 path+UUID 缺失/变化；任何恢复写前拒绝。
+  VIEW_RESTORE_FAILED: 已尝试恢复但写入或回读失败；保留 capsule、错误及差异供核对。
+  VIEW_FRAME_FAILED: 原生取景或操作后校验失败；保留原错与自动恢复的错误及回读。
   API_OPERATION_ERROR: 操作执行失败，详见报告。
   API_IMPLEMENTATION_MISSING: 目录存在但没有本地实现。
 recovery:
 - 读取 api_help 获取参数、前置条件和输出。
 - 失败时检查任务报告中的错误与恢复建议。
 help:
-  summary: maya_select_objects
-  usage: execute_api(maya.asset.maya_select_objects, params={...})
-  scenario: maya_select_objects
-  safety: read API 只读；write/destructive API 仅写入任务沙盒。
+  summary: 管理 Maya 当前选择；可用显式 panel 对完整路径取景，并用自包含 capsule 条件恢复。
+  usage: "Frame: params={objects:['|root|head'],mode:'replace',frame:true,panel:'modelPanel4',near_clip_plane:1.0}. Omit near_clip_plane to preserve it. Restore: params={panel:capsule.before.panel,restore_view:capsule}."
+  scenario: 视图聚焦、编辑前选择和 workflow 中的上下文准备。
+  safety: 显式 panel 只改其独占可写相机，不重绑面板；共享/实例/引用/锁/连接相机拒绝。当前组件/plug/非DAG选择不支持且不自动清空。前后对象选择固定path+UUID；显式及失败自动恢复都在相机/选择/undo写前复核原选择身份，缺失/同名替换拒绝。restore同主线程先CAS，不符零写；会话身份精确比较，仅相机数值相对1e-10/绝对1e-8容差。保留原错/恢复错误；不清dirty、不回退undo。无新参数保留legacy，不提供上述保证。
 tests:
   contract: api.registry loads this manifest and api.runner validates its receipt.
   smoke: 代表性 workflow 统一验收。
+implementation: {status: implemented, module: maya_select_objects.maya_select_objects}
+verification: {level: contract_tested, evidence: [tests/test_maya_asset_apis.py, tests/test_maya_scene_view.py, tests/test_status_contract.py, projects/default/PL296/work/tests/product_registered_evidence_v6.json, projects/default/PL296/work/tests/fresh_context_v1/raw_receipts.json, projects/default/PL295/work/tests/proxy_chain/ACCEPTANCE.md]}
 handler: cgi_pipeline.capabilities.maya.asset.maya_select_objects.adapter:execute

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import importlib
 import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -15,6 +17,7 @@ from cgi_pipeline.capabilities.maya.rig.maya_sync_rig_incremental.sync_contract 
     validate_compare_result_payload,
 )
 from cgi_pipeline.capabilities.pipeline.pipeline.write_task_report import write_task_report
+from cgi_pipeline.catalog import get_capability
 from cgi_pipeline.core import service_manager, task_status
 from cgi_pipeline.core.task_report_writer import _block_markers
 from cgi_pipeline.contracts import ApiContractError, validate_params
@@ -25,15 +28,23 @@ SRC = ROOT / "src"
 
 
 def test_public_namespace_is_host_safe():
-    sys.path.insert(0, str(SRC))
-    try:
-        for name in ("cgi_pipeline", "celery", "redis", "fastmcp", "mcp"):
-            sys.modules.pop(name, None)
-        module = importlib.import_module("cgi_pipeline")
-        assert module.__all__ == ["api", "client", "tools"]
-        assert not ({"celery", "redis", "fastmcp", "mcp"} & set(sys.modules))
-    finally:
-        sys.path.remove(str(SRC))
+    # A fresh interpreter proves cold-import safety without corrupting the
+    # parent packages of modules already imported by pytest collection.
+    probe = """
+import sys
+import cgi_pipeline
+assert cgi_pipeline.__all__ == ["api", "client", "tools"]
+assert not ({"celery", "redis", "fastmcp", "mcp"} & set(sys.modules))
+"""
+    result = subprocess.run(
+        [sys.executable, "-B", "-c", probe],
+        cwd=ROOT,
+        env={**os.environ, "PYTHONPATH": str(SRC), "PYTHONDONTWRITEBYTECODE": "1"},
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_generated_capability_catalog_uses_professional_facets():
@@ -115,6 +126,23 @@ def test_sync_contract_uses_only_explicit_source_parameters():
     })
     assert inputs.source_abc == "source.abc"
     assert inputs.source_info == ""
+
+
+def test_sync_api_accepts_compare_result_path_or_embedded_data():
+    spec = get_capability("maya.rig.maya_sync_rig_incremental")
+    common = {"source_abc": "source.abc", "cache_group": "cache"}
+
+    path_params = validate_params(
+        spec,
+        {**common, "compare_result": "compare_result.json"},
+    )
+    embedded_params = validate_params(
+        spec,
+        {**common, "compare_result": {"schema_version": "compare_result.v1"}},
+    )
+
+    assert path_params["compare_result"] == "compare_result.json"
+    assert embedded_params["compare_result"]["schema_version"] == "compare_result.v1"
 
 
 def test_compare_result_contract_does_not_require_embedded_source_info():

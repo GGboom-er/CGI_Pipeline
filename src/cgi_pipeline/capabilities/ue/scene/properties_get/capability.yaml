@@ -1,0 +1,31 @@
+api_id: ue.scene.properties.get
+version: 1.0.1
+executor: ue
+capability: scene.properties
+operation: get
+stages: [editor]
+targets: [level_actor]
+access: read
+effects:
+  scene_read: Reads explicit editor properties from bounded actors.
+execution_modes: [foreground]
+surfaces: [ue, service]
+modes: [inspect]
+inputs:
+  items: {type: array, required: true, description: actor and properties entries.}
+  max_items: {type: integer, default: 200, description: "Maximum actors, hard limit 1000."}
+preconditions: [Runs in UE5 Editor with a loaded level.]
+idempotent: true
+outputs:
+  items: Actor identities and JSON-safe property values.
+  count: Number of returned or processed items for this action.
+  error_count: Number of failed per-item operations.
+  truncated: Whether input exceeded max_items.
+statuses: [SUCCESS, PARTIAL, ERROR]
+errors: {UE_SCENE_CORE_OPERATION_FAILED: Invalid actor or editor property.}
+recovery: [Use object paths and valid editor property names.]
+help: {summary: Read UE actor editor properties., usage: "execute_api(ue.scene.properties.get, params={items})", scenario: Inspect explicit properties before edits., safety: Read-only and bounded.}
+tests: {contract: tests/test_ue_scene_core_apis.py, smoke: UE5 Editor property query.}
+handler: cgi_pipeline.capabilities.ue.scene_core:get_properties
+implementation: {status: implemented}
+verification: {level: contract_tested, evidence: [tests/test_ue_scene_core_apis.py]}

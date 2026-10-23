@@ -1,5 +1,5 @@
 api_id: maya.rig.skin.query_weights
-version: 1.0.0
+version: 1.0.1
 executor: maya
 capability: rigging.skin
 operation: query
@@ -10,7 +10,7 @@ targets:
 - mesh
 access: read
 effects:
-  inspect: Reads Maya skinCluster weights only. No scene data is changed.
+  scene_read: Reads Maya skinCluster weights only. No scene data is changed.
 execution_modes:
 - local
 - foreground
@@ -48,7 +48,9 @@ idempotent: true
 outputs:
   shape: Resolved non-intermediate Maya mesh shape.
   skin_cluster: Skin cluster used for the query.
+  influences: 'Optional by action: influences returned by the source implementation.'
   rows: Per-vertex sparse influence-to-weight maps.
+  vertex_count: 'Optional by action: vertex count returned by the source implementation.'
   truncated: Whether max_vertices limited the requested result.
 statuses:
 - SUCCESS
@@ -67,4 +69,6 @@ help:
 tests:
   contract: tests/test_api_catalog_additions.py
   smoke: Read-only query against a skinned test mesh in the final Maya integration check.
+implementation: {status: implemented}
+verification: {level: contract_tested, evidence: [tests/test_api_catalog_additions.py, tests/test_maya_rigging_contracts.py]}
 handler: cgi_pipeline.capabilities.maya.rig.skin.query_weights.handler:execute

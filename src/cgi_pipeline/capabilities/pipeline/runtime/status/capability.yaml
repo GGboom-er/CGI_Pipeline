@@ -1,0 +1,38 @@
+api_id: pipeline.runtime.status
+version: 1.0.0
+executor: pipeline
+capability: pipeline.runtime
+operation: status
+execution_strategy: control
+stages: [pipeline]
+targets: [host_runtime]
+access: read
+effects:
+  service_read: Reads timestamped runtime ownership and exact process liveness without occupying a scene slot or querying a busy host.
+execution_modes: [background]
+surfaces: [service]
+modes: [inspect]
+inputs:
+  project: {type: string, default: '', description: Optional exact project filter.}
+  workspace_id: {type: string, default: '', description: Optional exact workspace filter.}
+preconditions: []
+idempotent: true
+outputs:
+  pool_root: Absolute configured runtime pool root used for service identity verification, including an empty pool.
+  max_slots: Configured maximum runtime slots, including an empty pool.
+  slots: Lease resource records and timestamped process health; scene dirty state remains UNKNOWN because this short path does not query hosts.
+  checked_at: Server timestamp when runtime metadata inspection began.
+statuses: [SUCCESS, BLOCKED, ERROR]
+errors: {RUNTIME_CONTROL_FAILED: Runtime metadata or process inspection failed.}
+recovery: [Inspect exact runtime identity and retained ownership metadata.]
+help:
+  summary: Read runtime metadata and exact process health even when all scene slots are busy.
+  usage: execute_api(pipeline.runtime.status, params={project,workspace_id})
+  scenario: Inspect active, draining or lost workspace runtime ownership without broker dispatch or fresh dirty claims.
+  safety: Read-only short control path; no scene slot is allocated and no host operation is sent.
+tests: {contract: tests/test_runtime_control.py}
+handler: cgi_pipeline.capabilities.pipeline.runtime.handler:status
+implementation: {status: implemented}
+verification:
+  level: live_tested
+  evidence: [tests/test_runtime_control.py, projects/default/PL274/work/current_chat_reconnected_proof.json, projects/default/PL274/work/current_chat_ysj_runtime_status.json]

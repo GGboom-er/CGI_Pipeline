@@ -1,0 +1,49 @@
+api_id: maya.rig.constraints.manage
+version: 1.0.1
+executor: maya
+capability: rigging.constraints
+operation: manage
+stages: [rigging]
+targets: [constraint, transform, ik_handle]
+access: destructive
+effects:
+  scene_write: 'action=create: Creates one native constraint. action=set_weight: Sets one connected target weight. action=delete:
+    Deletes one supported constraint.'
+execution_modes: [local, foreground, background]
+surfaces: [maya, service]
+modes: [apply]
+inputs:
+  action: {type: string, required: true, choices: [create, set_weight, delete], description: Canonical constraint action.}
+  drivers: {type: array, default: [], description: One to 32 unique driver node paths for create.}
+  driven: {type: string, description: Driven transform or IK handle for create.}
+  constraint_type: {type: string, default: parent, choices: [parent, point, orient, scale, aim, pole_vector], description: Native constraint family.}
+  maintain_offset: {type: boolean, default: true, description: Preserve offset where supported.}
+  weight: {type: number, default: 1.0, description: Non-negative create or target weight.}
+  name: {type: string, description: Optional unique constraint leaf name.}
+  aim_vector: {type: array, default: [1, 0, 0], description: Three finite aim-axis values.}
+  up_vector: {type: array, default: [0, 1, 0], description: Three finite up-axis values.}
+  constraint: {type: string, description: Existing constraint for edit or delete.}
+  target: {type: string, description: Existing connected target for set_weight.}
+preconditions: [All nodes must exist and short names must be unambiguous., Pole-vector creation accepts exactly one driver.]
+idempotent: false
+outputs:
+  action: Executed action.
+  constraint: Resolved constraint.
+  constraint_type: 'Optional by action: constraint type returned by the source implementation.'
+  drivers: Resolved target paths.
+  driven: Resolved driven node.
+  maintain_offset: 'Optional by action: maintain offset returned by the source implementation.'
+  weight: 'Optional by action: weight returned by the source implementation.'
+  target: 'Optional by action: target returned by the source implementation.'
+  weight_alias: 'Optional by action: weight alias returned by the source implementation.'
+  before: 'Optional by action: before returned by the source implementation.'
+  after: 'Optional by action: after returned by the source implementation.'
+  deleted: Deleted path.
+statuses: [SUCCESS, ERROR]
+errors: {MAYA_RIG_CONSTRAINTS_MANAGE_FAILED: "Validation, native mutation, target readback, or rollback failed."}
+recovery: [Use existing long paths and a supported constraint type, then retry.]
+help: {summary: Create, weight, and delete common native Maya rig constraints., usage: "execute_api(maya.rig.constraints.manage, params={action, drivers, driven})", scenario: Connect controls and rig nodes through a stable non-selection API., safety: Target order and node type are read back before success.}
+tests: {contract: tests/test_maya_rig_p1_batch3.py, smoke: Maya 2025.3 foreground create/weight/delete then undo.}
+implementation: {status: implemented}
+verification: {level: contract_tested, evidence: [tests/test_maya_rig_p1_batch3.py]}
+handler: cgi_pipeline.capabilities.maya.rig.rig_relationship_ops:manage_constraints

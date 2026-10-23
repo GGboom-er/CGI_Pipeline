@@ -1,0 +1,35 @@
+api_id: maya.scene.transforms.set_many
+version: 1.1.4
+name: transforms_set_many
+executor: maya
+capability: scene.transforms
+operation: set_many
+stages: [modeling, rigging, animation]
+targets: [transform]
+access: write
+effects:
+  scene_write: "Sets supplied TRS. Optional observation guard restricts writes to captured leaf mesh transforms and uses an owned undo chunk with verified readback and rollback."
+execution_modes: [local, foreground, background]
+surfaces: [maya, service]
+modes: [apply]
+inputs:
+  items: {type: array, required: true, description: "[{node, optional translation, rotation, scale}]; guarded items also require expected_uuid and expected_before containing exactly the supplied TRS vectors."}
+  space: {type: string, default: world, choices: [world, object], description: Transform space.}
+  max_items: {type: integer, default: 200, description: "Maximum items, hard limit 2000."}
+  observation: {type: object, description: "Optional fresh capture sidecar reference {path,sha256}; requires full DAG ordinary leaf mesh transforms, enabled undo, no connected channels or outgoing DG consumers. Every requested captured target must explicitly have pixel_lookup_supported=true; unsupported non-target meshes do not block. Entire guarded batch is preflighted and never truncated. Geometry/view freshness is not rendered appearance freshness."}
+preconditions: [Nodes must resolve unambiguously and supplied channels must be writable.]
+idempotent: true
+outputs:
+  items: Long path, before and after TRS with status.
+  count: Number of returned or processed items for this action.
+  truncated: Whether input exceeded max_items.
+  guard: "Observation mode only; preflight, attempted/completed writes, exact snapshot change detection and rollback verification, fixed absolute 1e-6 / zero relative tolerance for expected old values and desired readback in native queried units, owned chunk and recovery errors."
+  scope: Observation mode only; exact supported placement-edit scope.
+statuses: [SUCCESS, ERROR]
+errors: {MAYA_SCENE_CORE_OPERATION_FAILED: Legacy transform edit failed., MAYA_GUARDED_EDIT_FAILED: Observation validation or guarded edit/readback/recovery failed; inspect output.guard.}
+recovery: ["Guarded errors preserve the original error and actual rollback evidence; take a fresh observation before retrying. Legacy calls retain their existing partial-write behavior."]
+help: {summary: Set bounded Maya transforms with optional observation guard., usage: "execute_api(maya.scene.transforms.set_many, params={items, space, observation?})", scenario: "Place captured ordinary polygon leaf transforms using expected UUID and old values.", safety: "Guarded mode rejects truncation, transform instancing, descendants and outgoing DG consumers; shared mesh shapes may have independent parent transforms. No implicit frame or view restoration; fixed-view visual comparison is a separate step. Legacy mode remains unrestricted and not transactionally guarded."}
+tests: {contract: tests/test_maya_guarded_edits.py, smoke: Foreground Maya fixed-view guarded placement and rollback verification.}
+implementation: {status: implemented}
+verification: {level: live_tested, evidence: [tests/test_maya_scene_core_apis.py, tests/test_maya_guarded_edits.py, projects/default/PL296/work/tests/product_registered_evidence_v3.json, projects/default/PL296/work/tests/product_registered_evidence_v4.json]}
+handler: cgi_pipeline.capabilities.maya.scene_core:set_transforms_many

@@ -1,5 +1,5 @@
 api_id: maya.asset.rename_asset
-version: 1.0.0
+version: 1.0.1
 name: 标准化资产重命名
 executor: maya
 capability: scene.file
@@ -11,8 +11,9 @@ targets:
 - scene_file
 access: write
 effects:
-  inspect: 只读取场景或标准数据，不改变资产。
-  apply: 按 API 实现对当前任务沙盒中的场景或数据执行操作。
+  file_write: Creates the destination directory and saves the scene under the requested new name.
+  host_state_write: Changes the current scene filename.
+  file_read: With a current scene available, resolves project naming rules through load_project_config; a cache miss reads the project configuration JSON.
 execution_modes:
 - local
 - background
@@ -52,9 +53,12 @@ preconditions:
 - 后台模式由 CGI Worker 打开或复用对应 DCC 场景。
 idempotent: false
 outputs:
-- name: scene
-  type: scene_file
-  label: 重命名后场景
+  output_path: Actual operation output path; present only when this branch produces
+    or identifies a file.
+  result: Underlying operation result; its internal fields belong to that operation.
+  summary: Optional framework operation summary; present when the adapter supplies
+    one.
+  items: Optional framework item records; present when the adapter supplies them.
 statuses:
 - SUCCESS
 - PARTIAL
@@ -73,8 +77,10 @@ help:
   summary: '将当前场景按管线命名规范重命名并另存为。格式: {project}_{category}_{asset}_{stage}_{task}_v{version}.ma。不修改场景内容。'
   usage: execute_api(maya.asset.rename_asset, params={...})
   scenario: '将当前场景按管线命名规范重命名并另存为。格式: {project}_{category}_{asset}_{stage}_{task}_v{version}.ma。不修改场景内容。'
-  safety: read API 只读；write/destructive API 仅写入任务沙盒。
+  safety: 具体副作用见本契约 effects；运行上下文、路径与恢复边界见 docs/architecture/pipeline_runtime_contract_v1.md。
 tests:
   contract: api.registry loads this manifest and api.runner validates its receipt.
   smoke: 代表性 workflow 统一验收。
+implementation: {status: implemented, module: rename_asset.rename_asset}
+verification: {level: contract_tested, evidence: [tests/test_maya_asset_high_value_contracts.py]}
 handler: cgi_pipeline.capabilities.maya.asset.rename_asset.adapter:execute

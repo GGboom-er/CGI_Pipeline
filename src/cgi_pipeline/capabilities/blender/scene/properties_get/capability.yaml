@@ -1,0 +1,33 @@
+api_id: blender.scene.properties.get
+version: 1.0.1
+name: properties_get
+executor: blender
+capability: scene.properties
+operation: query
+stages: [modeling, rigging, animation]
+targets: [object_property]
+access: read
+effects:
+  scene_read: Reads bounded RNA or custom object properties.
+execution_modes: [local, foreground, background]
+surfaces: [blender, service]
+modes: [inspect]
+inputs:
+  items: {type: array, required: true, description: "[{node, property}]; custom properties use custom:name."}
+  max_items: {type: integer, default: 500, description: Maximum properties; hard limit 2000.}
+preconditions: [Objects and properties exist.]
+idempotent: true
+outputs:
+  items: Per-property values and statuses.
+  count: Number of returned or processed items for this action.
+  succeeded: Number of successful per-item operations.
+  failed: Number of failed per-item operations.
+  truncated: Whether the operation reached its configured result or input bound.
+statuses: [SUCCESS, PARTIAL, ERROR]
+errors: {BLENDER_SCENE_CORE_OPERATION_FAILED: Invalid object property or context.}
+recovery: [Correct property paths or reduce max_items.]
+help: {summary: Read many Blender object properties., usage: "execute_api(blender.scene.properties.get, params={items})", scenario: Sample RNA and custom property state., safety: Read-only and bounded.}
+tests: {contract: tests/test_blender_scene_core_apis.py}
+handler: cgi_pipeline.capabilities.blender.scene_core:get_properties
+implementation: {status: implemented}
+verification: {level: contract_tested, evidence: [tests/test_blender_scene_core_apis.py]}

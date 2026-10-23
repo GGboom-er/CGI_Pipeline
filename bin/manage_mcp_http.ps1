@@ -7,7 +7,12 @@ param(
     [int]$Port = 8000,
     [string]$PythonPath = "",
     [ValidateRange(1, 120)]
-    [int]$StartupTimeoutSeconds = 120
+    [int]$StartupTimeoutSeconds = 120,
+    [ValidateRange(1, 3600)]
+    [int]$DrainTimeoutSeconds = 120,
+    [ValidateRange(1, 300)]
+    [int]$ShutdownTimeoutSeconds = 30,
+    [string]$InitialProtocolCutoverReceipt = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -33,10 +38,12 @@ $ServerPath = (Resolve-Path (Join-Path $SourceRoot "cgi_pipeline\server\server.p
 $RuntimeDir = Join-Path $ProjectRoot "runtime"
 $LogDir = Join-Path $ProjectRoot "logs"
 $PidFile = Join-Path $RuntimeDir "mcp_http_$Port.pid"
+$ControlFile = Join-Path $RuntimeDir "mcp_http_$Port.control.json"
 $StdoutLog = Join-Path $LogDir "mcp_http_$Port.stdout.log"
 $StderrLog = Join-Path $LogDir "mcp_http_$Port.stderr.log"
 $Endpoint = "http://${ListenAddress}:$Port/mcp"
 $MutexName = "Global\CGIPipeline.McpHttp.Port$Port"
+. (Join-Path $PSScriptRoot "mcp_http_control.ps1")
 
 function Write-ServiceResult {
     param([object]$Value)
@@ -70,19 +77,32 @@ function Get-ProcessRecord {
         return $null
     }
     $commandLine = $null
+    $executablePath = $null
     if ($process.PSObject.Properties.Name -contains "CommandLine") {
         $commandLine = $process.CommandLine
     }
-    if (-not $commandLine) {
+    try {
+        $executablePath = $process.Path
+    }
+    catch {
+        $executablePath = $null
+    }
+    if (-not $commandLine -or -not $executablePath) {
         $cimRecord = Get-CimInstance Win32_Process -Filter "ProcessId=$ProcessId" -ErrorAction SilentlyContinue
         if ($cimRecord) {
-            $commandLine = $cimRecord.CommandLine
+            if (-not $commandLine) {
+                $commandLine = $cimRecord.CommandLine
+            }
+            if (-not $executablePath) {
+                $executablePath = $cimRecord.ExecutablePath
+            }
         }
     }
     return [pscustomobject]@{
         process = $process
         creation_time = $creationTime
         command_line = $commandLine
+        executable_path = $executablePath
     }
 }
 
@@ -221,6 +241,14 @@ function Get-ManagedIdentity {
     if (-not $record.command_line) {
         return [pscustomobject]@{ exists = $true; valid = $false; reason = "metadata_command_line_unavailable"; metadata = $metadata; process = $record.process }
     }
+    $canonicalPython = Resolve-PythonPath
+    if (-not $record.executable_path -or -not [string]::Equals(
+        [IO.Path]::GetFullPath([string]$record.executable_path),
+        $canonicalPython,
+        [StringComparison]::OrdinalIgnoreCase
+    )) {
+        return [pscustomobject]@{ exists = $true; valid = $false; reason = "metadata_executable_path_mismatch"; metadata = $metadata; process = $record.process }
+    }
     $command = $record.command_line.Replace("\", "/").ToLowerInvariant()
     $server = $managedServerPath.Replace("\", "/").ToLowerInvariant()
     if (-not $command.Contains($server) -or $command -notmatch '(^|\s)--http(\s|$)') {
@@ -249,6 +277,37 @@ function Get-ManagedIdentity {
         process = $record.process
         repository_relocation = $repositoryRelocation
         managed_server_path = $managedServerPath
+    }
+}
+
+function Get-LegacyModuleIdentity {
+    $listenerPid = Get-ListenerPid
+    if ($null -eq $listenerPid) {
+        return [pscustomobject]@{ exists = $false; valid = $false; reason = "legacy_listener_missing"; process = $null }
+    }
+    $record = Get-ProcessRecord $listenerPid
+    if (-not $record -or -not $record.command_line -or -not $record.executable_path) {
+        return [pscustomobject]@{ exists = $true; valid = $false; reason = "legacy_process_identity_unavailable"; process = $null }
+    }
+    $canonicalPython = (Resolve-PythonPath).Replace("\", "/")
+    $actualPython = ([IO.Path]::GetFullPath([string]$record.executable_path)).Replace("\", "/")
+    if (-not [string]::Equals($actualPython, $canonicalPython, [StringComparison]::OrdinalIgnoreCase)) {
+        return [pscustomobject]@{ exists = $true; valid = $false; reason = "legacy_python_path_mismatch"; process = $record.process }
+    }
+    $command = $record.command_line.Replace("\", "/")
+    if ($command -notmatch '(?i)(^|\s)-s(\s|$)' -or
+        $command -notmatch '(?i)(^|\s)-m\s+[''\"]?cgi_pipeline\.server\.server[''\"]?(\s|$)' -or
+        $command -notmatch '(?i)(^|\s)--http(\s|$)') {
+        return [pscustomobject]@{ exists = $true; valid = $false; reason = "legacy_module_command_mismatch"; process = $record.process }
+    }
+    return [pscustomobject]@{
+        exists = $true
+        valid = $true
+        reason = "legacy_module_identity_match"
+        process = $record.process
+        repository_relocation = $false
+        managed_server_path = "module:cgi_pipeline.server.server"
+        legacy_module_entry = $true
     }
 }
 
@@ -363,7 +422,7 @@ function Invoke-CooperativeShutdown {
     $cleanupProcess = [Diagnostics.Process]::new()
     try {
         $python = Resolve-PythonPath
-        $cleanupCode = "from cgi_pipeline.core.service_manager import shutdown_worker_owned_by; shutdown_worker_owned_by($managedProcessId)"
+        $cleanupCode = "from cgi_pipeline.core.service_manager import share_worker_runtime; share_worker_runtime()"
         $startInfo = [Diagnostics.ProcessStartInfo]::new()
         $startInfo.FileName = $python
         $startInfo.Arguments = "-s -c `"$cleanupCode`""
@@ -401,7 +460,7 @@ function Invoke-CooperativeShutdown {
         }
         return [pscustomobject]@{
             status = "COMPLETED"
-            detail = "Scoped Worker ownership cleanup completed before HTTP process termination"
+            detail = "Shared Worker preserved before HTTP frontend termination"
         }
     }
     catch {
@@ -416,8 +475,17 @@ function Invoke-CooperativeShutdown {
 }
 
 function Stop-ManagedService {
-    param([switch]$AllowRepositoryRelocation)
+    param(
+        [switch]$AllowRepositoryRelocation,
+        [switch]$AllowLegacyModuleEntry
+    )
     $identity = Get-ManagedIdentity -RequireListener -AllowRepositoryRelocation:$AllowRepositoryRelocation
+    if (-not $identity.valid -and $AllowLegacyModuleEntry -and $InitialProtocolCutoverReceipt) {
+        $legacyIdentity = Get-LegacyModuleIdentity
+        if ($legacyIdentity.valid) {
+            $identity = $legacyIdentity
+        }
+    }
     if (-not $identity.valid) {
         if ($identity.exists) {
             Remove-PidMetadata
@@ -435,21 +503,24 @@ function Stop-ManagedService {
         }
     }
 
-    # Re-read every identity component immediately before termination. The Process
-    # object then keeps the verified OS process handle, avoiding a PID-only kill.
+    # Validate the same process handle immediately before requesting the
+    # authenticated service-side drain and atomic idle shutdown commit.
     $confirmed = Get-ManagedIdentity -RequireListener -AllowRepositoryRelocation:$AllowRepositoryRelocation
+    if (-not $confirmed.valid -and $AllowLegacyModuleEntry -and $InitialProtocolCutoverReceipt) {
+        $legacyIdentity = Get-LegacyModuleIdentity
+        if ($legacyIdentity.valid) {
+            $confirmed = $legacyIdentity
+        }
+    }
     if (-not $confirmed.valid) {
         throw "Managed process identity changed before stop ($($confirmed.reason)); no process was stopped."
     }
     $managedProcess = $confirmed.process
     $managedProcessId = $managedProcess.Id
-    $cleanupResult = Invoke-CooperativeShutdown
-    if (-not $managedProcess.HasExited) {
-        Stop-Process -InputObject $managedProcess -Force
-        if (-not $managedProcess.WaitForExit(5000)) {
-            throw "Managed service PID $managedProcessId did not exit after forced termination"
-        }
+    $cleanupResult = if ($InitialProtocolCutoverReceipt) {
+        Stop-HttpServiceForInitialProtocolCutover $confirmed
     }
+    else { Stop-HttpServiceCooperatively $confirmed }
     Remove-PidMetadata
     $listenerPid = Get-ListenerPid
     if ($null -ne $listenerPid) {
@@ -463,6 +534,7 @@ function Stop-ManagedService {
         shutdown_cleanup = $cleanupResult.status
         shutdown_detail = $cleanupResult.detail
         replaced_repository_entry = [bool]$confirmed.repository_relocation
+        replaced_legacy_module_entry = [bool]$confirmed.legacy_module_entry
         previous_server_path = if ($confirmed.repository_relocation) { [string]$confirmed.managed_server_path } else { $null }
         message = "Managed CGI Pipeline HTTP service stopped."
     }
@@ -537,15 +609,19 @@ function Start-ManagedService {
 }
 
 try {
+    if ($InitialProtocolCutoverReceipt -and $Action -ne "restart") {
+        throw "InitialProtocolCutoverReceipt is allowed only with restart."
+    }
     $result = switch ($Action) {
         "status" { Get-ServiceState }
         "start" { Invoke-WithPortLock { Start-ManagedService } }
         "stop" { Invoke-WithPortLock { Stop-ManagedService } }
         "restart" {
             Invoke-WithPortLock {
-                $stopped = Stop-ManagedService -AllowRepositoryRelocation
+                $stopped = Stop-ManagedService -AllowRepositoryRelocation -AllowLegacyModuleEntry
                 $started = Start-ManagedService
                 $started | Add-Member -NotePropertyName replaced_repository_entry -NotePropertyValue ([bool]$stopped.replaced_repository_entry)
+                $started | Add-Member -NotePropertyName replaced_legacy_module_entry -NotePropertyValue ([bool]$stopped.replaced_legacy_module_entry)
                 $started | Add-Member -NotePropertyName previous_server_path -NotePropertyValue $stopped.previous_server_path
                 $started
             }

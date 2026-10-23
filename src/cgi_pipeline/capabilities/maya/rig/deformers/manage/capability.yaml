@@ -1,0 +1,40 @@
+api_id: maya.rig.deformers.manage
+version: 1.0.2
+executor: maya
+capability: rigging.deformers
+operation: manage
+stages: [rigging]
+targets: [deformer, geometry]
+access: destructive
+effects:
+  scene_write: 'action=create: Creates one native cluster, lattice, or nonlinear deformer. action=set_envelope: Sets one envelope
+    value. action=delete: Deletes one supported deformer.'
+execution_modes: [local, foreground, background]
+surfaces: [maya, service]
+modes: [apply]
+inputs:
+  action: {type: string, required: true, choices: [create, set_envelope, delete], description: Canonical deformer action.}
+  geometry: {type: string, description: Existing geometry for create.}
+  deformer_type: {type: string, default: cluster, choices: [cluster, lattice, bend, twist, flare, sine, squash, wave], description: Explicit supported native deformer type.}
+  deformer: {type: string, description: Existing supported deformer for edit or delete.}
+  envelope: {type: number, description: Envelope value from 0 to 1.}
+  name: {type: string, description: Optional unique deformer leaf name.}
+preconditions: [Use maya.rig.blendshape.manage for blendShape targets., Wrap is intentionally excluded until an explicit driver and base contract exists.]
+idempotent: false
+outputs:
+  action: Executed action.
+  geometry: 'Optional by action: geometry returned by the source implementation.'
+  deformer_type: 'Optional by action: deformer type returned by the source implementation.'
+  deformer: Created or edited deformer.
+  auxiliary_nodes: Native handle or lattice nodes.
+  deleted: Deleted deformer path.
+  before: 'Optional by action: before returned by the source implementation.'
+  after: 'Optional by action: after returned by the source implementation.'
+statuses: [SUCCESS, ERROR]
+errors: {MAYA_RIG_DEFORMERS_MANAGE_FAILED: "Validation, native mutation, readback, or rollback failed."}
+recovery: [Use an existing geometry or supported deformer and retry.]
+help: {summary: Create, edit, or delete native Maya cluster, lattice, and nonlinear deformers., usage: "execute_api(maya.rig.deformers.manage, params={action, geometry, deformer_type})", scenario: Apply common deformation building blocks without selection-dependent scripts., safety: Unsupported incomplete generic wrap and blendShape creation is rejected.}
+tests: {contract: tests/test_maya_rig_p1_batch3.py, smoke: Maya 2025.3 foreground create/envelope/delete then undo.}
+implementation: {status: implemented}
+verification: {level: contract_tested, evidence: [tests/test_maya_rig_p1_batch3.py]}
+handler: cgi_pipeline.capabilities.maya.rig.rig_deformation_ops:manage_deformers

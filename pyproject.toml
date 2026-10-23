@@ -19,8 +19,8 @@ include-package-data = true
 where = ["src"]
 
 [tool.setuptools.package-data]
-cgi_pipeline = ["data/*.json", "capabilities/**/capability.yaml"]
+cgi_pipeline = ["data/*.json", "capabilities/**/capability.yaml", "capabilities/**/delivery.html"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
-
+testpaths = ["tests"]

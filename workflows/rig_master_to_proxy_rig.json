@@ -1,0 +1,13 @@
+{
+  "workflow_id": "rig_master_to_proxy_rig",
+  "status": "draft",
+  "runtime_lifecycle": "temporary",
+  "name": "Proxy Rig场景调查（只读草稿）",
+  "description": "Read-only structural inspection draft, not a Proxy construction entry. The real foreground build chain is exclusively maya.asset.proxy_rig via existing execute_api: inspect, AI representative review/plan, preview, apply. This draft has no apply control and does not advertise foreground or prepared-plan support in the generic workflow runtime.",
+  "source_resolution": {"pipeline": "rig", "ext_filter": [".ma", ".mb"], "required": true},
+  "steps": [
+    {"step_id": "proxy_rig", "api_id": "maya.asset.proxy_rig", "parameters": {
+      "mode": "inspect", "character": "{{input.asset_name}}"
+    }}
+  ]
+}

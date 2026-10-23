@@ -1,0 +1,48 @@
+api_id: maya.rig.blendshape.manage
+version: 1.0.2
+executor: maya
+capability: rigging.blendshape
+operation: manage
+stages: [rigging]
+targets: [blend_shape, mesh]
+access: destructive
+effects:
+  scene_write: 'action=create: Creates one native blendShape. action=add_target: Adds one target index. action=remove_target:
+    Removes one target index. action=set_weight: Sets one target weight.'
+execution_modes: [local, foreground, background]
+surfaces: [maya, service]
+modes: [apply]
+inputs:
+  action: {type: string, required: true, choices: [create, add_target, remove_target, set_weight], description: Canonical blendShape action.}
+  base_mesh: {type: string, description: Base mesh for create.}
+  target_meshes: {type: array, default: [], description: Up to 128 compatible targets for create.}
+  blend_shape: {type: string, description: Existing blendShape for target and weight actions.}
+  target_mesh: {type: string, description: Compatible target mesh for add or remove.}
+  index: {type: integer, description: Explicit target index; optional only for add_target.}
+  weight: {type: number, default: 0.0, description: Target envelope weight from 0 to 1.}
+  full_weight: {type: number, default: 1.0, description: Positive target full weight.}
+  origin: {type: string, default: local, choices: [local, world], description: Blend origin for create.}
+  name: {type: string, description: Optional unique deformer leaf name.}
+preconditions: [Meshes must have one non-intermediate shape and matching vertex counts., Existing nodes must use unambiguous paths.]
+idempotent: false
+outputs:
+  action: Executed action.
+  blend_shape: Resolved deformer.
+  base_mesh: Resolved base transform.
+  targets: 'Optional by action: targets returned by the source implementation.'
+  target_count: 'Optional by action: target count returned by the source implementation.'
+  origin: 'Optional by action: origin returned by the source implementation.'
+  target_mesh: 'Optional by action: target mesh returned by the source implementation.'
+  index: Affected target index.
+  full_weight: 'Optional by action: full weight returned by the source implementation.'
+  weight: 'Optional by action: weight returned by the source implementation.'
+  before: 'Optional by action: before returned by the source implementation.'
+  after: 'Optional by action: after returned by the source implementation.'
+statuses: [SUCCESS, ERROR]
+errors: {MAYA_RIG_BLENDSHAPE_MANAGE_FAILED: "Validation, native mutation, readback, or rollback failed."}
+recovery: [Correct topology and paths, then retry the complete action.]
+help: {summary: Create and edit bounded native Maya blendShape targets without selection state., usage: "execute_api(maya.rig.blendshape.manage, params={action, ...})", scenario: Build facial or corrective shape deformation through one reusable API., safety: Every mutation is one rollback-capable Maya undo chunk.}
+tests: {contract: tests/test_maya_rig_p1_batch3.py, smoke: Maya 2025.3 foreground create/add/set/remove then undo.}
+implementation: {status: implemented}
+verification: {level: contract_tested, evidence: [tests/test_maya_rig_p1_batch3.py]}
+handler: cgi_pipeline.capabilities.maya.rig.rig_deformation_ops:manage_blendshape

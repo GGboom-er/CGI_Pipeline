@@ -1,0 +1,31 @@
+api_id: maya.scene.nodes.delete
+version: 1.0.1
+name: nodes_delete
+executor: maya
+capability: scene.nodes
+operation: delete
+stages: [modeling, rigging, animation]
+targets: [scene_object]
+access: destructive
+effects:
+  scene_write: Deletes explicit Maya nodes.
+execution_modes: [local, foreground, background]
+surfaces: [maya, service]
+modes: [apply]
+inputs:
+  nodes: {type: array, required: true, description: Explicit node names or long paths.}
+  max_items: {type: integer, default: 200, description: "Maximum items, hard limit 2000."}
+preconditions: [Nodes must resolve unambiguously; use atomic batch for grouped rollback.]
+idempotent: false
+outputs:
+  items: Deleted long paths and status.
+  count: Number of returned or processed items for this action.
+  truncated: Whether input exceeded max_items.
+statuses: [SUCCESS, ERROR]
+errors: {MAYA_SCENE_CORE_OPERATION_FAILED: "A node is missing, ambiguous or cannot be deleted."}
+recovery: [Inspect first and use execute_batch atomic mode when rollback is required.]
+help: {summary: Delete bounded explicit Maya nodes., usage: "execute_api(maya.scene.nodes.delete, params={nodes})", scenario: Controlled scene cleanup., safety: Destructive and fail-loud.}
+tests: {contract: tests/test_maya_scene_core_apis.py, smoke: Foreground Maya delete and undo.}
+implementation: {status: implemented}
+verification: {level: live_tested, evidence: [tests/test_maya_scene_core_apis.py, audit/2026-08-30/api-702b5a56c992.json]}
+handler: cgi_pipeline.capabilities.maya.scene_core:delete_nodes

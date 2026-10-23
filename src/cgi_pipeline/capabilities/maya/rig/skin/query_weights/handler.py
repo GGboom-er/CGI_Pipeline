@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 
+from ..core import _long
 from cgi_pipeline.contracts import ApiContext, make_api_receipt
 
 
@@ -41,13 +42,16 @@ def execute(params: dict, context: ApiContext) -> dict:
         if not clusters:
             raise ValueError(f"Mesh has no skinCluster: {shape}")
         skin_cluster = clusters[0]
-        influences = cmds.skinCluster(skin_cluster, query=True, influence=True) or []
+        influences = [
+            _long(cmds, value)
+            for value in (cmds.skinCluster(skin_cluster, query=True, influence=True) or [])
+        ]
         requested = list(params["vertices"])
         vertex_count = int(cmds.polyEvaluate(shape, vertex=True))
         max_vertices = min(params["max_vertices"], vertex_count)
         vertices = requested[:max_vertices] if requested else list(range(max_vertices))
         minimum_weight = params["minimum_weight"]
-        influence_filter = params["influence"]
+        influence_filter = _long(cmds, params["influence"]) if params["influence"] else ""
 
         rows = []
         for vertex_index in vertices:

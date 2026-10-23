@@ -1,5 +1,5 @@
 api_id: maya.asset.maya_capture_viewport
-version: 1.0.0
+version: 1.3.0
 name: Maya 视口截图
 executor: maya
 capability: viewport.capture
@@ -10,28 +10,41 @@ stages:
 - animation
 targets:
 - viewport
-access: read
+access: write
 effects:
-  inspect: 只读取场景或标准数据，不改变资产。
-  apply: 按 API 实现对当前任务沙盒中的场景或数据执行操作。
+  host_state_write: Window scope raises and activates Maya and refreshes it. Viewport scope invokes native single-current-frame playblast without changing camera, display settings or requested time; Maya may refresh/evaluate the view.
+  file_write: Writes a uniquely named PNG under run_dir/outputs/captures when bound, otherwise managed runs/captures. Window GDI resources are released on success and failure.
+  scene_read: Optional grounding reads all bounded visible native polygon candidates and native view before and after the image; installs two ephemeral native scene-lifecycle callbacks for observation identity. Unsupported appearance stays in occlusion candidates and is reported per mesh and target.
 execution_modes:
 - local
-- background
 - foreground
 surfaces:
 - maya
 - service
 modes:
 - inspect
-inputs: {}
+inputs:
+  scope: {type: string, default: window, choices: [window, viewport], description: "window preserves legacy whole-window capture; viewport captures one visible modelPanel using native playblast. No fallback between scopes."}
+  panel: {type: string, default: '', description: "Viewport scope only. Explicit visible modelPanel name; omitted uses a focused visible modelPanel or the only visible modelPanel, otherwise errors."}
+  image_size: {type: array, default: [], description: "Inspection-only viewport PNG [width,height], each 32..4096 and divisible by 4. Aspect derives from these dimensions; [] preserves native viewport sizing. Native playblast must return exactly this size or the call errors. Does not frame or change camera: the framing tool must fit the same aspect. Custom sizes cannot be combined with pixel grounding."}
+  grounding: {type: boolean, default: false, description: "Opt-in polygon scene grounding. Requires explicit visible panel, viewport scope and targets. Reads all visible native polygon candidates before and after capture; unsupported panel state or budget excess fails without publishing a valid reference. Unsupported material appearance is retained and marked for uncertain pixel lookup."}
+  targets: {type: array, default: [], description: "With grounding=true, 1..200 exact full DAG transform or mesh paths. Names alone do not prove hair/foot semantics."}
+  max_meshes: {type: integer, default: 1000, description: "Grounding geometry budget; never silently truncates occluders. Hard maximum 2000."}
+  max_vertices: {type: integer, default: 250000, description: "Total evaluated vertex budget for grounding; hard maximum 2000000."}
 preconditions:
 - 项目配置通过统一 config/{project}_config.json 接口加载。
-- 后台模式由 CGI Worker 打开或复用对应 DCC 场景。
-idempotent: true
+- Requires a native Maya GUI session; background mayapy/batch is unsupported.
+- Captures the current frame and view only. The API does not frame objects, hide controls, change camera, change time or save the scene.
+idempotent: false
 outputs:
-- name: output_path
-  type: image_file
-  label: PNG 截图
+  output_path: Actual operation output path; present only when this branch produces
+    or identifies a file.
+  observation: "Scope, backend, actual PNG width/height, scene, frame, Maya API version and visible views. Each view includes panel, long camera path, world matrix, renderer, appearance, wireframe-on-shaded, textures, lighting, exposure and gamma. Viewport returns exactly the chosen view. This is an observation sample, not full render/color-management provenance."
+  observation_after: Present on ERROR when observed scene/view metadata changed during capture; no scene state is overwritten to conceal the change.
+  grounding: "Opt-in reference {path,sha256} binding original PNG bytes, complete bounded polygon geometry and explicit viewport state, plus target identities/projections, per-target pixel_lookup_supported, appearance_unsupported_mesh_count and budgets. Only published after matching pre/post state and exact image/viewport dimensions. Projection is not visibility. A nearest unsupported appearance returns uncertain in pick; all candidates remain in occlusion checks. Geometry freshness does not certify arbitrary shader graphs, lights, textures, XGen or final rendered pixels. Pass grounding.reference as observation to viewport.pick or guarded setters."
+  summary: Optional framework operation summary; present when the adapter supplies
+    one.
+  items: Optional framework item records; present when the adapter supplies them.
 statuses:
 - SUCCESS
 - PARTIAL
@@ -47,11 +60,13 @@ recovery:
 - 读取 api_help 获取参数、前置条件和输出。
 - 失败时检查任务报告中的错误与恢复建议。
 help:
-  summary: 获取 Maya 当前活动视口的截图，并保存为 PNG。
+  summary: Capture an explicit Maya window or viewport PNG, with optional exact target geometry evidence and a hashed original-image observation reference.
   usage: execute_api(maya.asset.maya_capture_viewport, params={...})
-  scenario: 获取 Maya 当前活动视口的截图，并保存为 PNG。
-  safety: read API 只读；write/destructive API 仅写入任务沙盒。
+  scenario: "Resolve exact target identity first. Use an authorized explicit-panel frame if needed, acquire grounding, and open the original PNG. Pixel-pick verifies the observed region before a guarded edit; keep the same camera/frame/display for after-image comparison. Projection alone is not visibility."
+  safety: 具体副作用见本契约 effects；运行上下文、路径与恢复边界见 docs/architecture/pipeline_runtime_contract_v1.md。
 tests:
-  contract: api.registry loads this manifest and api.runner validates its receipt.
-  smoke: 代表性 workflow 统一验收。
+  contract: tests/test_maya_capture_observation.py and tests/test_maya_asset_high_value_contracts.py
+  smoke: Maya2025.3 foreground viewport/window capture; open PNG and compare before/after scene and view state.
+implementation: {status: implemented, module: maya_capture_viewport.maya_capture_viewport}
+verification: {level: live_tested, evidence: [tests/test_maya_capture_observation.py, tests/test_maya_capture_grounding.py, projects/default/PL294/work/visual_api_final_receipts.json, projects/default/PL296/work/tests/product_registered_evidence_v3.json, projects/default/PL296/work/tests/product_registered_evidence_v4.json]}
 handler: cgi_pipeline.capabilities.maya.asset.maya_capture_viewport.adapter:execute

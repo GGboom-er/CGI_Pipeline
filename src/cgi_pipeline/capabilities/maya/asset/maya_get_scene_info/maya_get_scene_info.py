@@ -105,6 +105,9 @@ def execute(payload: dict) -> dict:
             'statistics': {
                 'transforms': len(all_transforms),
                 'meshes': len(all_meshes),
+                'meshes_evaluated': len(mesh_details),
+                'mesh_query_failures': len(warnings),
+                'geometry_totals_complete': not warnings,
                 'total_vertices': total_verts,
                 'total_faces': total_faces,
                 'curves': len(all_curves),
@@ -128,6 +131,16 @@ def execute(payload: dict) -> dict:
                       if cmds.listRelatives(l, parent=True)],
             'references': references[:10],
             'warnings': warnings[:20],
+            'collections': {
+                name: {'total': len(values), 'returned': min(len(values), limit),
+                       'limit': limit, 'truncated': len(values) > limit}
+                for name, values, limit in [
+                    ('top_meshes_by_faces', mesh_details, 10),
+                    ('materials', materials, 20),
+                    ('references', references, 10),
+                    ('warnings', warnings, 20),
+                ]
+            },
         }
         
         # 生成简报
@@ -145,11 +158,12 @@ def execute(payload: dict) -> dict:
 
         return make_receipt(
             api_id='maya_get_scene_info',
-            status='SUCCESS',
+            status='PARTIAL' if warnings else 'SUCCESS',
             start_time=t0,
             summary_action="采集场景信息",
             output={'result': scene_info},
             items=items,
+            error=f'{len(warnings)} 个 mesh 统计失败，详见 warnings。' if warnings else '',
             report_content='\n'.join(summary_lines)
         )
     

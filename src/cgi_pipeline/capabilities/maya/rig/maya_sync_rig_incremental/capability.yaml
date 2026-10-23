@@ -1,5 +1,5 @@
 api_id: maya.rig.maya_sync_rig_incremental
-version: 1.0.0
+version: 1.0.6
 name: maya_sync_abc_to_rig_cache
 executor: maya
 capability: rigging.sync
@@ -11,8 +11,12 @@ targets:
 - mesh
 access: destructive
 effects:
-  inspect: 只读取场景或标准数据，不改变资产。
-  apply: 按 API 实现对当前任务沙盒中的场景或数据执行操作。
+  scene_read: Reads existing rig geometry, names, orig/skin connections and display layers.
+  file_read: Reads compare-result, Alembic and asset-info inputs.
+  scene_write: Updates paired mesh/topology/UV data, DAG/RIG names, orig/skin connections, display layers and checked cleanup;
+    no atomic rollback guarantee.
+  file_write: Only its exception branch appends the business logs/sync_crash.log; normal report content is returned in the
+    receipt.
 execution_modes:
 - local
 - background
@@ -24,7 +28,9 @@ modes:
 - apply
 inputs:
   compare_result:
-    type: string
+    type:
+    - string
+    - object
     default: ''
     description: 必填。maya_compare_asset_in_scene 或 pipeline_compare_asset 输出的 compare_result.json 路径；workflow 内也可直接传 output.compare_result 字典。sync 只消费其中 pairing_groups，不重新对比。
   source_abc:
@@ -34,7 +40,7 @@ inputs:
   source_info:
     type: string
     default: ''
-    description: source 侧 _info.json 路径。无 ABC 时的降级路径，仅能更新已有 mesh，不能可靠创建 source 独有 mesh。
+    description: source 侧完整 _info.json 路径。必须包含点与完整 polygon 拓扑；UV/显式法线提供时必须完整合法，只有点的轻量 JSON 不支持写入。
   cache_group:
     type: string
     default: cache
@@ -42,11 +48,29 @@ inputs:
 preconditions:
 - 项目配置通过统一 config/{project}_config.json 接口加载。
 - 后台模式由 CGI Worker 打开或复用对应 DCC 场景。
+- 首次场景修改前确认待清理历史节点无外部求值依赖或实例；仅允许被动的着色集合及消息成员连接。共享或无法确认的历史拒绝，不删除其他使用方的节点。
+- 首次场景修改前校验全部来源几何与待注入目标矩阵；负行列式、奇异或非仿射矩阵拒绝，缺失法线也不绕过矩阵校验。
+- 有效来源角点法线为权威；不保证同时保留目标旧边平滑标志。仅缺失来源法线且 FC/FI、顶点数严格相同时复制目标原生 mesh data，更新点和来源 UV，保留锁定法线与平滑信息；不同拓扑按新几何生成法线。
+- 缺失法线的同拓扑复制要求目标至少一套 UV set；无 UV set 在全局预检与直接注入中明确拒绝。复制数据与目标持久 UV 清写期间保持旧 set 名，均写入同一旧 first/default set；每次清除后重新取得 MFnMesh，来源缺 UV 时也清除旧数据。全部持久化后保留该默认 set、删除其他 set，再将真实目标正规化成单套 map1，不重命名内存数据块。
+- 所有完整注入分支均在 cachedInMesh 写入后清除目标持久 UV，每次清除后重新取得 MFnMesh，再写入完整来源 UV 与逐面分配；来源合法缺 UV 时也清除旧持久数据。显式来源法线和非同拓扑生成法线分支同样执行，不仅限于复制目标 mesh data 的分支。
+- 待注入 Orig 的 pnts 不得有输入驱动；完整 base 写入后仅清零并读回核验本次注入 Orig 的旧 pnts，不扫描可见 shape 或未替换 RIG。静态可见 shape 仅零 pnts 且无驱动时可直接写入。
 idempotent: false
 outputs:
-- name: scene
-  type: scene_file
-  label: 同步后 rig 场景
+  scene: Actual current Maya scene path; empty string for an unnamed scene. This API does not save the scene.
+  actions: 'Optional by action: actions returned by the source implementation.'
+  new_node_count: 'Optional by action: new node count returned by the source implementation.'
+  action_summary: 'Optional by action: action summary returned by the source implementation.'
+  action_items: 'Optional by action: action items returned by the source implementation.'
+  compare_result_path: 'Optional by action: compare result path returned by the source
+    implementation.'
+  source_abc: 'Optional by action: source abc returned by the source implementation.'
+  source_info: 'Optional by action: source info returned by the source implementation.'
+  cache_group: 'Optional by action: cache group returned by the source implementation.'
+  normal_policy: Authored corner-normal authority; missing normals with identical topology copy native target mesh data to retain normal locks and edge smoothing.
+  orig_tweak_cleanup: Successfully replaced intermediate Orig shapes and their verified zero-offset vertex count.
+  summary: Optional framework operation summary; present when the adapter supplies
+    one.
+  items: Optional framework item records; present when the adapter supplies them.
 statuses:
 - SUCCESS
 - PARTIAL
@@ -61,12 +85,15 @@ errors:
 recovery:
 - 读取 api_help 获取参数、前置条件和输出。
 - 失败时检查任务报告中的错误与恢复建议。
+- 执行阶段失败不自动回滚，可能已部分修改场景；从干净原绑定重新打开后重跑，不保存为成功输出。
 help:
-  summary: 在 target rig 场景中，依据前置 compare_result 和 source ABC 增量重建/更新 mesh（纯几何）。注入/重建时传 UV 与可用显式法线，面序固定对齐 Maya AbcImport，不猜测几何外侧。
+  summary: 在 target rig 场景中，依据前置 compare_result 和完整来源几何增量重建/更新 mesh。世界点与来源角点法线转换到真实目标局部空间；作者法线为权威，必要 UV/法线写入失败报错，不猜测外侧或自动翻面。
   usage: execute_api(maya.rig.maya_sync_rig_incremental, params={...})
   scenario: 在 target rig 场景中，依据前置 compare_result 和 source ABC 增量重建/更新 mesh（纯几何）。注入/重建时传 UV 与可用显式法线，面序固定对齐 Maya AbcImport，不猜测几何外侧。
-  safety: read API 只读；write/destructive API 仅写入任务沙盒。
+  safety: 具体副作用见本契约 effects；运行上下文、路径与恢复边界见 docs/architecture/pipeline_runtime_contract_v1.md。
 tests:
   contract: api.registry loads this manifest and api.runner validates its receipt.
   smoke: 代表性 workflow 统一验收。
+implementation: {status: implemented}
+verification: {level: contract_tested, evidence: [tests/test_framework_architecture.py, tests/test_sync_action_dispatch.py, tests/test_maya_rigging_contracts.py, tests/test_maya_normal_writers.py, tests/test_abc_normals.py]}
 handler: cgi_pipeline.capabilities.maya.rig.maya_sync_rig_incremental.adapter:execute

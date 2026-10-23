@@ -22,6 +22,7 @@ def test_only_generic_mcp_tools_are_public():
         "get_task_result",
         "list_workflows",
         "pipeline_execute_workflow",
+        "execute_batch",
     }
 
 

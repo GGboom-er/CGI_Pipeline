@@ -255,6 +255,24 @@ def execute(payload):
 
     try:
         required_root, fallback_patterns = _required_root_from_config(project, stage)
+    except (FileNotFoundError, ValueError) as exc:
+        return make_receipt(
+            api_id=API_ID,
+            status="BLOCKED",
+            start_time=t0,
+            input={"source_path": source_path, "project": project, "stage": stage, "phase": phase},
+            output={
+                "passed": False,
+                "code": "PROJECT_CONFIG_REQUIRED",
+                "result": {"passed": False, "code": "PROJECT_CONFIG_REQUIRED"},
+            },
+            summary_input=source_path,
+            summary_action="资产层级检查缺少有效项目配置",
+            error=str(exc),
+            recovery_hint=f"提供已登记 project，且 config/{project}_config.json 包含 stages.{stage}.geom_roots。",
+        )
+
+    try:
         root_exists = bool(cmds.objExists(required_root))
         cache_mesh_count = len(_valid_meshes_under(required_root)) if root_exists else 0
         extra_top_nodes = _extra_top_nodes()

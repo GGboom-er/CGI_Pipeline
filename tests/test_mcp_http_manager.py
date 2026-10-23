@@ -10,6 +10,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from typing import TextIO
@@ -80,6 +81,7 @@ class McpHttpManagerTests(unittest.TestCase):
         for port in self.ports:
             for path in (
                 RUNTIME_DIR / f"mcp_http_{port}.pid",
+                RUNTIME_DIR / f"mcp_http_{port}.control.json",
                 LOG_DIR / f"mcp_http_{port}.stdout.log",
                 LOG_DIR / f"mcp_http_{port}.stderr.log",
             ):
@@ -342,7 +344,7 @@ class McpHttpManagerTests(unittest.TestCase):
         self.assertTrue(stopped_source_payload["managed"])
         self.assertEqual(stopped_source_payload["shutdown_cleanup"], "COMPLETED")
 
-    def test_restart_replaces_verified_repository_entry_after_relocation(self) -> None:
+    def test_restart_refuses_old_repository_entry_without_control_protocol(self) -> None:
         port = self._free_port()
         relocated_entry = RUNTIME_DIR / f"relocated_http_entry_{port}.py"
         RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
@@ -378,16 +380,51 @@ class McpHttpManagerTests(unittest.TestCase):
 
         completed, payload = self._run_manager("restart", port, timeout=60)
 
-        self.assertEqual(completed.returncode, 0, completed.stderr)
-        self.assertEqual(payload["status"], "RUNNING")
-        self.assertTrue(payload["managed"])
-        self.assertTrue(payload["replaced_repository_entry"])
-        self.assertEqual(Path(payload["previous_server_path"]), relocated_entry)
-        self.assertIsNotNone(child.poll())
-        self.assertNotEqual(int(payload["pid"]), child.pid)
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertEqual(payload["status"], "ERROR")
+        self.assertIn("requires protocol-v1", str(payload["error"]))
+        self.assertIsNone(child.poll())
         metadata = json.loads(self._pid_file(port).read_text("utf-8"))
-        self.assertEqual(Path(metadata["server_path"]), SERVER_PATH)
-        self.assertEqual(self._listener_pid(port), int(payload["pid"]))
+        self.assertEqual(Path(metadata["server_path"]), relocated_entry)
+        self.assertEqual(self._listener_pid(port), child.pid)
+
+    def test_restart_refuses_legacy_module_without_explicit_first_cutover(self) -> None:
+        port = self._free_port()
+        environment = dict(os.environ)
+        environment.update({
+            "MCP_HOST": "127.0.0.1",
+            "MCP_PORT": str(port),
+            "PYTHONNOUSERSITE": "1",
+            "PYTHONPATH": str(PROJECT_ROOT / "src"),
+        })
+        child = subprocess.Popen(
+            [str(self.python), "-s", "-m", "cgi_pipeline.server.server", "--http"],
+            cwd=PROJECT_ROOT,
+            env=environment,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=CREATE_NO_WINDOW,
+        )
+        self.children.append(child)
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline and self._listener_pid(port) != child.pid:
+            if child.poll() is not None:
+                self.fail(f"legacy module process exited with {child.returncode}")
+            time.sleep(0.1)
+        self.assertEqual(self._listener_pid(port), child.pid)
+        self.assertFalse(self._pid_file(port).exists())
+
+        refused, refused_payload = self._run_manager("stop", port)
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("Refusing to stop unmanaged listener", str(refused_payload["error"]))
+        self._assert_process_alive(child.pid)
+
+        restarted, payload = self._run_manager("restart", port, timeout=60)
+        self.assertNotEqual(restarted.returncode, 0)
+        self.assertEqual(payload["status"], "ERROR")
+        self.assertIn("Refusing to stop unmanaged listener", str(payload["error"]))
+        self.assertIsNone(child.poll())
+        self.assertEqual(self._listener_pid(port), child.pid)
 
     def test_concurrent_starts_and_stops_are_serialized(self) -> None:
         port = self._free_port()

@@ -1,0 +1,35 @@
+api_id: maya.scene.graph.snapshot_bounded
+version: 1.1.0
+name: graph_snapshot_bounded
+executor: maya
+capability: scene.graph
+operation: snapshot
+stages: [modeling, rigging, animation]
+targets: [dependency_graph]
+access: read
+effects:
+  scene_read: Captures a bounded node and edge snapshot.
+execution_modes: [local, foreground, background]
+surfaces: [maya, service]
+modes: [inspect]
+inputs:
+  roots: {type: array, required: true, description: Root nodes or patterns.}
+  max_nodes: {type: integer, default: 500, description: Positive maximum of unique nodes queried and returned; nonpositive values return ERROR.}
+  max_edges: {type: integer, default: 2000, description: Positive maximum of unique directed plug edges returned; nonpositive values return ERROR.}
+  direction: {type: string, choices: [both, upstream, downstream], default: both, description: Traverse incoming and outgoing connections or only the selected direction.}
+preconditions: [Roots exist in the selected Maya scene.]
+idempotent: true
+outputs:
+  nodes: Bounded node facts
+  edges: Unique directed plug edges with full DAG node paths; unitConversion nodes are retained. A truncated snapshot may include edges whose other endpoint is outside the node bound.
+  node_count: 'Optional by action: node count returned by the source implementation.'
+  edge_count: 'Optional by action: edge count returned by the source implementation.'
+  truncated: True when roots, reachable nodes, or unique edges were omitted; false requires all reachable nodes and connections within the bounds to be fully queried.
+statuses: [SUCCESS, ERROR]
+errors: {MAYA_BATCH_OPERATION_FAILED: Snapshot failed.}
+recovery: [Narrow roots or reduce traversal bounds.]
+help: {summary: Capture a bounded Maya graph snapshot., usage: "execute_api(maya.scene.graph.snapshot_bounded, params={roots})", scenario: Compare MFace graph before and after a change., safety: Read-only and bounded.}
+tests: {contract: tests/test_scene_batch_apis.py, smoke: Foreground MFace graph snapshot.}
+implementation: {status: implemented, module: maya.scene_batch:snapshot_graph_bounded}
+verification: {level: live_tested, evidence: [tests/test_scene_batch_apis.py, tests/test_maya_graph_bounds.py, audit/chain-c69daed7.json, projects/default/PL294/work/foreground_oracle_receipt.json]}
+handler: cgi_pipeline.capabilities.maya.scene_batch:snapshot_graph_bounded

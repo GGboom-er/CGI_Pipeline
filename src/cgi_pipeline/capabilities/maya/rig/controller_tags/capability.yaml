@@ -1,0 +1,63 @@
+api_id: maya.rig.controller_tags
+version: 1.0.1
+name: 控制器身份与GPU运行准备
+executor: maya
+capability: rigging.controllers
+operation: prepare
+stages: [rigging, animation]
+targets: [rig, controller]
+access: write
+effects:
+  scene_read: Reads exact authored control sets, existing tags, editable channels and curve geometry dependencies within an explicit rig root. Untyped remaining curves are evidence only.
+  scene_write: Apply adds missing native controller tags, enables tag prepopulation and sets visibilityMode to Not Overridden. No control hierarchy, geometry, animation, shape visibility or rig connections are modified.
+  host_state_write: Apply optionally enables parallel evaluation, the deformer evaluator and the native prepopulateController optionVar, and shows Controllers and NURBS curves on existing model panels. These host settings are not a portable scene GPU switch. Failure restores prior host state; tag edits use native undo. No scriptNode or startup callback is installed.
+execution_modes: [local, foreground, background]
+surfaces: [maya, service]
+modes: [inspect, apply]
+mode_binding:
+  input: mode
+  cases:
+  - {value: inspect, mode: inspect}
+  - {value: apply, mode: apply}
+inputs:
+  mode: {type: string, default: inspect, choices: [inspect, apply], description: "Inspect is read-only; apply changes verified tags and requested host settings without saving."}
+  rig_root: {type: string, required: true, description: "Exact unique rig transform; no implicit whole-scene or curve-name tagging."}
+  controller_sets: {type: array, default: [], description: "Explicit authored animator controller objectSets, recursively expanded. Agent must inspect set purpose; a name match alone is not authorization to classify every member. Offset groups without shapes/channels and driven rig curves are excluded."}
+  controllers: {type: array, default: [], description: "Explicit additional verified control transforms; includes non-curve controllers with editable animation channels and shapes."}
+  exclude: {type: array, default: [], description: "Explicit whole objects to exclude. Existing tag identities inside rig_root are otherwise included."}
+  enable_gpu: {type: boolean, default: true, description: "Set current session to parallel and enable deformer evaluator; actual GPU assignment depends on hardware and graph. Does not force every node to GPU."}
+  show_controllers: {type: boolean, default: true, description: "Turn Controllers and NURBS Curves on for existing model panels; tag visibilityMode=0 retains authored local/ancestor visibility. Does not override a later intentional Controllers-off action."}
+outputs:
+  controllers: Verified identities, basis and tag names.
+  skipped: Ineligible authored set members with reasons.
+  unclassified_curves: Editable remaining curves for bounded Agent completeness review; not tagged automatically.
+  host: Actual evaluation/GPU/panel flags and OpenCL validity.
+  host_before: Prior host flags for rollback/integration.
+  tagged_count: Total verified tagged control transforms.
+  new_tag_count: Newly created tags; zero when repeated on the same rig.
+  changed: Whether tags or host flags changed.
+  persistence: Persistent scene metadata versus session settings.
+  gpu_execution_verified: Always false here; enabling override does not prove GPU assignments or performance.
+preconditions:
+- Use authored sets or explicit control identities; never tag every NURBS curve. Name/hierarchy are discovery hints only.
+- Local editable rig required for apply. Existing tag hierarchy is preserved; tag prepopulate and visibilityMode are set deliberately.
+- Controllers display flag is used by Maya2025 native createModelPanelMenu.mel and verified in 2025.3, although omitted from the published modelEditor flag list.
+idempotent: true
+statuses: [SUCCESS, ERROR]
+errors:
+  CONTROLLER_SCOPE_INVALID: Missing or ambiguous explicit identities, invalid scope or unsupported control geometry.
+  CONTROLLER_PREPARE_FAILED: Tag or runtime state could not be applied; examine rollback evidence before retry.
+recovery:
+- Inspect the returned error and current tags before retry; do not infer execution from a host option alone.
+tests:
+  contract: Authored nested set expansion, guide rejection, explicit rig scope and parameter types.
+  smoke: Maya2025.3 native tag creation and undo, whole-rig apply, saved tags and viewport filter are validated separately in PL295.
+help:
+  summary: Identify controllers from explicit rig evidence, add native tags and prepare current GPU/display settings.
+  usage: Inspect with rig_root/controller_sets; review unclassified curves; apply the same exact scope before scene save.
+  safety: Persistent tags do not force a future Maya session to use GPU. Do not embed automatic executable scripts to override user settings.
+implementation: {status: implemented}
+verification:
+  level: contract_tested
+  evidence: [tests/test_controller_tags.py]
+handler: cgi_pipeline.capabilities.maya.rig.controller_tags.adapter:execute

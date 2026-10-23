@@ -1,0 +1,33 @@
+api_id: blender.scene.node_links.inspect_many
+version: 1.0.1
+name: node_links_inspect_many
+executor: blender
+capability: scene.node_links
+operation: inspect
+stages: [modeling, lookdev, lighting]
+targets: [node_tree]
+access: read
+effects:
+  scene_read: Reads bounded links from material world or node-group trees.
+execution_modes: [local, foreground, background]
+surfaces: [blender, service]
+modes: [inspect]
+inputs:
+  items: {type: array, required: true, description: "[{owner_type=material|world|node_group, owner}]"}
+  max_items: {type: integer, default: 500, description: Maximum owners and links per owner; hard limit 2000.}
+preconditions: [Owners have node trees.]
+idempotent: true
+outputs:
+  items: Bounded source and destination node socket links per owner.
+  count: Number of returned or processed items for this action.
+  succeeded: Number of successful per-item operations.
+  failed: Number of failed per-item operations.
+  truncated: Whether the operation reached its configured result or input bound.
+statuses: [SUCCESS, PARTIAL, ERROR]
+errors: {BLENDER_SCENE_CORE_OPERATION_FAILED: Invalid owner tree or Blender context.}
+recovery: [Correct owner names or reduce max_items.]
+help: {summary: Inspect Blender node-tree links., usage: "execute_api(blender.scene.node_links.inspect_many, params={items})", scenario: Trace material world or geometry-node graphs., safety: Read-only and bounded.}
+tests: {contract: tests/test_blender_scene_core_apis.py}
+handler: cgi_pipeline.capabilities.blender.scene_core:inspect_node_links_many
+implementation: {status: implemented}
+verification: {level: contract_tested, evidence: [tests/test_blender_scene_core_apis.py]}

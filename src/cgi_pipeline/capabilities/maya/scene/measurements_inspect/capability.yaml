@@ -1,0 +1,32 @@
+api_id: maya.scene.measurements.inspect
+version: 1.0.1
+name: measurements_inspect
+executor: maya
+capability: scene.measurements
+operation: inspect
+stages: [modeling, rigging, animation]
+targets: [scene_object, measurement]
+access: read
+effects:
+  scene_read: Reads bounded world-space distances and bounding boxes without scene mutation.
+execution_modes: [local, foreground, background]
+surfaces: [maya, service]
+modes: [inspect]
+inputs:
+  items: {type: array, required: true, description: "Measurement requests: {action: distance, a, b} or {action: bounding_box, node}."}
+  max_items: {type: integer, default: 50, description: "Maximum measurement requests; hard limit 200."}
+preconditions: [Node endpoints must resolve unambiguously; point endpoints contain exactly three finite numbers., Maya pivot and bounding-box results must also contain finite numbers.]
+idempotent: true
+outputs:
+  items: Distance or world bounding-box results.
+  count: Number of returned or processed items for this action.
+  truncated: Whether requests exceeded max_items.
+  space: Always world.
+statuses: [SUCCESS, ERROR]
+errors: {MAYA_SCENE_OPERATION_FAILED: "Invalid measurement action, endpoint, node or Maya context."}
+recovery: [Use explicit long paths or literal three-number points and reduce max_items.]
+help: {summary: "Inspect bounded Maya distances and world-space bounding boxes.", usage: "execute_api(maya.scene.measurements.inspect, params={items})", scenario: "Measure controller spacing and object extents without creating scene nodes.", safety: "Read-only; creates no distanceDimension or helper nodes."}
+tests: {contract: tests/test_maya_scene_p1_batch2.py, smoke: "Foreground Maya distance and bounding-box query."}
+implementation: {status: implemented, module: maya.scene_components_measurements:inspect_measurements}
+verification: {level: live_tested, evidence: [tests/test_maya_scene_p1_batch2.py, audit/2026-08-30/api-8613cc4c04b9.json]}
+handler: cgi_pipeline.capabilities.maya.scene_components_measurements:inspect_measurements

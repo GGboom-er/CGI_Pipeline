@@ -1,110 +1,49 @@
-import time
-import os, sys
-import maya.cmds as cmds
-import maya.api.OpenMaya as om
-import maya.api.OpenMayaAnim as oma
+"""Registered receipt boundary for explicit, reusable skin-weight cleanup."""
 
-from cgi_pipeline.core.receipt import make_receipt, make_item, _sec_to_min
+import os
+import time
+
+import maya.cmds as cmds
+
+from cgi_pipeline.core.receipt import make_receipt
 
 
 def execute(payload: dict) -> dict:
-    t0 = time.time()
-    params = payload.get('parameters', {})
-    threshold = float(params.get('threshold', 0.001))
-    source_path = payload.get('source_path', '')
-
-    current_scene = cmds.file(query=True, sceneName=True) or ''
-    scene_name = os.path.basename(current_scene or source_path or 'untitled')
-
-    if source_path and not current_scene:
-        if os.path.isfile(source_path):
-            cmds.file(source_path, open=True, force=True)
-        else:
-            return make_receipt('maya_clean_skinweights', 'ERROR', t0,
-                               summary_input=scene_name,
-                               error=f'源文件不存在: {source_path}')
-
-    skin_clusters = cmds.ls(type='skinCluster') or []
-    if not skin_clusters:
-        return make_receipt('maya_clean_skinweights', 'SUCCESS', t0,
+    started = time.time()
+    params = dict(payload.get("parameters") or {})
+    scene_name = os.path.basename(cmds.file(query=True, sceneName=True) or "untitled")
+    if not params.get("skin_clusters") and not (cmds.ls(type="skinCluster") or []):
+        return make_receipt("maya_clean_skinweights", "SUCCESS", started,
+                            output={"skins": [], "changed": False},
                             summary_input=scene_name,
-                            summary_action='未找到 skinCluster，无需清理')
-
-    total_cleaned = 0
-    items = []
-
-    cmds.undoInfo(openChunk=True, chunkName='maya_clean_skinweights')
+                            summary_action="Empty scene; no skin cleanup needed")
     try:
-        for sc_name in skin_clusters:
-            step_t0 = time.time()
-            geo = cmds.skinCluster(sc_name, query=True, geometry=True)
-            if not geo:
-                continue
+        method = params.get("method", "dair_inspired")
+        if method == "dair_inspired":
+            from .dair_engine import run
+            if not params.get("solver_workdir") and payload.get("run_dir"):
+                params["solver_workdir"] = os.path.join(payload["run_dir"], "work", "skin_solver")
+        elif method == "ng_proportional":
+            from .ng_engine import run
+        else:
+            raise ValueError("method must be dair_inspired or ng_proportional")
 
-            sel = om.MSelectionList()
-            sel.add(sc_name)
-            sc_obj = sel.getDependNode(0)
-            fn_skin = oma.MFnSkinCluster(sc_obj)
-            influence_count = len(fn_skin.influenceObjects())
-
-            sel_geo = om.MSelectionList()
-            sel_geo.add(geo[0])
-            dag_path = sel_geo.getDagPath(0)
-
-            try:
-                dag_path.extendToShape()
-            except RuntimeError:
-                continue
-
-            if not dag_path.hasFn(om.MFn.kMesh):
-                continue
-
-            fn_mesh = om.MFnMesh(dag_path)
-            vert_count = fn_mesh.numVertices
-            fn_comp = om.MFnSingleIndexedComponent()
-            vert_comp = fn_comp.create(om.MFn.kMeshVertComponent)
-            fn_comp.addElements(list(range(vert_count)))
-
-            weights, _ = fn_skin.getWeights(dag_path, vert_comp)
-
-            cleaned_in_this = 0
-            new_weights = om.MDoubleArray(weights)
-
-            for v in range(vert_count):
-                base = v * influence_count
-                modified = False
-                for j in range(influence_count):
-                    idx = base + j
-                    if 0 < new_weights[idx] < threshold:
-                        new_weights[idx] = 0.0
-                        modified = True
-                if modified:
-                    cleaned_in_this += 1
-                    total = sum(new_weights[base + j] for j in range(influence_count))
-                    if total > 0:
-                        for j in range(influence_count):
-                            new_weights[base + j] /= total
-
-            if cleaned_in_this > 0:
-                influence_indices = om.MIntArray(range(influence_count))
-                fn_skin.setWeights(dag_path, vert_comp, influence_indices, new_weights)
-
-            total_cleaned += cleaned_in_this
-            items.append(make_item(
-                name=sc_name,
-                detail=f'清理 {cleaned_in_this:,}/{vert_count:,} 顶点 (阈值 {threshold})',
-                elapsed_min=_sec_to_min(time.time() - step_t0),
-            ))
-    finally:
-        cmds.undoInfo(closeChunk=True)
-
-    return make_receipt(
-        api_id='maya_clean_skinweights',
-        status='SUCCESS',
-        start_time=t0,
-        summary_input=scene_name,
-        summary_action='清理蒙皮权重噪声',
-        summary_count=len(items),
-        summary_label='skinCluster',
-        items=items,
-    )
+        output = run(params)
+        return make_receipt("maya_clean_skinweights", "SUCCESS", started,
+                            input=params, output=output, summary_input=scene_name,
+                            summary_action=method + " skin cleanup",
+                            summary_count=len(output["skins"]), summary_label="skinCluster")
+    except ValueError as exc:
+        return make_receipt("maya_clean_skinweights", "BLOCKED", started,
+                            input=params, summary_input=scene_name,
+                            error=str(exc), error_code="SKIN_CLEANUP_PRECONDITION",
+                            recovery_hint="Inspect explicit targets and the selected engine's preconditions; no automatic retry.")
+    except ImportError as exc:
+        return make_receipt("maya_clean_skinweights", "NEEDS_ATTENTION", started,
+                            input=params, error=str(exc),
+                            error_code="SKIN_CLEANUP_ENGINE_REQUIRED",
+                            recovery_hint="DAIR-inspired requires Maya NumPy and the registered external numeric runtime; ng_proportional requires loaded ngSkinTools2 2.4.0.")
+    except RuntimeError as exc:
+        return make_receipt("maya_clean_skinweights", "ERROR", started,
+                            input=params, error=str(exc), error_code="SKIN_CLEANUP_FAILED",
+                            recovery_hint="Read the rollback result before any retry; recover the saved sandbox if verification failed.")

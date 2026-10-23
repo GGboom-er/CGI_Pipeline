@@ -1,5 +1,5 @@
 api_id: maya.rig.maya_fix_shape_names
-version: 1.0.0
+version: 1.0.1
 name: maya_fix_cache_shape_names
 executor: maya
 capability: rigging.hierarchy
@@ -11,8 +11,11 @@ targets:
 - shape
 access: destructive
 effects:
-  inspect: 只读取场景或标准数据，不改变资产。
-  apply: 按 API 实现对当前任务沙盒中的场景或数据执行操作。
+  scene_read: Reads shapes, orig nodes and their connections.
+  scene_write: May force-open source_path; rewires confirmed garbage orig connections, deletes checked garbage shapes and
+    renames shape/orig nodes.
+  file_read: When context.source_path is non-empty, no current scene filename is set and the source file exists, force-opens and reads that Maya scene file.
+  host_state_write: Under the same context.source_path open condition, replaces the current scene and filename with force=True, which can discard unsaved scene changes.
 execution_modes:
 - local
 - background
@@ -32,12 +35,16 @@ preconditions:
 - 后台模式由 CGI Worker 打开或复用对应 DCC 场景。
 idempotent: false
 outputs:
-- name: scene
-  type: scene_file
-  label: 处理后场景
-- name: report
-  type: report
-  label: 修复报告 (.md)
+  target_group: 'Optional by action: target group returned by the source implementation.'
+  renamed_count: 'Optional by action: renamed count returned by the source implementation.'
+  deleted_dead_shape_count: 'Optional by action: deleted dead shape count returned
+    by the source implementation.'
+  changed_nodes: 'Optional by action: changed nodes returned by the source implementation.'
+  warning_count: 'Optional by action: warning count returned by the source implementation.'
+  warnings: 'Optional by action: warnings returned by the source implementation.'
+  summary: Optional framework operation summary; present when the adapter supplies
+    one.
+  items: Optional framework item records; present when the adapter supplies them.
 statuses:
 - SUCCESS
 - PARTIAL
@@ -56,8 +63,10 @@ help:
   summary: 规范化网格 Shape 的名称为 [模型名]Shape，将绑定或变形原始形重命名为 [模型名]ShapeOrig，并严格拔除没有任何连接的残渣死形节点。
   usage: execute_api(maya.rig.maya_fix_shape_names, params={...})
   scenario: 规范化网格 Shape 的名称为 [模型名]Shape，将绑定或变形原始形重命名为 [模型名]ShapeOrig，并严格拔除没有任何连接的残渣死形节点。
-  safety: read API 只读；write/destructive API 仅写入任务沙盒。
+  safety: 具体副作用见本契约 effects；运行上下文、路径与恢复边界见 docs/architecture/pipeline_runtime_contract_v1.md。
 tests:
   contract: api.registry loads this manifest and api.runner validates its receipt.
   smoke: 代表性 workflow 统一验收。
+implementation: {status: implemented}
+verification: {level: contract_tested, evidence: [tests/test_maya_rigging_contracts.py]}
 handler: cgi_pipeline.capabilities.maya.rig.maya_fix_shape_names.adapter:execute

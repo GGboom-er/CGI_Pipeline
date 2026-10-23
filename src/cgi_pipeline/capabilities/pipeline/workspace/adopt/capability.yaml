@@ -1,0 +1,41 @@
+api_id: pipeline.workspace.adopt
+version: 1.0.0
+executor: pipeline
+capability: pipeline.workspace
+operation: adopt
+execution_strategy: control
+stages: [pipeline]
+targets: [file, metadata]
+access: write
+effects:
+  file_write: Publishes native identity and original operation receipt after sealed inventory and complete live activity checks.
+execution_modes: [background]
+surfaces: [service]
+modes: [apply]
+inputs:
+  target_project: {type: string, required: true, description: Exact canonical target project.}
+  business_task_id: {type: string, required: true, description: Exact canonical target business task.}
+  manifest_relpath: {type: string, required: true, description: Sealed inventory path relative to the bound maintenance workspace.}
+  manifest_sha256: {type: string, required: true, description: Approved inventory SHA256.}
+  activity_relpath: {type: string, required: true, description: Fresh complete activity attestation relative to maintenance workspace.}
+  activity_sha256: {type: string, required: true, description: Approved activity SHA256.}
+preconditions: [Valid outer maintenance binding and independently approved sealed target scope.]
+idempotent: true
+outputs:
+  task_id: Original server-generated adoption operation ID.
+  binding: Native target identity and allocation receipt linked to this operation.
+  preserved_files: Original file count verified before commit.
+statuses: [SUCCESS, BLOCKED, ERROR]
+errors: {WORKSPACE_ADOPTION_CONFLICT: Existing metadata or ownership conflicts with adoption.}
+recovery: [Use get_task_result with the original control operation ID; never replay an unknown commit.]
+help:
+  summary: Adopt a sealed idle legacy workspace under an independently bound maintenance task.
+  usage: execute_api(pipeline.workspace.adopt, params={target_project,business_task_id,manifest_relpath,manifest_sha256,activity_relpath,activity_sha256})
+  scenario: Preserve original work and temp files while establishing missing native workspace identity.
+  safety: No DCC operation, service restart, broker consumption or caller-provided target path.
+tests: {contract: tests/test_workspace_adoption.py}
+handler: cgi_pipeline.capabilities.pipeline.workspace.adopt.handler:adopt
+implementation: {status: implemented}
+verification:
+  level: contract_tested
+  evidence: [tests/test_workspace_adoption.py]

@@ -1,0 +1,84 @@
+api_id: maya.asset.mesh_reduce
+version: 1.6.0
+name: 减面与兼容蒙皮合并
+executor: maya
+capability: modeling.geometry
+operation: optimize
+stages: [modeling, rigging]
+targets: [mesh, skin_weights]
+access: destructive
+effects:
+  scene_read: Reads exact UUID-guarded meshes, binding contexts, per-face materials, UV corners and full native weight rows.
+  scene_write: Creates clean reduced or combined outputs, preserves supplied source transforms by default, native skin binding and compatible visibility drivers. Explicit group.consume_inputs=true combines supplied derived inputs directly and removes them after successful readback. No scene open or save.
+  host_state_write: Restores surviving selection; requires Maya main thread and enabled native undo.
+execution_modes: [local, background, foreground]
+surfaces: [maya, service]
+modes: [inspect, apply]
+mode_binding:
+  input: mode
+  cases:
+  - {value: analyze, mode: inspect}
+  - {value: reduce, mode: apply}
+  - {value: combine, mode: apply}
+  - {value: regional, mode: apply}
+  - {value: construct, mode: apply}
+inputs:
+  entries_path:
+    type: string
+    default: ''
+    description: Optional managed JSON array of entries; mutually exclusive with nonempty entries. Avoids retransmitting large face partitions. The adapter reads the same entry schema from this file.
+  analysis_workdir:
+    type: string
+    default: ''
+    description: Optional managed numeric artifact directory. Analyze reads UUID-guarded source deform inputs, returns few face groups and creates no Maya construction nodes. Uses the existing numerical session; no second environment.
+  weight_cleanup:
+    type: object
+    default: {}
+    description: Source-first weight preparation with max_influences, threshold, neighbor_rings and neighbor_max_delta. Original skin stays untouched. Construct/regional modes require explicit options and map computed arrays onto retained source vertices before binding final outputs once. Legacy reduce mode uses temporary same-topology skins and residual transfer repair. Empty disables cleanup only in reduce/combine modes.
+  mode:
+    type: string
+    default: reduce
+    choices: [analyze, reduce, regional, construct, combine]
+    description: Reduce entries, regional partitions, native Combine Skinning groups, or construct groups by pruning source arrays before static reduction/merge and binding each final output once.
+  entries:
+    type: array
+    default: []
+    description: Analyze entries contain source, expected_uuid, explicit positive group_count; returns compact group statistics and analysis_path containing full face lists, without scene edits. Reduce entries contain source absolute transform DAG path, expected_uuid, output_name, keep_face_ratio in (0,1], preserve_skin auto/true/false. Regional entries contain source, expected_uuid, regions [{name,faces,keep_face_ratio,preserve_border,output_name}], optional quality {max_error,max_retries,retry_factor,on_exceeded,samples_per_shell}; max_error is an explicit positive scene-space distance, max_retries is 0..2 and on_exceeded is error or keep_region. Face partitions are exhaustive. Compatible sources may share output_name and are joined statically before one final skin. Multi-source BS/component-set assembly is refused. Source ranges preserve exact identity for retained vertex mappings. Sources remain. No default percentage or universal quality threshold.
+  groups:
+    type: array
+    default: []
+    description: Combine uses sources, expected_uuids, output_name, consume_inputs. Construct uses output_name and entries [{source,expected_uuid,keep_face_ratio}], requires weight_cleanup and preserves originals. Optional search mode=visual performs one Reduce per group without scoring; initial_reduction defaults 90, minimal_faces 12, and exhaustive work_groups [{name,faces,reduction,reason}] may override automatic disconnected-shell grouping. Numeric research search instead requires score_band and radius, with max_evaluations default 5. Final binding writes bounded OpenMaya blocks once per output using exact source indices. No universal score, radius or visual acceptance threshold.
+  character:
+    type: string
+    default: ''
+    description: Optional report identity; explicit output names remain authoritative.
+preconditions:
+- Visual search uses mode=visual, initial_reduction and optional exhaustive work_groups [{name,faces,reduction,reason}]; one Reduce per work group, zero score evaluations. Continuous semantic face regions are supplied by the Agent, not inferred from face-area clustering. Numeric score_band/radius search remains an explicit calibration option. Native full-mesh copies preserve source shading; reconstructed regions restore exact source flags without automatic softening.
+- Execute on Maya main thread with enabled undo and explicit UUID-guarded leaf meshes.
+- Ordinary reduce/combine requires skin output to match its own current skin input and rejects other deformers or downstream geometry consumers. Regional mode constructs from the pre-skin/base mesh and explicitly remaps supported local blendShape data while retaining original consumers. Both require valid normalized native weights, standard relative space, joint.worldMatrix and static bindPreMatrix; unsupported chains are refused.
+- Combine requires matching local visibility/display drivers, common parent, UV set names and compatible skin settings/shared bind contexts.
+idempotent: false
+outputs:
+  weights: Optional source-first weight preparation and transfer repair summaries.
+  timing_seconds: Source weight preparation, geometry construction and transfer-repair durations.
+  rows: Source/result DAG paths and UUIDs, native skinCluster, before/after counts and material/UV/history checks. Reduce exact checks compare reduced construction to clean output, not source topology. Combine checks all ordered geometry, UV corners, materials and weights.
+  transaction: Independent undo boundary and source/selection preservation evidence. Failure reports whether rollback was verified.
+statuses: [SUCCESS, PARTIAL, ERROR, BLOCKED, NEEDS_ATTENTION, TIMEOUT, CANCELLED]
+errors:
+  MESH_PROCESSING_FAILED: Preconditions, native operation or readback failed; inspect exact error and rollback verification.
+recovery:
+- Inspect target identity and protected deformation/visibility dependencies before changing strategy.
+- Never retry a failed or ambiguous operation until its rollback outcome is known.
+help:
+  summary: Reusable Maya Reduce and Combine Skinning batches with clean outputs, source preservation and loss-aware verification.
+  usage: 'execute_api(maya.asset.mesh_reduce, params={mode: reduce, entries: [...]})'
+  scenario: Independent selected-mesh reduction or deterministic Proxy Rig geometry steps; AI decides category policy outside this operation.
+  safety: Sources retained unless group.consume_inputs is explicitly true for already-derived inputs. No global delete-history or scene cleanup.
+implementation: {status: implemented}
+verification:
+  level: contract_tested
+  evidence: [tests/test_proxy_mesh_ops.py]
+tests:
+  contract: tests/test_proxy_mesh_ops.py
+  smoke: Live Maya verification belongs to the consuming workflow receipt.
+handler: cgi_pipeline.capabilities.maya.asset.mesh_reduce.adapter:execute

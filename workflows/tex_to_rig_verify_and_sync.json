@@ -1,111 +1,63 @@
 {
   "workflow_id": "tex_to_rig_verify_and_sync",
   "status": "active",
-  "name": "贴图资产 → 绑定校验 + ABC拼装 + 材质赋予 + 升版本",
-  "description": "解析资产 tex/rig 文件（支持只传资产名或显式路径）→ Blender 导出 ABC + 抽材质 → Maya 打开 rig 一次 → 层级预检与修复 → 场景内对比生成 compare_result → 按 compare_result 增量拼装 → 拼装后层级与对比验证 → 升版本。",
-  "steps": [
-    {
-      "step_id": "resolve_files",
-      "parameters": {},
-      "api_id": "pipeline.pipeline.resolve_asset_files"
-    },
-    {
-      "step_id": "export_abc",
-      "source_path": "{{outputs.resolve_files.result.source_path}}",
-      "parameters": {
-        "abc_path": "{{input.info_dir}}/{{outputs.resolve_files.result.source_stem}}.abc",
-        "cache_group": "{{config.stages.tex.geom_roots.0}}"
+  "runtime_lifecycle": "temporary",
+  "resident_when": [
+    {"mode": "geometry", "save_result": false},
+    {"mode": "geometry_materials", "save_result": false}
+  ],
+  "name": "贴图资产 → 绑定校验 / 几何同步 / 几何材质同步",
+  "description": "默认 check 仅解析、导出 ABC、对比；geometry 同步几何；geometry_materials 加入材质提取与赋予。同步后仅 save_result=true 保存；false 保留工作区中的当前场景修改，不将暂存文件称为已保存结果。",
+  "parameters": {
+    "mode": {"type": "string", "default": "check", "enum": ["check", "geometry", "geometry_materials"], "description": "校验、几何同步或几何材质同步。"},
+    "save_result": {"type": "boolean", "default": false, "description": "同步验证后保存结果；check 模式不可为 true。"}
+  },
+  "reject": [{"when": {"mode": "check", "save_result": true}, "error": "mode=check does not allow save_result=true"}],
+  "steps_include": {
+    "fragment": "fragments/tex_to_rig_geometry.json",
+    "variants": [
+      {
+        "when": {"mode": "check"},
+        "select": [
+          "resolve_files",
+          "export_abc",
+          "check_hierarchy_pre",
+          "fix_hierarchy_pre",
+          "compare_pre"
+        ],
+        "overrides": {
+          "compare_pre": {
+            "parameters": {
+              "output_path": "{{input.info_dir}}/{{outputs.resolve_files.result.source_stem}}_vs_{{outputs.resolve_files.result.rig_stem}}_compare_result.json"
+            }
+          }
+        }
       },
-      "api_id": "blender.asset.blender_export_abc"
-    },
-    {
-      "step_id": "extract_materials",
-      "parameters": {
-        "output_path": "{{input.info_dir}}/{{outputs.resolve_files.result.source_stem}}_materials.json",
-        "cache_group": "{{config.stages.tex.geom_roots.0}}"
-      },
-      "api_id": "blender.asset.blender_extract_materials"
-    },
-    {
-      "step_id": "check_hierarchy_pre",
-      "source_path": "{{outputs.resolve_files.result.rig_path}}",
-      "parameters": {
-        "stage": "rig",
-        "phase": "pre_sync",
-        "block_on_fail": false,
-        "block_extra_top_nodes": false
-      },
-      "api_id": "maya.rig.maya_check_asset_hierarchy"
-    },
-    {
-      "step_id": "fix_hierarchy_pre",
-      "parameters": {
-        "check_result": "{{outputs.check_hierarchy_pre.result}}",
-        "delete_extra_top_nodes": true
-      },
-      "api_id": "maya.rig.maya_fix_asset_hierarchy"
-    },
-    {
-      "step_id": "compare_pre",
-      "parameters": {
-        "input_source": "{{outputs.export_abc.output_path}}",
-        "output_path": "{{input.info_dir}}/{{outputs.resolve_files.result.rig_stem}}_pre_compare_result.json",
-        "cache_group": "{{outputs.fix_hierarchy_pre.result.active_rig_root}};{{config.stages.rig.geom_roots.0}}",
-        "label_source": "tex",
-        "label_target": "rig"
-      },
-      "api_id": "maya.asset.maya_compare_asset_in_scene"
-    },
-    {
-      "step_id": "sync",
-      "source_path": "{{outputs.resolve_files.result.rig_path}}",
-      "parameters": {
-        "source_abc": "{{outputs.export_abc.output_path}}",
-        "compare_result": "{{outputs.compare_pre.compare_result}}",
-        "cache_group": "{{outputs.fix_hierarchy_pre.result.active_rig_root}};{{config.stages.rig.geom_roots.0}}"
-      },
-      "api_id": "maya.rig.maya_sync_rig_incremental"
-    },
-    {
-      "step_id": "check_hierarchy_post",
-      "parameters": {
-        "stage": "rig",
-        "phase": "post_sync",
-        "block_on_fail": true,
-        "block_extra_top_nodes": false
-      },
-      "api_id": "maya.rig.maya_check_asset_hierarchy"
-    },
-    {
-      "step_id": "fix_shapes",
-      "parameters": {
-        "target_group": "{{config.stages.rig.geom_roots.0}}"
-      },
-      "api_id": "maya.rig.maya_fix_shape_names"
-    },
-    {
-      "step_id": "assign_materials",
-      "parameters": {
-        "materials_path": "{{outputs.extract_materials.output_path}}",
-        "target_group": "{{config.stages.rig.geom_roots.0}}"
-      },
-      "api_id": "maya.asset.maya_apply_materials"
-    },
-    {
-      "step_id": "verify",
-      "parameters": {
-        "input_source": "{{outputs.export_abc.output_path}}",
-        "output_path": "{{input.info_dir}}/{{outputs.resolve_files.result.rig_stem}}_post_compare_result.json",
-        "cache_group": "{{config.stages.rig.geom_roots.0}}",
-        "label_source": "tex",
-        "label_target": "rig_post"
-      },
-      "api_id": "maya.asset.maya_compare_asset_in_scene"
-    },
-    {
-      "step_id": "save",
-      "parameters": {},
-      "api_id": "maya.asset.save_scene"
-    }
-  ]
+      {
+        "when": {"mode": "geometry_materials"},
+        "insert_after": {
+      "export_abc": [
+        {
+          "step_id": "extract_materials",
+          "parameters": {
+            "output_path": "{{input.info_dir}}/{{outputs.resolve_files.result.source_stem}}_materials.json",
+            "cache_group": "{{config.stages.tex.geom_roots.0}}"
+          },
+          "api_id": "blender.asset.blender_extract_materials"
+        }
+      ],
+      "fix_shapes": [
+        {
+          "step_id": "assign_materials",
+          "parameters": {
+            "materials_path": "{{outputs.extract_materials.output_path}}",
+            "target_group": "{{outputs.fix_hierarchy_pre.result.active_rig_root}}"
+          },
+          "api_id": "maya.asset.maya_apply_materials"
+        }
+      ]
+        }
+      }
+    ]
+  }
 }

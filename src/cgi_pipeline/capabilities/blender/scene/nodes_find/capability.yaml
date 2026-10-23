@@ -1,0 +1,32 @@
+api_id: blender.scene.nodes.find
+version: 1.0.1
+name: nodes_find
+executor: blender
+capability: scene.nodes
+operation: find
+stages: [modeling, rigging, animation]
+targets: [scene_object]
+access: read
+effects:
+  scene_read: Finds bounded Blender objects by name and type.
+execution_modes: [local, foreground, background]
+surfaces: [blender, service]
+modes: [inspect]
+inputs:
+  patterns: {type: array, default: ['*'], description: Object name glob patterns.}
+  node_type: {type: string, default: '', description: Optional Blender object type.}
+  max_items: {type: integer, default: 200, description: Maximum results; hard limit 2000.}
+preconditions: [Runs in one Blender scene context.]
+idempotent: true
+outputs:
+  items: Object names types and statuses.
+  count: Number of returned or processed items for this action.
+  truncated: Whether matches exceeded max_items.
+statuses: [SUCCESS, ERROR]
+errors: {BLENDER_SCENE_CORE_OPERATION_FAILED: Invalid query or Blender context.}
+recovery: [Correct the query or reduce max_items.]
+help: {summary: Find Blender objects by bounded name patterns and type., usage: "execute_api(blender.scene.nodes.find, params={patterns, node_type})", scenario: Discover scene objects before edits., safety: Read-only and bounded.}
+tests: {contract: tests/test_blender_scene_core_apis.py}
+handler: cgi_pipeline.capabilities.blender.scene_core:find_nodes
+implementation: {status: implemented}
+verification: {level: contract_tested, evidence: [tests/test_blender_scene_core_apis.py]}

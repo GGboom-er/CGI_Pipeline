@@ -1,0 +1,42 @@
+api_id: maya.rig.skin.bind
+version: 1.0.1
+executor: maya
+capability: rigging.skin
+operation: bind
+stages: [rigging]
+targets:
+- skin_cluster
+- mesh
+- joint
+access: destructive
+effects:
+  scene_write: 'action=bind: Creates one skinCluster. action=unbind: Removes one skinCluster deformation.'
+execution_modes: [local, foreground, background]
+surfaces: [maya, service]
+modes: [apply]
+inputs:
+  action: {type: string, required: true, choices: [bind, unbind], description: Binding action.}
+  mesh: {type: string, required: true, description: Mesh transform or non-intermediate mesh shape.}
+  joints: {type: array, default: [], description: Unique joint influences required by bind.}
+  max_influences: {type: integer, default: 4, description: Maximum influences per vertex from 1 to 256.}
+  bind_method: {type: integer, default: 0, choices: [0, 1, 2], description: Maya bind method; method 3 is unavailable until geomBind is implemented.}
+  name: {type: string, default: '', description: Optional skinCluster name for bind.}
+  skin_cluster: {type: string, default: '', description: Optional explicit skinCluster for unbind.}
+preconditions: [Bind requires an unbound mesh and 1 to 256 unique joints., Unbind requires exactly one resolvable skinCluster.]
+idempotent: false
+outputs:
+  action: Executed action.
+  mesh: Resolved mesh transform.
+  shape: Resolved mesh shape.
+  skin_cluster: Created or removed cluster.
+  influences: Resolved influences.
+  max_influences: 'Optional by action: max influences returned by the source implementation.'
+  bind_method: 'Optional by action: bind method returned by the source implementation.'
+statuses: [SUCCESS, ERROR]
+errors: {MAYA_SKIN_OPERATION_FAILED: "Mesh, influences, existing binding, or bind options are invalid."}
+recovery: [Inspect the mesh with maya.rig.skin.query_weights or retry with explicit long paths.]
+help: {summary: Bind or unbind one Maya mesh with explicit joints and bounded options., usage: "execute_api(maya.rig.skin.bind, params={action, mesh, joints})", scenario: Build or remove native Maya skin deformation without ad hoc code execution., safety: The scene mutation uses one Maya undo chunk.}
+tests: {contract: tests/test_maya_p1_apis.py, smoke: Foreground bind and undo on disposable geometry.}
+implementation: {status: implemented}
+verification: {level: contract_tested, evidence: [tests/test_maya_p1_apis.py]}
+handler: cgi_pipeline.capabilities.maya.rig.skin.core:bind_skin

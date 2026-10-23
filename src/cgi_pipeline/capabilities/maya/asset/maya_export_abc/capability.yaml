@@ -1,5 +1,5 @@
 api_id: maya.asset.maya_export_abc
-version: 1.0.0
+version: 1.0.1
 name: Maya 导出 ABC
 executor: maya
 capability: asset.exchange
@@ -13,8 +13,9 @@ targets:
 - alembic
 access: write
 effects:
-  inspect: 只读取场景或标准数据，不改变资产。
-  apply: 按 API 实现对当前任务沙盒中的场景或数据执行操作。
+  scene_read: Reads the explicit export scope.
+  host_state_write: Loads the AbcExport plugin when needed.
+  file_write: Writes the requested Alembic archive.
 execution_modes:
 - local
 - background
@@ -44,9 +45,11 @@ preconditions:
 - 后台模式由 CGI Worker 打开或复用对应 DCC 场景。
 idempotent: false
 outputs:
-- name: abc
-  type: abc_file
-  label: 导出的 .abc
+  output_path: Actual operation output path; present only when this branch produces
+    or identifies a file.
+  summary: Optional framework operation summary; present when the adapter supplies
+    one.
+  items: Optional framework item records; present when the adapter supplies them.
 statuses:
 - SUCCESS
 - PARTIAL
@@ -65,8 +68,10 @@ help:
   summary: 将当前 Maya 场景导出为 Alembic (.abc)，含 UV、FaceSet、可见性，Ogawa 格式。不保留 skinCluster。
   usage: execute_api(maya.asset.maya_export_abc, params={...})
   scenario: 将当前 Maya 场景导出为 Alembic (.abc)，含 UV、FaceSet、可见性，Ogawa 格式。不保留 skinCluster。
-  safety: read API 只读；write/destructive API 仅写入任务沙盒。
+  safety: 具体副作用见本契约 effects；运行上下文、路径与恢复边界见 docs/architecture/pipeline_runtime_contract_v1.md。
 tests:
   contract: api.registry loads this manifest and api.runner validates its receipt.
   smoke: 代表性 workflow 统一验收。
+implementation: {status: implemented, module: maya_export_abc.maya_export_abc}
+verification: {level: contract_tested, evidence: [tests/test_maya_asset_remaining_contracts.py]}
 handler: cgi_pipeline.capabilities.maya.asset.maya_export_abc.adapter:execute

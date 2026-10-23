@@ -38,19 +38,18 @@ class MayaFaceOrderTests(unittest.TestCase):
         ]
         self.assertEqual(maya_normals, expected)
 
-    def test_missing_or_mismatched_normals_fall_back_without_failure(self):
+    def test_missing_normals_are_allowed_and_mismatched_authored_normals_fail(self):
         face_counts = [3]
         face_indices = [0, 1, 2]
 
         _faces, _uvs, missing = _convert_face_order_for_maya(
             face_counts, face_indices, [], []
         )
-        _faces, _uvs, mismatched = _convert_face_order_for_maya(
-            face_counts, face_indices, [], [0.0, 1.0, 0.0]
-        )
-
         self.assertEqual(missing, [])
-        self.assertEqual(mismatched, [])
+        with self.assertRaisesRegex(ValueError, 'corner'):
+            _convert_face_order_for_maya(
+                face_counts, face_indices, [], [0.0, 1.0, 0.0]
+            )
 
 
 if __name__ == "__main__":

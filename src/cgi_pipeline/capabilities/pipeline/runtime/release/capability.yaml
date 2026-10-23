@@ -1,0 +1,59 @@
+api_id: pipeline.runtime.release
+version: 1.0.1
+executor: pipeline
+capability: pipeline.runtime
+operation: release
+execution_strategy: control
+stages: [pipeline]
+targets: [host_runtime]
+access: destructive
+effects:
+  file_write: Updates exact runtime ownership and operation outcome metadata; explicit dead-owner discard preserves a LOST workspace binding when host publication is complete.
+  host_state_write: Default release reads fresh dirty/path state through registered host execution and shuts down owned warm hosts. Explicit discard directly stops the exact-owned tree and abandons unsaved scenes, including a worker blocked by an earlier read-only control query.
+execution_modes: [background]
+surfaces: [service]
+modes: [apply]
+inputs:
+  project: {type: string, required: true, description: Exact project key owning the workspace.}
+  workspace_id: {type: string, required: true, description: Exact workspace whose runtime will be released.}
+  runtime_id: {type: string, required: true, description: Exact runtime identity returned by status or execution.}
+  generation: {type: string, required: true, description: Exact runtime generation returned by status or execution.}
+  discard: {type: boolean, default: false, description: Explicitly discard owned unsaved/unknown host state; does not cancel live active or pending work.}
+preconditions:
+- Live active or pending work refuses release even with discard. Default release requires fresh confirmed clean hosts.
+- Blender background native dirty flags do not establish scene cleanliness. Fresh headless observations report dirty and clean_state UNKNOWN, preserve native_dirty, and refuse default release even after a successful save action.
+- Explicit discard skips another queued host query after draining, so a previous timed-out read-only control query cannot block authorized exact-owned process cleanup.
+- Unknown RPC or process stop outcome remains DRAINING. Incomplete host launch publication retains the slot even after exact worker death.
+- Dead-owner recovery requires explicit discard and confirmed identity; abandoned operations become NEEDS_ATTENTION and lost workspace binding requires explicit open, with no write replay.
+idempotent: false
+outputs:
+  runtime: Exact runtime identity whose control lifecycle was inspected.
+  released: Whether the owned physical resource was confirmed stopped and removed from active slots.
+  recovered: Whether confirmed dead-owner recovery retained a LOST workspace binding.
+  binding_state: LOST after dead-owner recovery; a later continue refuses until explicit open.
+  hosts: Fresh host dirty/path observations when the live worker responded. Background Blender reports dirty UNKNOWN, clean_state UNKNOWN, dirty_basis native_notifier_unconsumed and the unmodified native_dirty bool; a successful file save never authorizes release or discard.
+  discarded: Whether a live runtime was explicitly discarded without another host-query RPC.
+statuses: [SUCCESS, BLOCKED, NEEDS_ATTENTION, ERROR]
+errors:
+  RUNTIME_BUSY: Pending or active work prevents live release.
+  RUNTIME_CONTROL_BUSY: Another control operation owns the slot release lock.
+  RUNTIME_GENERATION_MISMATCH: Requested workspace runtime identity is stale or foreign.
+  RUNTIME_DISCARD_REQUIRED: Confirmed dead-owner recovery requires explicit discard.
+  RUNTIME_HOST_DIRTY: Dirty or UNKNOWN host state refuses default release.
+  RUNTIME_CONTROL_UNKNOWN: RPC, identity or stop outcome remains unknown; slot remains occupied.
+  RUNTIME_PUBLICATION_UNKNOWN: Host launch intents or identities are incomplete; slot remains occupied.
+  RUNTIME_CONTROL_FAILED: Runtime control could not establish its required preconditions.
+recovery:
+- Inspect runtime status, actual saved outputs and exact generation. Unknown outcomes retain DRAINING; do not replay prior writes.
+- Explicit discard permits only exact-owned recovery, and cannot bypass live active work or incomplete launch publication.
+help:
+  summary: Safely release an exact workspace runtime after fresh dirty checks, or explicitly recover a confirmed dead owner without replaying writes.
+  usage: execute_api(pipeline.runtime.release, params={project,workspace_id,runtime_id,generation,discard})
+  scenario: Save owned scenes then release capacity; explicitly discard to recover a confirmed dead owner while preserving LOST binding and unknown operation outcomes.
+  safety: Per-slot nonblocking lifecycle lock, generation fencing, fresh serial host checks and exact-owned process stop; no global cleanup.
+tests: {contract: tests/test_runtime_control.py}
+handler: cgi_pipeline.capabilities.pipeline.runtime.handler:release
+implementation: {status: implemented}
+verification:
+  level: live_tested
+  evidence: [tests/test_runtime_control.py, projects/default/PL274/work/live_parallel/20261015_real_02/cleanup_ACD_20261015_132003_95e0ad/summary.json, projects/default/PL274/work/ysj_workflow_exit_proof.json]

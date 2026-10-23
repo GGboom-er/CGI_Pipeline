@@ -1,0 +1,33 @@
+api_id: blender.scene.hierarchy.edit_many
+version: 1.0.1
+name: hierarchy_edit_many
+executor: blender
+capability: scene.hierarchy
+operation: edit
+stages: [modeling, rigging, animation]
+targets: [scene_object]
+access: write
+effects:
+  scene_write: Parents or unparents bounded Blender objects.
+execution_modes: [local, foreground, background]
+surfaces: [blender, service]
+modes: [apply]
+inputs:
+  items: {type: array, required: true, description: "[{node, action=parent|unparent, parent?, preserve_world?=true}]"}
+  max_items: {type: integer, default: 200, description: Maximum edits; hard limit 2000.}
+preconditions: [Objects and named parents exist.]
+idempotent: false
+outputs:
+  items: Per-object parent before and after.
+  count: Number of returned or processed items for this action.
+  succeeded: Number of successful per-item operations.
+  failed: Number of failed per-item operations.
+  truncated: Whether the operation reached its configured result or input bound.
+statuses: [SUCCESS, PARTIAL, ERROR]
+errors: {BLENDER_SCENE_CORE_OPERATION_FAILED: Invalid object action parent or context.}
+recovery: [Undo the host transaction or restore prior parents.]
+help: {summary: Edit many Blender object hierarchy relationships., usage: "execute_api(blender.scene.hierarchy.edit_many, params={items})", scenario: Parent or unparent known objects., safety: Writes parent relationships.}
+tests: {contract: tests/test_blender_scene_core_apis.py}
+handler: cgi_pipeline.capabilities.blender.scene_core:edit_hierarchy_many
+implementation: {status: implemented}
+verification: {level: contract_tested, evidence: [tests/test_blender_scene_core_apis.py]}

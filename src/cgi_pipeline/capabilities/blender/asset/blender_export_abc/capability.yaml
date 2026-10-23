@@ -1,5 +1,5 @@
 api_id: blender.asset.blender_export_abc
-version: 1.0.0
+version: 1.0.1
 name: blender_export_cache_to_abc
 executor: blender
 capability: asset.exchange
@@ -13,8 +13,10 @@ targets:
 - alembic
 access: write
 effects:
-  inspect: 只读取场景或标准数据，不改变资产。
-  apply: 按 API 实现对当前任务沙盒中的场景或数据执行操作。
+  scene_read: Reads the export group and its descendants.
+  scene_write: Unhides the scene, changes selection and disables mesh modifiers; the current implementation does not restore
+    these states.
+  file_write: Exports the requested Alembic archive.
 execution_modes:
 - local
 - background
@@ -38,9 +40,12 @@ preconditions:
 - 后台模式由 CGI Worker 打开或复用对应 DCC 场景。
 idempotent: false
 outputs:
-- name: abc
-  type: abc_file
-  label: 导出的 .abc
+  output_path: Actual operation output path; present only when this branch produces
+    or identifies a file.
+  result: Underlying operation result; its internal fields belong to that operation.
+  summary: Optional framework operation summary; present when the adapter supplies
+    one.
+  items: Optional framework item records; present when the adapter supplies them.
 statuses:
 - SUCCESS
 - PARTIAL
@@ -59,8 +64,14 @@ help:
   summary: 选中指定几何根组，禁用修改器，导出 Alembic (.abc)。只管 ABC 几何导出，不生成 _info.json 或 _materials.json。
   usage: execute_api(blender.asset.blender_export_abc, params={...})
   scenario: 选中指定几何根组，禁用修改器，导出 Alembic (.abc)。只管 ABC 几何导出，不生成 _info.json 或 _materials.json。
-  safety: read API 只读；write/destructive API 仅写入任务沙盒。
+  safety: 具体副作用见本契约 effects；运行上下文、路径与恢复边界见 docs/architecture/pipeline_runtime_contract_v1.md。
 tests:
   contract: api.registry loads this manifest and api.runner validates its receipt.
   smoke: 代表性 workflow 统一验收。
+implementation:
+  status: implemented
+verification:
+  level: live_tested
+  evidence:
+  - audit/wf-96a64ab7.json
 handler: cgi_pipeline.capabilities.blender.asset.blender_export_abc.adapter:execute

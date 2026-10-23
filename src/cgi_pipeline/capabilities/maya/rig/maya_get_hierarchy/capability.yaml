@@ -1,5 +1,5 @@
 api_id: maya.rig.maya_get_hierarchy
-version: 1.0.0
+version: 1.0.2
 name: maya_get_hierarchy
 executor: maya
 capability: rigging.hierarchy
@@ -8,10 +8,9 @@ stages:
 - rigging
 targets:
 - hierarchy
-access: write
+access: read
 effects:
-  inspect: 只读取场景或标准数据，不改变资产。
-  apply: 按 API 实现对当前任务沙盒中的场景或数据执行操作。
+  scene_read: Reads bounded DAG identities, parents, children and node types.
 execution_modes:
 - local
 - background
@@ -20,13 +19,31 @@ surfaces:
 - maya
 - service
 modes:
-- apply
-inputs: {}
+- inspect
+inputs:
+  root:
+    type: string
+    default: "|"
+    description: 根节点长路径；默认读取场景顶层。
+  depth:
+    type: integer
+    default: -1
+    description: 相对根深度；-1 表示不限制。
+  include_shapes:
+    type: boolean
+    default: false
+    description: 是否包含 shape 节点；false 仍保留 joint 等 transform 派生节点。
 preconditions:
 - 项目配置通过统一 config/{project}_config.json 接口加载。
 - 后台模式由 CGI Worker 打开或复用对应 DCC 场景。
-idempotent: false
-outputs: {}
+idempotent: true
+outputs:
+  root: 'Optional by action: root returned by the source implementation.'
+  depth: 'Optional by action: depth returned by the source implementation.'
+  include_shapes: 'Optional by action: include shapes returned by the source implementation.'
+  nodes: 'Optional by action: nodes returned by the source implementation.'
+  summary: Optional framework operation summary; present when the adapter supplies
+    one.
 statuses:
 - SUCCESS
 - PARTIAL
@@ -37,7 +54,6 @@ statuses:
 - CANCELLED
 errors:
   API_OPERATION_ERROR: 操作执行失败，详见报告。
-  API_IMPLEMENTATION_MISSING: 目录存在但没有本地实现。
 recovery:
 - 读取 api_help 获取参数、前置条件和输出。
 - 失败时检查任务报告中的错误与恢复建议。
@@ -45,8 +61,13 @@ help:
   summary: maya_get_hierarchy
   usage: execute_api(maya.rig.maya_get_hierarchy, params={...})
   scenario: maya_get_hierarchy
-  safety: read API 只读；write/destructive API 仅写入任务沙盒。
+  safety: 具体副作用见本契约 effects；运行上下文、路径与恢复边界见 docs/architecture/pipeline_runtime_contract_v1.md。
 tests:
   contract: api.registry loads this manifest and api.runner validates its receipt.
   smoke: 代表性 workflow 统一验收。
+implementation: {status: implemented}
+verification:
+  level: live_tested
+  scope: Maya2025 isolated background resident; transform/joint chain, depth0/1, include_shapes false/true and unknown root. Not UFE or large-scene validation.
+  evidence: [tests/test_api_catalog_additions.py, tests/test_maya_rigging_contracts.py, projects/default/PL294/outputs/final_observation_v1/ACCEPTANCE.md, projects/default/PL294/work/tests/p8_final_observation_v1/runtime_extended_evidence.json]
 handler: cgi_pipeline.capabilities.maya.rig.maya_get_hierarchy.adapter:execute

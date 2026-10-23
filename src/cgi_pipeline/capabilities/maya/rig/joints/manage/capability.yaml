@@ -1,0 +1,34 @@
+api_id: maya.rig.joints.manage
+version: 1.0.0
+name: joints_manage
+executor: maya
+capability: rigging.joints
+operation: manage
+stages: [rigging]
+targets: [joint]
+access: write
+effects:
+  scene_write: Creates joints or edits joint orientation, rotation limits, and mirrored joint chains in one undo transaction.
+execution_modes: [local, foreground, background]
+surfaces: [maya, service]
+modes: [apply]
+inputs:
+  items: {type: array, required: true, description: "Canonical actions: create, set_orient, set_limit, or mirror."}
+  max_items: {type: integer, default: 100, description: "Maximum actions; exceeding it fails before mutation, hard limit 500."}
+preconditions:
+- Existing joints must use unambiguous long paths.
+- Mirror requires distinct non-empty leaf-name search/replace literals without DAG or namespace separators.
+idempotent: false
+outputs: {items: "Ordered per-action results with long paths.", count: "Number of completed actions."}
+statuses: [SUCCESS, ERROR]
+errors: {MAYA_RIG_JOINT_MANAGE_FAILED: "Validation or Maya joint operation failed and the transaction was rolled back."}
+recovery: [Correct the failing action, use long paths, and retry the complete transaction.]
+help:
+  summary: Run bounded canonical joint create, orient, limit, and mirror actions in one undo chunk.
+  usage: "execute_api(maya.rig.joints.manage, params={items, max_items})"
+  scenario: Build or edit a small joint chain without selection-dependent Maya commands.
+  safety: Fail-loud and atomic; input above max_items is rejected before opening the undo chunk.
+tests: {contract: tests/test_maya_rig_p1_batch2.py, smoke: Maya 2025.3 foreground create/edit/mirror then undo.}
+implementation: {status: implemented}
+verification: {level: contract_tested, evidence: [tests/test_maya_rig_p1_batch2.py]}
+handler: cgi_pipeline.capabilities.maya.rig.rig_p1:manage_joints

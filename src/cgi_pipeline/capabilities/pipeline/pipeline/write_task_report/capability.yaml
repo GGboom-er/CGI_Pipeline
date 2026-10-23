@@ -1,5 +1,5 @@
 api_id: pipeline.pipeline.write_task_report
-version: 1.0.0
+version: 1.0.1
 name: 任务汇总报告
 executor: pipeline
 capability: pipeline.report
@@ -11,8 +11,9 @@ targets:
 - audit
 access: write
 effects:
-  inspect: 只读取场景或标准数据，不改变资产。
-  apply: 按 API 实现对当前任务沙盒中的场景或数据执行操作。
+  file_read: Reads task audit entries.
+  service_read: May query Redis to locate the task run directory.
+  file_write: Creates the destination directory and writes the requested business REPORT.md.
 execution_modes:
 - background
 surfaces:
@@ -46,9 +47,12 @@ preconditions:
 - 后台模式由 CGI Worker 打开或复用对应 DCC 场景。
 idempotent: false
 outputs:
-- name: report
-  type: report
-  label: 任务汇总 .md
+  output_path: Actual operation output path; present only when this branch produces
+    or identifies a file.
+  result: Underlying operation result; its internal fields belong to that operation.
+  summary: Optional framework operation summary; present when the adapter supplies
+    one.
+  items: Optional framework item records; present when the adapter supplies them.
 statuses:
 - SUCCESS
 - PARTIAL
@@ -67,8 +71,14 @@ help:
   summary: 从 audit JSONL 重建/修复统一 REPORT.md。pipeline API 不开 DCC，主进程内直接执行。运行中报告由 cgi_pipeline.core.task_report_writer 负责。
   usage: execute_api(pipeline.pipeline.write_task_report, params={...})
   scenario: 从 audit JSONL 重建/修复统一 REPORT.md。pipeline API 不开 DCC，主进程内直接执行。运行中报告由 cgi_pipeline.core.task_report_writer 负责。
-  safety: read API 只读；write/destructive API 仅写入任务沙盒。
+  safety: 具体副作用见本契约 effects；运行上下文、路径与恢复边界见 docs/architecture/pipeline_runtime_contract_v1.md。
 tests:
   contract: api.registry loads this manifest and api.runner validates its receipt.
   smoke: 代表性 workflow 统一验收。
+implementation:
+  status: implemented
+verification:
+  level: live_tested
+  evidence:
+  - audit/api-1cf3370c1168.json
 handler: cgi_pipeline.capabilities.pipeline.pipeline.write_task_report.adapter:execute

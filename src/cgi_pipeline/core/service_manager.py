@@ -11,6 +11,7 @@ import json
 import subprocess
 import socket
 import signal
+import logging
 from pathlib import Path
 
 from cgi_pipeline.core.bootstrap import cfg as _cfg
@@ -18,6 +19,7 @@ from cgi_pipeline.core.bootstrap import cfg as _cfg
 PROJECT_ROOT = Path(_cfg.PROJECT_ROOT)
 RUNTIME_DIR = PROJECT_ROOT / 'runtime'
 LOGS_DIR = PROJECT_ROOT / 'logs'
+_LOGGER = logging.getLogger(__name__)
 
 # Celery 只有一个 CGI Worker。DCC 名称保留为调用兼容别名，不能再映射到
 # 不同的 Celery 进程或队列。
@@ -38,9 +40,107 @@ DEFAULT_HEARTBEAT_TIMEOUT_SEC = 5.0
 _managed_procs = []
 
 
+class _DetachedProcess:
+    """The small process interface used by explicit runtime shutdown."""
+
+    def __init__(self, pid):
+        import psutil
+        self.pid = pid
+        self._process = psutil.Process(pid)
+
+    def poll(self):
+        return None if self._process.is_running() else 0
+
+    def kill(self):
+        self._process.kill()
+
+
+def _spawn_shared_process(command, *, cwd, env=None):
+    """Start runtime services outside a client's process group or Windows Job.
+
+    Some STDIO clients put their server in a non-breakaway kill-on-close Job.
+    Windows WMI provides the OS-owned launch boundary in that case; it receives
+    environment variables directly, never via a shell or a temporary secret file.
+    Failure is propagated instead of launching a service the client can kill.
+    """
+    options = dict(cwd=str(cwd), env=env, stdin=subprocess.DEVNULL,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if sys.platform != 'win32':
+        return subprocess.Popen(command, start_new_session=True, **options)
+    try:
+        return subprocess.Popen(command, creationflags=(subprocess.CREATE_NO_WINDOW
+                                | subprocess.DETACHED_PROCESS
+                                | subprocess.CREATE_BREAKAWAY_FROM_JOB), **options)
+    except OSError as exc:
+        if getattr(exc, 'winerror', None) != 5:
+            raise
+    import pythoncom
+    import win32com.client
+    pythoncom.CoInitialize()
+    service = startup = process_class = arguments = result = None
+    try:
+        service = win32com.client.GetObject(
+            r'winmgmts:{impersonationLevel=impersonate}!\\.\root\cimv2')
+        startup = service.Get('Win32_ProcessStartup').SpawnInstance_()
+        startup.ShowWindow = 0
+        # WMI cannot supply DEVNULL handles. A hidden console provides valid
+        # standard streams to console programs (Celery requires them).
+        startup.CreateFlags = subprocess.CREATE_NEW_CONSOLE | 0x400  # Unicode env
+        startup.EnvironmentVariables = [f'{key}={value}' for key, value in
+                                        (os.environ if env is None else env).items()]
+        process_class = service.Get('Win32_Process')
+        arguments = process_class.Methods_('Create').InParameters.SpawnInstance_()
+        arguments.CommandLine = subprocess.list2cmdline(command)
+        arguments.CurrentDirectory = str(cwd)
+        arguments.ProcessStartupInformation = startup
+        result = process_class.ExecMethod_('Create', arguments)
+        if result.ReturnValue != 0:
+            raise OSError(f'Independent runtime launch failed (WMI code {result.ReturnValue})')
+        return _DetachedProcess(int(result.ProcessId))
+    finally:
+        result = arguments = process_class = startup = service = None
+        pythoncom.CoUninitialize()
+
+
 def _worker_owner_path() -> Path:
     """Return the HTTP process record for the canonical Worker owner."""
     return RUNTIME_DIR / 'worker_cgi.owner.json'
+
+
+def share_worker_runtime() -> None:
+    """Retire a legacy HTTP-only shutdown claim without stopping its Worker.
+
+    Keep the old record as migration evidence. A still-running old HTTP server
+    also reads this file before cleanup and will no longer own the runtime.
+    New frontends never claim exclusive shutdown rights.
+    """
+    path = _worker_owner_path()
+    try:
+        record = json.loads(path.read_text(encoding='utf-8'))
+    except FileNotFoundError:
+        return
+    except (OSError, ValueError) as exc:
+        _LOGGER.warning('Cannot read legacy Worker ownership record: %s', exc)
+        return
+    if not isinstance(record, dict):
+        return
+    if record.get('scope') == 'shared':
+        return
+    shared = {'scope': 'shared', 'previous_owner': record}
+    temporary = path.with_name(f'{path.name}.{os.getpid()}.tmp')
+    temporary.write_text(json.dumps(shared), encoding='utf-8')
+    os.replace(temporary, path)
+
+
+def _process_create_time(pid: int) -> float | None:
+    """Return a process start timestamp for PID-reuse-safe ownership checks."""
+    try:
+        import psutil
+        return float(psutil.Process(pid).create_time())
+    except (ImportError, ValueError, TypeError):
+        return None
+    except Exception:
+        return None
 
 
 def claim_worker_owner(owner_pid: int) -> None:
@@ -50,18 +150,39 @@ def claim_worker_owner(owner_pid: int) -> None:
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
     path = _worker_owner_path()
     temporary = path.with_name(f'{path.name}.{os.getpid()}.tmp')
-    temporary.write_text(json.dumps({'owner_pid': owner_pid}), encoding='utf-8')
+    record = {'owner_pid': owner_pid}
+    owner_create_time = _process_create_time(owner_pid)
+    if owner_create_time is not None:
+        record['owner_create_time'] = owner_create_time
+    temporary.write_text(json.dumps(record), encoding='utf-8')
     os.replace(temporary, path)
 
 
 def get_worker_owner() -> int | None:
-    """Return the current HTTP Worker owner PID when a valid record exists."""
+    """Return the live HTTP Worker owner PID, discarding stale ownership."""
+    path = _worker_owner_path()
     try:
-        record = json.loads(_worker_owner_path().read_text(encoding='utf-8'))
+        record = json.loads(path.read_text(encoding='utf-8'))
         owner_pid = int(record.get('owner_pid'))
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
         return None
-    return owner_pid if owner_pid > 0 else None
+    if owner_pid <= 0 or not _is_pid_alive(owner_pid):
+        path.unlink(missing_ok=True)
+        return None
+    recorded_create_time = record.get('owner_create_time')
+    if recorded_create_time is not None:
+        actual_create_time = _process_create_time(owner_pid)
+        try:
+            identity_matches = (
+                actual_create_time is not None
+                and abs(actual_create_time - float(recorded_create_time)) < 0.001
+            )
+        except (ValueError, TypeError):
+            identity_matches = False
+        if not identity_matches:
+            path.unlink(missing_ok=True)
+            return None
+    return owner_pid
 
 
 def release_worker_owner(owner_pid: int) -> bool:
@@ -215,8 +336,8 @@ def _kill_process_tree(pid: int, timeout: float = 5.0) -> bool:
 def _kill_orphan_dcc_processes():
     """清理 CGI worker 崩溃后遗留的 Maya/Blender 子进程。
 
-    DCC 子进程都带有 CGI_WORKER_ID。仅清理父进程已不存在的、且确实由
-    CGI worker 启动的进程，避免误杀用户前台 DCC。
+    Only legacy CGI_WORKER_ID hosts are eligible. Scoped runtimes, including
+    incomplete markers, belong to RuntimeControl and must retain their ledger.
     """
     try:
         import psutil
@@ -229,6 +350,8 @@ def _kill_orphan_dcc_processes():
             if not any(token in name for token in ('maya', 'blender')):
                 continue
             env = proc.info.get('environ') or {}
+            if any(key in env for key in ('CGI_RUNTIME_ID', 'CGI_RUNTIME_GENERATION', 'CGI_RUNTIME_ROOT')):
+                continue
             if not env.get('CGI_WORKER_ID'):
                 continue
             ppid = proc.info.get('ppid')
@@ -239,7 +362,7 @@ def _kill_orphan_dcc_processes():
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
                     parent_alive = False
             if not parent_alive:
-                print(f'[ServiceManager] 清理孤儿 DCC 进程: PID={proc.pid} name={name}')
+                _LOGGER.info('清理孤儿 DCC 进程: PID=%s name=%s', proc.pid, name)
                 _kill_process_tree(proc.pid)
         except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
             continue
@@ -282,7 +405,7 @@ def start_redis() -> bool:
     redis_exe = next((path for path in candidates if path and path.exists()), None)
     if redis_exe is None:
         locations = ', '.join(str(path) for path in candidates if path)
-        print(f'[ServiceManager] Redis 可执行文件不存在，已检查: {locations}')
+        _LOGGER.error('Redis 可执行文件不存在，已检查: %s', locations)
         return False
 
     configured_config = os.getenv('REDIS_CONFIG_PATH', '').strip()
@@ -291,31 +414,20 @@ def start_redis() -> bool:
     if config_path.exists():
         command.append(str(config_path))
 
-    flags = 0
-    if sys.platform == 'win32':
-        flags = subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS
-
     try:
-        proc = subprocess.Popen(
-            command,
-            cwd=str(redis_exe.parent),
-            creationflags=flags,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        proc = _spawn_shared_process(command, cwd=redis_exe.parent)
         _managed_procs.append(proc)
         # 等待就绪
         import time
         for _ in range(10):
             time.sleep(0.5)
             if is_redis_alive():
-                print('[ServiceManager] Redis 已启动')
+                _LOGGER.info('Redis 已启动')
                 return True
-        print('[ServiceManager] Redis 启动超时')
+        _LOGGER.error('Redis 启动超时')
         return False
     except Exception as e:
-        print(f'[ServiceManager] Redis 启动失败: {e}')
+        _LOGGER.error('Redis 启动失败: %s', e)
         return False
 
 
@@ -565,10 +677,6 @@ def start_worker(dcc: str = 'maya', wait: bool = True, timeout_sec: float = 30.0
         return True
     _clear_stale_pidfile(dcc)
 
-    flags = 0
-    if sys.platform == 'win32':
-        flags = subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS
-
     # 加载 .env 环境变量
     env = _managed_python_env()
     env['PYTHONUNBUFFERED'] = '1'
@@ -590,24 +698,19 @@ def start_worker(dcc: str = 'maya', wait: bool = True, timeout_sec: float = 30.0
     ]
 
     try:
-        proc = subprocess.Popen(
-            cmd, cwd=str(PROJECT_ROOT), creationflags=flags, env=env,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        proc = _spawn_shared_process(cmd, cwd=PROJECT_ROOT, env=env)
         _managed_procs.append(proc)
-        print(f'[ServiceManager] {dcc} Worker 已拉起 (PID={proc.pid})')
+        _LOGGER.info('%s Worker 已拉起 (PID=%s)', dcc, proc.pid)
         if not wait:
             return True
         # 诚实确认：等到 Celery 心跳真在消费队列才算起来；超时报失败（不再"发射后不管")
         if _await_worker_ready(dcc, timeout_sec):
-            print(f'[ServiceManager] {dcc} Worker 就绪确认 (PID={proc.pid})')
+            _LOGGER.info('%s Worker 就绪确认 (PID=%s)', dcc, proc.pid)
             return True
-        print(f'[ServiceManager] {dcc} Worker {timeout_sec}s 内未就绪，判失败')
+        _LOGGER.error('%s Worker %ss 内未就绪，判失败', dcc, timeout_sec)
         return False
     except Exception as e:
-        print(f'[ServiceManager] {dcc} Worker 启动失败: {e}')
+        _LOGGER.error('%s Worker 启动失败: %s', dcc, e)
         return False
     finally:
         # 无论成败都释放启动锁：Popen 已发起（celery 接手 pidfile），锁使命已尽，
@@ -642,10 +745,10 @@ def stop_worker(dcc: str = 'maya', timeout: float = 8.0) -> bool:
     while time.time() < deadline:
         if not _is_pid_alive(pid):
             pidfile.unlink(missing_ok=True)  # 确认死了才删
-            print(f'[ServiceManager] {dcc} Worker 已停止 (PID={pid})')
+            _LOGGER.info('%s Worker 已停止 (PID=%s)', dcc, pid)
             return True
         time.sleep(0.3)
-    print(f'[ServiceManager] {dcc} Worker 杀失败仍存活 (PID={pid})，保留 pidfile 待补刀')
+    _LOGGER.error('%s Worker 杀失败仍存活 (PID=%s)，保留 pidfile', dcc, pid)
     return False
 
 
@@ -735,7 +838,7 @@ def cleanup_old_audits(max_age_days: int = 30):
             continue
 
     if removed > 0:
-        print(f'[ServiceManager] 已清理 {removed} 个过期审计记录')
+        _LOGGER.info('已清理 %s 个过期审计记录', removed)
 
 
 # ═══════════════════════════════════════════════════
@@ -760,7 +863,7 @@ def shutdown_all():
                 if worker and hasattr(worker, 'shutdown'):
                     worker.shutdown()
             except Exception as e:
-                print(f'[ServiceManager] {dcc_type} warm worker 优雅关闭失败: {e}')
+                _LOGGER.warning('%s warm worker 优雅关闭失败: %s', dcc_type, e)
         pool.clear()
     except Exception:
         pass
@@ -786,7 +889,7 @@ def shutdown_all():
     except Exception:
         pass
 
-    print('[ServiceManager] 所有子进程已清理')
+    _LOGGER.info('Legacy runtime cleanup finished; isolated workspaces require explicit runtime release.')
 
 
 # ── 自动注册退出清理钩子（防孤儿进程）──

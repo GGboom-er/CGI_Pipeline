@@ -1,0 +1,31 @@
+api_id: ue.scene.actors.attach_many
+version: 1.0.1
+executor: ue
+capability: scene.actors
+operation: attach_many
+stages: [editor]
+targets: [level_actor]
+access: write
+effects:
+  scene_write: Attaches actors while preserving world transforms in one transaction.
+execution_modes: [foreground]
+surfaces: [ue, service]
+modes: [apply]
+inputs:
+  items: {type: array, required: true, description: "actor, parent, and optional socket_name entries."}
+  max_items: {type: integer, default: 200, description: "Maximum actors, hard limit 1000."}
+preconditions: [Runs in UE5 Editor with a loaded writable level.]
+idempotent: true
+outputs:
+  items: Per-item before and after parent identity.
+  count: Number of returned or processed items for this action.
+  error_count: Number of failed per-item operations.
+  truncated: Whether input exceeded max_items.
+statuses: [SUCCESS, PARTIAL, ERROR]
+errors: {UE_SCENE_CORE_OPERATION_FAILED: "Invalid actor, parent, or attach failure."}
+recovery: [Use object paths and undo the transaction if needed.]
+help: {summary: Attach UE actors to parents., usage: "execute_api(ue.scene.actors.attach_many, params={items})", scenario: Edit bounded actor hierarchy., safety: Preserves world transform and is undoable.}
+tests: {contract: tests/test_ue_scene_core_apis.py, smoke: UE5 Editor attach and undo.}
+handler: cgi_pipeline.capabilities.ue.scene_core:attach_actors_many
+implementation: {status: implemented}
+verification: {level: contract_tested, evidence: [tests/test_ue_scene_core_apis.py]}

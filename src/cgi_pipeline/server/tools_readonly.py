@@ -2,8 +2,42 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
+from cgi_pipeline.server.http_lifecycle import lifecycle
+
+from cgi_pipeline.contracts import Access, Effect, ExecutionMode, Executor, Mode, Surface
 from cgi_pipeline.server.internals import get_task_result
-from cgi_pipeline.server.models import TaskQueryInput
+from cgi_pipeline.server.models import ExecuteApiInput, TaskQueryInput
+
+
+def execute_call_template(spec: dict, version: str) -> dict:
+    """Project manifest inputs and the public model into an MCP arguments template."""
+    values = {}
+    bindings = []
+    for name, definition in spec.get("inputs", {}).items():
+        if "default" in definition:
+            values[name] = deepcopy(definition["default"])
+        elif definition.get("required"):
+            values[name] = None
+            bindings.append({"path": ["params", "params", name], **deepcopy(definition)})
+    outer = ExecuteApiInput(api_id=spec["api_id"], expected_catalog_version=version).model_dump()
+    outer["params"] = values
+    if outer["execution_mode"] not in spec["execution_modes"]:
+        outer["execution_mode"] = spec["execution_modes"][0]
+    if outer['execution_mode'] == 'foreground':
+        bindings.append({'path': ['params', 'foreground_port'], 'type': 'integer', 'required': True,
+                         'description': 'Port of the verified target DCC session.'})
+    return {
+        "tool": "execute_api",
+        "arguments": {"params": outer},
+        "requires_binding": bindings,
+        "usage": (
+            "Bind each requires_binding path to real task data before passing arguments to the tool. "
+            "Nulls at these paths are placeholders, not executable examples. Review preconditions "
+            "and bind session/project/source context when required; defaults do not select a live session. "
+            "Optional API inputs are described in inputs; outer fields come from the public tool model."
+        ),
+    }
 
 
 def register_readonly_tools(mcp):
@@ -19,32 +53,71 @@ def register_readonly_tools(mcp):
             "openWorldHint": False,
         },
     )
-    async def list_apis_tool() -> dict:
-        """Return the concise API catalog without starting a DCC."""
-        from cgi_pipeline.catalog import list_capabilities
+    async def list_apis_tool(
+        executor: Executor | None = None,
+        capability: str | None = None,
+        operation: str | None = None,
+        stages: list[str] | None = None,
+        targets: list[str] | None = None,
+        access: Access | None = None,
+        surfaces: list[Surface] | None = None,
+        execution_modes: list[ExecutionMode] | None = None,
+        modes: list[Mode] | None = None,
+        effects: list[Effect] | None = None,
+        search: str | None = None,
+        limit: int = 20,
+        cursor: str | None = None,
+    ) -> dict:
+        """Filter and page the concise API catalog without starting a DCC."""
+        from cgi_pipeline.catalog import catalog_version, page_capabilities
 
-        rows = list_capabilities()
+        try:
+            page = page_capabilities(
+                executor=executor,
+                capability=capability,
+                operation=operation,
+                stages=stages,
+                targets=targets,
+                access=access,
+                surfaces=surfaces,
+                execution_modes=execution_modes,
+                modes=modes,
+                effects=effects,
+                search=search,
+                limit=limit,
+                cursor=cursor,
+            )
+        except ValueError as exc:
+            return {
+                "status": "ERROR",
+                "error_code": "INVALID_CATALOG_QUERY",
+                "error": str(exc),
+                "total": 0,
+                "catalog_version": catalog_version(),
+                "next_cursor": None,
+                "apis": [],
+                "recovery_hint": "Correct the filters/limit, or restart pagination without cursor.",
+            }
+        rows = page["apis"]
         return {
-            "total": len(rows),
+            "total": page["total"],
+            "catalog_version": page["catalog_version"],
+            "next_cursor": page["next_cursor"],
             "apis": [
                 {
                     "api_id": row["api_id"],
-                    "version": row["version"],
-                    "executor": row["executor"],
-                    "capability": row["capability"],
-                    "operation": row["operation"],
-                    "stages": row["stages"],
-                    "targets": row["targets"],
                     "access": row["access"],
-                    "effects": row["effects"],
-                    "execution_modes": row["execution_modes"],
-                    "surfaces": row["surfaces"],
                     "modes": row["modes"],
                     "summary": row.get("help", {}).get("summary", ""),
                 }
                 for row in rows
             ],
-            "usage": "Select an API, read api_help, then call execute_api.",
+            "usage": (
+                "Rows are a selection index; filter by facets instead of reading them. "
+                "For an unknown API, read api_help once for effects, inputs, verification "
+                "and catalog_version. For a known contract, call execute_api directly with "
+                "expected_catalog_version."
+            ),
         }
 
     @mcp.tool(
@@ -59,10 +132,15 @@ def register_readonly_tools(mcp):
     )
     async def api_help_tool(api_id: str) -> dict:
         """Return inputs, preconditions, effects, outputs, and recovery for one API."""
-        from cgi_pipeline.catalog import capability_help
+        from cgi_pipeline.catalog import capability_help_with_version
 
         try:
-            return capability_help(api_id)
+            spec, version = capability_help_with_version(api_id)
+            return {
+                "catalog_version": version,
+                **spec,
+                "mcp_call_template": execute_call_template(spec, version),
+            }
         except KeyError as exc:
             return {
                 "status": "ERROR",
@@ -82,8 +160,16 @@ def register_readonly_tools(mcp):
         },
     )
     async def get_task_result_tool(params: TaskQueryInput) -> dict:
-        """Recover one submitted task without knowing which DCC executed it."""
-        return get_task_result(params.task_id)
+        """Recover a task without resubmitting. Terminal receipt or step_receipts contain
+        complete API data within a shared 64 KiB inline budget. A receipt_ref gives
+        audit_path and zero-based parsed entry_index for larger data; read that
+        original JSONL entry's detail, not the clipped display log. For a nested
+        foreground batch, result_index selects detail.results[result_index].
+        batch contains completion counts, atomic policy and Maya undo outcome.
+        rolled_back does not cover files or other non-undoable side effects. Workflow
+        terminals also include steps, outputs, report, and post-compare summary.
+        """
+        return await lifecycle.run_sync(get_task_result, params.task_id)
 
     @mcp.tool(
         name="list_workflows",
@@ -96,7 +182,7 @@ def register_readonly_tools(mcp):
         },
     )
     async def list_workflows_tool() -> dict:
-        """List registered API compositions without starting a DCC."""
+        """List workflow steps, external input contracts and bindable call templates; no DCC startup."""
         from cgi_pipeline.core.workflow_engine import list_workflows
 
         workflows = list_workflows()

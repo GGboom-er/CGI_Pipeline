@@ -1,0 +1,29 @@
+api_id: maya.rig.skin.set_weights
+version: 1.0.0
+executor: maya
+capability: rigging.skin
+operation: set_weights
+stages: [rigging]
+targets: [skin_weights, mesh]
+access: write
+effects:
+  scene_write: Replaces complete normalized weight rows on bounded vertices.
+execution_modes: [local, foreground, background]
+surfaces: [maya, service]
+modes: [apply]
+inputs:
+  mesh: {type: string, required: true, description: Mesh transform or non-intermediate mesh shape.}
+  vertices: {type: array, required: true, description: "Rows shaped as vertex plus influence-to-weight mapping, compatible with query_weights rows when minimum_weight is 0."}
+  skin_cluster: {type: string, default: '', description: Optional explicit skinCluster when history is not unique.}
+  normalization_tolerance: {type: number, default: 0.0001, description: Readback tolerance greater than 0 and at most 0.1.}
+preconditions: [Each row is a complete normalized replacement and uses existing influences., Vertex rows are unique and bounded to 4096.]
+idempotent: true
+outputs: {shape: Resolved mesh shape., skin_cluster: Used skinCluster., influences: Ordered cluster influences., rows: Verified sparse readback rows., count: Changed vertex count.}
+statuses: [SUCCESS, ERROR]
+errors: {MAYA_SKIN_OPERATION_FAILED: "Weight input, native write, or readback verification failed."}
+recovery: ["Call maya.rig.skin.query_weights with minimum_weight 0, edit its rows, and submit the complete normalized rows."]
+help: {summary: Replace and verify bounded complete Maya skin-weight rows using query-compatible data., usage: "execute_api(maya.rig.skin.set_weights, params={mesh, vertices})", scenario: Edit query_weights rows captured with minimum_weight 0., safety: Failed native readback rolls back the API undo chunk.}
+tests: {contract: tests/test_maya_p1_apis.py, smoke: Foreground disposable-mesh weight write followed by query_weights.}
+implementation: {status: implemented}
+verification: {level: contract_tested, evidence: [tests/test_maya_p1_apis.py]}
+handler: cgi_pipeline.capabilities.maya.rig.skin.core:set_weights

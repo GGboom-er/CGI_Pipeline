@@ -1,0 +1,65 @@
+api_id: pipeline.pipeline.package_textures
+version: 1.0.1
+name: 打包材质贴图到沙盒
+executor: pipeline
+capability: pipeline.file
+operation: package
+stages: [pipeline]
+targets: [material, texture, file]
+access: write
+effects:
+  file_read: Reads the actual Color/Alpha texture files referenced by schema-v3 materials.
+  file_write: Copies referenced textures and writes a new materials JSON using workspace paths.
+execution_modes: [background]
+surfaces: [python, service]
+modes: [apply]
+inputs:
+  materials_path:
+    type: string
+    required: true
+    description: blender_extract_materials 输出的 schema v3 材质 JSON 绝对路径。只读输入。
+  output_path:
+    type: string
+    required: true
+    description: 当前任务沙盒内新材质 JSON 的绝对路径。不得覆盖输入 JSON 或源贴图。
+  texture_dir:
+    type: string
+    required: true
+    description: 当前任务沙盒内贴图目录的绝对路径。同名不同源按源目录摘要分子目录并保留 UDIM 文件名。
+preconditions:
+- CGI context.run_dir 必须为已存在的当前任务沙盒。
+- 所有 texture.path 均为存在的绝对文件路径。UDIM 已由 Blender 提取 API 拆为具体 tile。
+- 现有目标文件内容必须与对应源相同。不同内容需使用新的打包目录。
+idempotent: false
+outputs:
+  output_path: 新材质 JSON 的绝对路径。Maya apply_materials 直接消费。
+  texture_dir: 沙盒贴图目录的绝对路径。
+  path_mapping: 原始 texture.path 到沙盒 texture.path 的映射。
+  result: 引用数、去重文件数、新复制数、复用数和新复制字节数。
+  summary: Optional framework operation summary; present when the adapter supplies
+    one.
+  items: Optional framework item records; present when the adapter supplies them.
+statuses: [SUCCESS, ERROR, BLOCKED]
+errors:
+  API_OPERATION_ERROR: 输入格式、缺失依赖、路径冲突或复制失败，详见回执。
+recovery:
+- 缺失依赖先修复服务器源路径再重试。不会输出成功的材质 JSON。
+- 目标已存在不同内容时使用新的沙盒贴图目录。
+help:
+  summary: 仅按材质 JSON 中实际引用的 Color/Alpha 路径打包贴图，不扫描源目录，不启动 DCC。
+  usage: execute_api(pipeline.pipeline.package_textures, params={materials_path, output_path, texture_dir})
+  scenario: 转换并打包资产时插在提取材质之后、Maya 赋材之前。普通转换不调用。
+  safety: 服务器源及输入 JSON 只读，所有输出限制在当前任务沙盒内。
+tests:
+  contract: tests/test_package_textures.py 验证 manifest 与 canonical adapter 回执。
+  smoke: tests/test_package_textures.py 验证真实样本、去重、同名、缺失与越界。
+implementation:
+  status: implemented
+verification:
+  level: live_tested
+  evidence:
+  - tests/test_package_textures.py
+  - audit/wf-211c7acb.json
+  - audit/api-7141842e28eb.json
+  - audit/api-dcabccd1570c.json
+handler: cgi_pipeline.capabilities.pipeline.pipeline.package_textures.adapter:execute

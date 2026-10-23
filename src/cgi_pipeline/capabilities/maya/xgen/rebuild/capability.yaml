@@ -1,0 +1,35 @@
+api_id: maya.xgen.rebuild
+version: 2.0.1
+name: xgen_rebuild
+executor: maya
+capability: xgen
+operation: rebuild
+stages: [rigging, animation]
+targets: [curves, hair]
+access: write
+effects:
+  scene_write: Creates world-space connected export copies with recorded names and hierarchy; leaves source unchanged.
+execution_modes: [local, foreground, background]
+surfaces: [maya, service]
+modes: [apply]
+inputs:
+  nodes: {type: array, required: true, description: Explicit unique curve or group DAG paths.}
+  root: {type: string, default: "", description: "Empty restores the recorded root name from v2 records after completeness validation. Explicit names retain legacy wrapper behavior; existing world roots are rejected."}
+preconditions: [Maya 2025 with registered xgen_cache package available., "Curve records are per NURBS shape; packed Houdini curves are not supported yet."]
+idempotent: false
+outputs:
+  root: 'Optional by action: root returned by the source implementation.'
+  count: Number of returned or processed items for this action.
+  items: Optional framework item records; present when the adapter supplies them.
+statuses: [SUCCESS, ERROR]
+errors: {XGEN_OPERATION_FAILED: Invalid input or unavailable package; see error.}
+recovery: [Read error and inspect current scene before retrying., "record and rebuild use Maya undo; file export rejects existing outputs."]
+help:
+  summary: "rebuild using the same core as the XGen desktop tool."
+  usage: "execute_api(maya.xgen.rebuild, params={...})"
+  scenario: XGen curve structure preparation and final hair cache publishing.
+  safety: "Explicit selected scope. Original records and existing export roots/files are never overwritten."
+tests: {contract: tests/test_xgen_api.py, smoke: PL227 Maya foreground structure roundtrip.}
+implementation: {status: implemented}
+verification: {level: contract_tested, evidence: [tests/test_xgen_api.py]}
+handler: cgi_pipeline.capabilities.maya.xgen_api:execute

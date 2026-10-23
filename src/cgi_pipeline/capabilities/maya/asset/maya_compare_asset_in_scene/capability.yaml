@@ -1,5 +1,5 @@
 api_id: maya.asset.maya_compare_asset_in_scene
-version: 1.0.0
+version: 1.0.2
 name: maya_compare_abc_to_scene_geometry
 executor: maya
 capability: asset.compare
@@ -10,10 +10,12 @@ stages:
 targets:
 - asset
 - mesh
-access: read
+access: write
 effects:
-  inspect: 只读取场景或标准数据，不改变资产。
-  apply: 按 API 实现对当前任务沙盒中的场景或数据执行操作。
+  scene_read: Compares source metadata with current scene geometry.
+  file_read: Reads source metadata and archive inputs.
+  scene_write: When nonrig_meshes are found, creates the persistent NoneRig display layer and adds those members.
+  file_write: Writes compare_result.json.
 execution_modes:
 - local
 - background
@@ -45,13 +47,37 @@ inputs:
     default: rig
     description: target 标签，默认 rig。
 preconditions:
+- ABC 使用轻量点位读取；只比较既有几何标准，不检查法线或 UV。有限仿射镜像和零缩放可比较，非有限点或非仿射矩阵拒绝。
 - 项目配置通过统一 config/{project}_config.json 接口加载。
 - 后台模式由 CGI Worker 打开或复用对应 DCC 场景。
 idempotent: true
 outputs:
-- name: compare_result
-  type: json_file
-  label: compare_result.json
+  output_path: Actual operation output path; present only when this branch produces
+    or identifies a file.
+  matched_total: 'Optional by action: matched total returned by the source implementation.'
+  matched_same: 'Optional by action: matched same returned by the source implementation.'
+  matched_different: 'Optional by action: matched different returned by the source
+    implementation.'
+  only_source: 'Optional by action: only source returned by the source implementation.'
+  only_target: 'Optional by action: only target returned by the source implementation.'
+  blocking: 'Optional by action: blocking returned by the source implementation.'
+  nonrig_count: 'Optional by action: nonrig count returned by the source implementation.'
+  nonrig_meshes: 'Optional by action: nonrig meshes returned by the source implementation.'
+  compare_result: 'Optional by action: compare result returned by the source implementation.'
+  action_counts: 'Optional by action: action counts returned by the source implementation.'
+  compare_sources: 'Optional by action: compare sources returned by the source implementation.'
+  matched_same_items: 'Optional by action: matched same items returned by the source
+    implementation.'
+  matched_different_items: 'Optional by action: matched different items returned by
+    the source implementation.'
+  only_source_items: 'Optional by action: only source items returned by the source
+    implementation.'
+  only_target_items: 'Optional by action: only target items returned by the source
+    implementation.'
+  hierarchy_match: 'Optional by action: hierarchy match returned by the source implementation.'
+  summary: Optional framework operation summary; present when the adapter supplies
+    one.
+  items: Optional framework item records; present when the adapter supplies them.
 statuses:
 - SUCCESS
 - PARTIAL
@@ -70,8 +96,10 @@ help:
   summary: 在当前已打开的 target rig Maya 场景内采集指定 cache_group 的 ShapeOrig 几何信息，读取 source 侧 ABC 或 _info.json，调用统一 compare 算法并写出 compare_result.json。用于只看差异或为后续 maya_sync_rig_incremental 提供拼装决策。
   usage: execute_api(maya.asset.maya_compare_asset_in_scene, params={...})
   scenario: 在当前已打开的 target rig Maya 场景内采集指定 cache_group 的 ShapeOrig 几何信息，读取 source 侧 ABC 或 _info.json，调用统一 compare 算法并写出 compare_result.json。用于只看差异或为后续 maya_sync_rig_incremental 提供拼装决策。
-  safety: read API 只读；write/destructive API 仅写入任务沙盒。
+  safety: 具体副作用见本契约 effects；运行上下文、路径与恢复边界见 docs/architecture/pipeline_runtime_contract_v1.md。
 tests:
   contract: api.registry loads this manifest and api.runner validates its receipt.
   smoke: 代表性 workflow 统一验收。
+implementation: {status: implemented, module: maya_compare_asset_in_scene.maya_compare_asset_in_scene}
+verification: {level: contract_tested, evidence: [tests/test_maya_asset_remaining_contracts.py]}
 handler: cgi_pipeline.capabilities.maya.asset.maya_compare_asset_in_scene.adapter:execute

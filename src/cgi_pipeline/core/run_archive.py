@@ -11,6 +11,7 @@ import shutil
 import logging
 import re
 import filecmp
+from contextlib import contextmanager
 from pathlib import Path
 
 from cgi_pipeline.core.bootstrap import cfg as _cfg
@@ -31,11 +32,12 @@ def _safe_segment(value: str, fallback: str = 'untitled') -> str:
     return text[:80] or fallback
 
 
-def _find_existing_run_dir(wf_id: str, project: str = None) -> Path | None:
+def _find_existing_run_dir(wf_id: str, project: str = None,
+                           business_task_id: str = '') -> Path | None:
     """Redis 不可用时，通过 .info/run_state.json 找回同一 task 的沙盒。"""
     if not wf_id or not project:
         return None
-    project_dir = PROJECT_ROOT / 'projects' / project
+    project_dir = PROJECT_ROOT / 'projects' / _safe_segment(project, 'default')
     if not project_dir.exists():
         return None
     for state_path in project_dir.glob('*/.info/run_state.json'):
@@ -43,30 +45,69 @@ def _find_existing_run_dir(wf_id: str, project: str = None) -> Path | None:
             data = json.loads(state_path.read_text(encoding='utf-8'))
         except Exception:
             continue
-        if data.get('wf_id') == wf_id:
-            return state_path.parent.parent
+        if isinstance(data, dict) and data.get('wf_id') == wf_id:
+            from cgi_pipeline.core.workspace import _validate_run_identity
+            return _validate_run_identity(state_path.parent.parent, wf_id, project, business_task_id)[0]
     return None
 
 
-def _write_run_state(run_dir: Path, wf_id: str, project: str = None, asset_name: str = None) -> None:
-    try:
-        info_dir = run_dir / '.info'
-        info_dir.mkdir(parents=True, exist_ok=True)
+def _write_run_state(run_dir: Path, wf_id: str, project: str = None, asset_name: str = None,
+                     business_task_id: str = None) -> None:
+    # Imported at call time: workspace already owns validation, locking and
+    # atomic state writes, and itself imports this allocation module.
+    from cgi_pipeline.core.workspace import (
+        _lock, _validate_run_identity, _validate_workspace_location, _write,
+    )
+    run_dir = _validate_workspace_location(run_dir, project or '')
+    info_dir = run_dir / '.info'
+    info_dir.mkdir(parents=True, exist_ok=True)
+    with _lock(run_dir):
         state_path = info_dir / 'run_state.json'
-        if not state_path.exists():
-            state_path.write_text(
-                json.dumps({
-                    'wf_id': wf_id,
-                    'project': project or '',
-                    'asset_name': asset_name or '',
-                    'created_at': time.strftime('%Y-%m-%d %H:%M:%S'),
-                }, ensure_ascii=False, indent=2),
-                encoding='utf-8',
-            )
-    except Exception:
-        pass
+        if state_path.exists() or state_path.is_symlink():
+            _validate_run_identity(run_dir, wf_id, project, business_task_id or '')
+            return
+        state = {'wf_id': wf_id, 'project': project or '',
+                 'asset_name': asset_name or '',
+                 'created_at': time.strftime('%Y-%m-%d %H:%M:%S')}
+        if business_task_id:
+            state['business_task_id'] = business_task_id
+        # Failure must reach the caller; a directory alone is not allocation.
+        _write(state_path, state)
 
-def create_run_dir(wf_id: str, project: str = None, asset_name: str = None, submitted_at: float = None) -> Path:
+@contextmanager
+def allocation_lock():
+    """Serialize ordinary allocation and explicit legacy-workspace adoption."""
+    from filelock import FileLock
+    from cgi_pipeline.core.workspace import WorkspaceError
+    allocation_root = PROJECT_ROOT / 'projects'
+    if allocation_root.resolve() != PROJECT_ROOT.resolve() / 'projects':
+        raise WorkspaceError('WORKSPACE_PATH_INVALID', 'Managed project root cannot redirect outside its root.')
+    if (allocation_root / '.allocation.lock').is_symlink():
+        raise WorkspaceError('WORKSPACE_PATH_INVALID', 'Allocation lock cannot be a file link.')
+    allocation_root.mkdir(parents=True, exist_ok=True)
+    with FileLock(str(allocation_root / '.allocation.lock'), timeout=30):
+        yield
+
+
+def create_run_dir(wf_id: str, project: str = None, asset_name: str = None,
+                   submitted_at: float = None, *, directory_name: str = None,
+                   business_task_id: str = None) -> Path:
+    from cgi_pipeline.core.workspace import WorkspaceError, _validate_id
+    _validate_id(wf_id)
+    if business_task_id:
+        _validate_id(business_task_id)
+    if project is not None and (not project or any(char in project for char in '/\\:') or project in ('.', '..')):
+        raise WorkspaceError('WORKSPACE_PROJECT_INVALID', 'Invalid project key.')
+    with allocation_lock():
+        return _create_run_dir_locked(
+            wf_id, project, asset_name, submitted_at,
+            directory_name=directory_name, business_task_id=business_task_id,
+        )
+
+
+def _create_run_dir_locked(wf_id: str, project: str = None, asset_name: str = None,
+                           submitted_at: float = None, *, directory_name: str = None,
+                           business_task_id: str = None) -> Path:
     """
     创建任务沙盒(Task Sandbox)目录。
     为了保证稳定，如果多次调用同一 wf_id，应返回相同的目录。
@@ -75,27 +116,32 @@ def create_run_dir(wf_id: str, project: str = None, asset_name: str = None, subm
     """
     import datetime
 
-    # 尝试从 Redis 读取已存在的映射，保证多进程一致性
+    from cgi_pipeline.core.workspace import _validate_run_identity, _validate_workspace_location
+    # Redis is only a location hint. Validate identity before touching its target;
+    # cache/identity failures must not disappear into the Redis availability path.
     from cgi_pipeline.core.service_manager import is_redis_alive
+    cached_dir = None
     try:
         import redis
         if is_redis_alive():
             r = redis.Redis(host='127.0.0.1', port=6379, db=0, decode_responses=True)
             cached_dir = r.hget(f'wf:{wf_id}:state', 'sandbox_dir')
-            if cached_dir:
-                run_dir = Path(cached_dir)
-                run_dir.mkdir(parents=True, exist_ok=True)
-                _write_run_state(run_dir, wf_id, project, asset_name)
-                return run_dir
     except Exception:
         pass
+    if cached_dir:
+        return _validate_run_identity(cached_dir, wf_id, project, business_task_id or '')[0]
 
-    existing = _find_existing_run_dir(wf_id, project)
+    existing = _find_existing_run_dir(wf_id, project, business_task_id or '')
     if existing:
-        existing.mkdir(parents=True, exist_ok=True)
         return existing
 
-    if project and asset_name:
+    if directory_name:
+        safe_project = _safe_segment(project, 'default')
+        safe_directory = _safe_segment(directory_name)
+        run_dir = PROJECT_ROOT / 'projects' / safe_project / safe_directory
+        if run_dir.exists():
+            return _validate_run_identity(run_dir, wf_id, project, business_task_id or '')[0]
+    elif project and asset_name:
         dt = datetime.datetime.fromtimestamp(submitted_at) if submitted_at else datetime.datetime.now()
         date_str = dt.strftime('%Y%m%d_%H%M%S')
         safe_project = _safe_segment(project, 'default')
@@ -107,17 +153,18 @@ def create_run_dir(wf_id: str, project: str = None, asset_name: str = None, subm
             state_path = run_dir / '.info' / 'run_state.json'
             try:
                 data = json.loads(state_path.read_text(encoding='utf-8'))
-                if data.get('wf_id') == wf_id:
-                    break
             except Exception:
-                pass
+                data = {}
+            if isinstance(data, dict) and data.get('wf_id') == wf_id:
+                return _validate_run_identity(run_dir, wf_id, project, business_task_id or '')[0]
             run_dir = base.with_name(f'{base.name}_{suffix:02d}')
             suffix += 1
     else:
         run_dir = PROJECT_ROOT / 'runs' / wf_id
 
+    run_dir = _validate_workspace_location(run_dir, project or '')
     run_dir.mkdir(parents=True, exist_ok=True)
-    _write_run_state(run_dir, wf_id, project, asset_name)
+    _write_run_state(run_dir, wf_id, project, asset_name, business_task_id)
 
     # 保存回 Redis 供后续节点获取
     try:
@@ -132,16 +179,23 @@ def create_run_dir(wf_id: str, project: str = None, asset_name: str = None, subm
 
 def get_run_dir(wf_id: str) -> Path:
     """获取沙盒目录。优先从 Redis 读取。"""
+    from cgi_pipeline.core.workspace import _validate_id, _validate_run_identity
+    _validate_id(wf_id)
+    cached_dir = None
     try:
         from cgi_pipeline.core.service_manager import is_redis_alive
         import redis
         if is_redis_alive():
             r = redis.Redis(host='127.0.0.1', port=6379, db=0, decode_responses=True)
             cached_dir = r.hget(f'wf:{wf_id}:state', 'sandbox_dir')
-            if cached_dir:
-                return Path(cached_dir)
     except Exception:
         pass
+    if cached_dir:
+        from cgi_pipeline.core.workspace_relocation import relocation_for_root
+        relocation = relocation_for_root(cached_dir)
+        if relocation:
+            cached_dir = relocation['target_root']
+        return _validate_run_identity(cached_dir, wf_id, None)[0]
     return PROJECT_ROOT / 'runs' / wf_id
 
 
@@ -221,6 +275,7 @@ def write_manifest(
     outputs: dict,
     reports: list,
     segments: list = None,
+    run_dir: str | Path | None = None,
 ) -> str:
     """
     生成 manifest.json，统一记录本次运行的所有输入/输出/报告路径。
@@ -242,7 +297,7 @@ def write_manifest(
     """
     import datetime
 
-    run_dir = create_run_dir(wf_id, project, asset_name)
+    run_dir = Path(run_dir) if run_dir is not None else create_run_dir(wf_id, project, asset_name)
     manifest = {
         'wf_id': wf_id,
         'workflow_id': workflow_id,
@@ -257,16 +312,17 @@ def write_manifest(
         'segments': segments or [],
     }
 
-    manifest_path = run_dir / 'manifest.json'
-    manifest_path.write_text(
-        json.dumps(manifest, indent=2, default=str, ensure_ascii=False),
-        encoding='utf-8',
-    )
+    from cgi_pipeline.core.workspace import operation_paths, _write
+    manifest_path = (operation_paths(run_dir.parent, wf_id)['manifest']
+                     if run_dir.name == '.info' else run_dir / 'manifest.json')
+    # Keep the manifest's legacy default=str input contract while reusing the
+    # workspace's guarded atomic JSON publisher.
+    _write(manifest_path, json.loads(json.dumps(manifest, default=str)))
     logger.info(f'[{wf_id}] Manifest 已写入: {manifest_path}')
     return str(manifest_path)
 
 
-def copy_to_run_dir(wf_id: str, src_path: str, filename: str = None) -> str:
+def copy_to_run_dir(wf_id: str, src_path: str, filename: str = None, *, run_dir: str | Path | None = None) -> str:
     """
     将文件拷贝到运行目录内（可选重命名）。
 
@@ -277,9 +333,28 @@ def copy_to_run_dir(wf_id: str, src_path: str, filename: str = None) -> str:
     if not src.exists():
         return ''
 
-    run_dir = get_run_dir(wf_id)
+    run_dir = Path(run_dir) if run_dir else get_run_dir(wf_id)
+    name = filename or src.name
+    if (not isinstance(name, str) or name in ('', '.', '..')
+            or Path(name).name != name or any(char in name for char in '/\\:')):
+        raise ValueError('Archive filename must be a single local filename.')
+    workspace_root = (run_dir.parent if run_dir.name == '.info' else
+                      run_dir.parent.parent.parent if
+                      run_dir.parent.name == 'operations' and run_dir.parent.parent.name == '.info'
+                      else None)
+    if workspace_root is not None:
+        from cgi_pipeline.core.workspace import operation_paths
+        paths = operation_paths(workspace_root, wf_id)
+        if run_dir != paths['operation_dir']:
+            raise ValueError('Archive directory does not match its operation record.')
+        if run_dir.name == '.info' and not name.startswith(wf_id + '_'):
+            name = f'{wf_id}_{name}'
+        if any(run_dir/name == path for key,path in paths.items() if key != 'operation_dir'):
+            raise ValueError('Archive filename is reserved for an operation record.')
     run_dir.mkdir(parents=True, exist_ok=True)
-    dst = run_dir / (filename or src.name)
+    dst = run_dir / name
+    if dst.is_symlink():
+        raise ValueError('Archive output cannot be a file link.')
     try:
         if src.resolve() == dst.resolve():
             return str(src)
@@ -298,9 +373,21 @@ def cleanup_old_runs(max_age_days: int = 7):
     cutoff = time.time() - (max_age_days * 86400)
     cleaned = 0
 
+    def managed_workspace(path):
+        state_path = path / '.info' / 'run_state.json'
+        if not state_path.exists():
+            return False
+        try:
+            return bool(json.loads(state_path.read_text(encoding='utf-8')).get('workspace_mode'))
+        except (OSError, ValueError, AttributeError):
+            # An unreadable ownership record is not permission to discard work.
+            return True
+
     if RUNS_DIR.exists():
         for run_dir in RUNS_DIR.iterdir():
             if not run_dir.is_dir():
+                continue
+            if managed_workspace(run_dir):
                 continue
             try:
                 if run_dir.stat().st_mtime < cutoff:
@@ -315,6 +402,8 @@ def cleanup_old_runs(max_age_days: int = 7):
                 continue
             for sandbox in proj_dir.iterdir():
                 if not sandbox.is_dir():
+                    continue
+                if managed_workspace(sandbox):
                     continue
                 # 沙盒名模式：YYYYMMDD_HHMMSS_*，_开头的验证/实验目录不碰
                 name = sandbox.name

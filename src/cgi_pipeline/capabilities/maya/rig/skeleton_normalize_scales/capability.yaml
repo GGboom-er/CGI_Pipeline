@@ -1,0 +1,45 @@
+api_id: maya.rig.skeleton.normalize_scales
+version: 1.0.0
+name: normalize_joint_scales
+executor: maya
+capability: rigging.skeleton
+operation: normalize_scales
+stages: [rigging]
+targets: [joint]
+access: write
+effects:
+  scene_read: dry_run=true inspects explicit joint scales; both paths validate targets.
+  scene_write: dry_run=false resets local joint scales to one in one owned undo chunk.
+execution_modes: [local, foreground, background]
+surfaces: [maya, service]
+modes: [inspect, apply]
+mode_binding:
+  input: dry_run
+  cases:
+  - value: true
+    mode: inspect
+  - value: false
+    mode: apply
+inputs:
+  nodes: {type: array, required: true, description: 1 to 1000 explicit existing joint names; ambiguous names and patterns rejected.}
+  dry_run: {type: boolean, default: true, description: Preview changes without writing.}
+preconditions:
+  - Registered pipeline_shelf source is accessible.
+  - All changed scale channels must be unlocked and have no input connections.
+  - Maya Undo must be enabled for writes.
+  - Do not wrap writes in an atomic batch or caller-owned Undo chunk.
+  - Caller accepts changed world geometry; this is local scale reset, not bind-pose-preserving freeze.
+idempotent: true
+outputs: {dry_run: Preview flag., target_count: Unique targets., changed_count: Proposed or applied count., changes: Long paths and before/after scales.}
+statuses: [SUCCESS, ERROR]
+errors: {TOOLBOX_OPERATION_FAILED: Invalid target or locked/driven scale; no partial write on preflight error.}
+recovery: [Correct explicit targets or locked/driven channels and preview again., Undo successful write once in Maya.]
+help:
+  summary: Preview or reset explicit joint local scales using the same function as the Zero Joint Scales tool.
+  usage: "execute_api(maya.rig.skeleton.normalize_scales, params={nodes, dry_run})"
+  scenario: Bounded joint scale normalization during rig preparation.
+  safety: No selection fallback or scene-wide traversal; production acceptance remains separate from system verification.
+tests: {contract: tests/test_toolbox_api.py, smoke: DCC/maya/environment/maya_toolbox_smoke.py}
+implementation: {status: implemented}
+verification: {level: live_tested, evidence: [tests/test_toolbox_api.py, DCC/maya/environment/maya_toolbox_smoke.py, runtime/pl245/cold_acceptance/mcp_workflow.json]}
+handler: cgi_pipeline.capabilities.maya.toolbox_api:execute

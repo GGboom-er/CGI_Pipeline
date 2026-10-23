@@ -1,10 +1,10 @@
 # cgi_pipeline/core/tasks.py
-# ── 单 CGI Worker 架构 ──
+# ── 工作区亲和的有限隔离后台 ──
 #
-# 流程：AI 指令 → MCP → cgi_queue → 串行 Worker → DCC adapter → receipt/report
+# 流程：AI 指令 → MCP → workspace lane → solo Worker → DCC adapter → receipt/report
 #
 # Worker 生命周期：Celery lane 常驻；Maya/Blender DCC 进程由 warm pool 复用，达到回收阈值或
-# shutdown_all 时退出。异常退出由 service_manager 兜底清理 CGI 标记的孤儿 DCC 进程。
+# 显式作用域 release 时退出；未知归属保留占槽。legacy cgi_queue 仅供未绑定旁路/旧客户端。
 # 路径系统：统一使用 AssetResolver（基于项目配置）。
 
 from celery import Celery
@@ -25,7 +25,6 @@ from cgi_pipeline.core.capability_registry import (
     get_executor,
     get_skip_audit_capabilities,
     resolve_api_id,
-    reload as _reload_capability_registry,
 )
 from cgi_pipeline.core.progress import (
     publish_event, persist_outputs, restore_outputs,
@@ -34,29 +33,130 @@ from cgi_pipeline.core.progress import (
 from cgi_pipeline.core.run_archive import (
     create_run_dir, get_run_report_path, write_manifest,
     copy_to_run_dir, cleanup_old_runs, is_report_path,
-    cleanup_root_machine_duplicates,
+    cleanup_root_machine_duplicates, _safe_segment,
 )
 from cgi_pipeline.core import task_report_writer as _report_writer
+from cgi_pipeline.contracts import validate_batch_result
+from cgi_pipeline.core.workspace import WorkspaceError, workspace_result, finish_operation, audit_only_operation
+from cgi_pipeline.core.scene_session import prepare_scene, invalidate_scene
+from cgi_pipeline.core.task_audit import find_audit_file, read_entries, task_state
+from cgi_pipeline.core.task_status import business_status
+from cgi_pipeline.core.workflow_templates import (
+    TemplateError, resolve_templates as _resolve_template_vars, validate_step_templates, step_failure_policy,
+)
 
 app = Celery('cgi_pipeline')
 app.config_from_object('cgi_pipeline.server.celeryconfig')
 logger = get_task_logger(__name__)
 
-# ── 不需要走质检/发布的 API 白名单（从 manifest 读取）──
-_SKIP_AUDIT_APIS = get_skip_audit_capabilities()
+from cgi_pipeline.core.workflow_runtime import register_tasks as _register_workflow_runtime
+_register_workflow_runtime(app)
+
+
+@app.task(name='cgi_pipeline.core.tasks.execute_runtime_control')
+def execute_runtime_control(lease, discard=False):
+    """A drained lane's own serial host query/shutdown; no workspace allocation."""
+    from cgi_pipeline.core.runtime_control import release_hosts
+    return release_hosts(lease, discard)
 
 
 def _get_audit_path(task_id: str) -> Path:
     """返回审计日志路径。统一存放在全局 audit 目录下供 MCP 和 Dashboard 查询。"""
     audit_dir = PROJECT_ROOT / 'audit'
     audit_dir.mkdir(parents=True, exist_ok=True)
-    return audit_dir / f'{task_id}.json'
+    return find_audit_file(task_id, audit_dir) or audit_dir / f'{task_id}.json'
 
 
-def _create_worker(dcc_type: str = 'maya', source_path: str = None):
+class _CancellationRequested(Exception):
+    def __init__(self, evidence):
+        self.evidence = evidence
+
+
+def _check_cancellation(payload, **evidence):
+    task_id = payload.get('workflow_id') if payload.get('_workspace_subchain') else payload['task_id']
+    # Legacy workflow segments also use the parent audit without workspace mode.
+    if payload.get('api_chain') and payload.get('workflow_id'):
+        task_id = payload['workflow_id']
+    if task_state(read_entries(_get_audit_path(task_id))).get('status') == 'CANCEL_REQUESTED':
+        raise _CancellationRequested(evidence)
+
+
+def _create_worker(dcc_type: str = 'maya', source_path: str = None, *, workspace_id=None):
     """通过 DCC 工厂取得适配器 Worker；生命周期由服务管理器负责。"""
     from cgi_pipeline.core.dcc_factory import create_worker
-    return create_worker(dcc_type, source_path)
+    return create_worker(dcc_type, source_path, workspace_id=workspace_id)
+
+
+def _workflow_save_state(plan, outputs=None):
+    outputs = outputs or {}
+    saved = [outputs[step['step_id']]['output_path'] for step in plan.get('steps', [])
+             if step['api_id'] == 'maya.asset.save_scene'
+             and outputs.get(step['step_id'], {}).get('output_path')]
+    return {'effective_parameters': plan['effective_parameters'],
+            'save_requested': plan['save_requested'], 'result_saved': bool(saved), 'saved_results': saved}
+
+
+def _workspace_runtime(function):
+    from functools import wraps
+    @wraps(function)
+    def wrapped(self, payload):
+        plan = payload.get('_workflow_plan')
+        if function.__name__ == 'execute_workflow' and isinstance(plan, dict):
+            restored = restore_outputs(payload['task_id']) if payload.get('resume') else {}
+            payload['_workflow_result'] = _workflow_save_state(plan, restored)
+        is_segment = bool(payload.get('api_chain') and payload.get('workflow_id') not in (None, '', payload['task_id']))
+        audit_id = payload['workflow_id'] if is_segment else payload['task_id']
+        def record(result):
+            with _get_audit_path(audit_id).open('a', encoding='utf-8') as handle:
+                handle.write(json.dumps({**workspace_result(payload),
+                    **payload.get('_workflow_result', {}),
+                    **{key: result[key] for key in ('task_id', 'status', 'report_path', 'error_code', 'error') if key in result},
+                    'scope': 'segment' if is_segment else 'task', 'ts': time.time(),
+                    'detail': json.dumps(result, ensure_ascii=False, default=str)}, ensure_ascii=False, default=str) + '\n')
+        try:
+            _check_cancellation(payload)
+            if not is_segment:
+                record({'task_id': audit_id, 'status': 'TASK_RUNNING'})
+            result = function(self, payload)
+        except _CancellationRequested as exc:
+            result = {'task_id': payload['task_id'], 'status': 'CANCELLED',
+                      'detail': 'Stopped before the next call; completed effects are retained.',
+                      **exc.evidence}
+            report_path = result.get('report_path') or payload.get('report_path')
+            if report_path and not is_segment:
+                if not Path(report_path).exists():
+                    _report_writer.init_report(report_path, payload)
+                _report_writer.finalize_report(report_path, {**payload, **payload.get('_workflow_result', {})}, 'CANCELLED')
+        except Exception as exc:
+            from celery.exceptions import Retry, SoftTimeLimitExceeded
+            status = 'TIMEOUT' if isinstance(exc, (TimeoutError, SoftTimeLimitExceeded)) else 'ERROR'
+            if not payload.get('workspace_report_path') and not audit_only_operation(payload, 'chain' if payload.get('api_chain') else 'api'):
+                if not isinstance(exc, Retry):
+                    record({'task_id': payload['task_id'], 'status': status, 'error': str(exc)})
+                raise
+            result = {'task_id': payload['task_id'], 'status': status,
+                      'api_id': payload.get('api_id', 'chain'),
+                      'error_code': getattr(exc, 'code', 'EXECUTION_FAILED'),
+                      'error': str(exc)}
+            with _get_audit_path(payload.get('workflow_id') if payload.get('_workspace_subchain') else payload['task_id']).open('a', encoding='utf-8') as handle:
+                handle.write(json.dumps({**result, **workspace_result(payload), 'ts': time.time(),
+                                         'detail': json.dumps(result, ensure_ascii=False)}) + '\n')
+        result = {**payload.get('_workflow_result', {}), **result}
+        if payload.get('workspace_report_path'):
+            result = {**workspace_result(payload),
+                      **({'scene_session': payload['scene_session']} if payload.get('scene_session') else {}), **result}
+            if not Path(payload['report_path']).exists() and not payload.get('_workspace_subchain'):
+                report_context = {**payload, **payload.get('_workflow_result', {})}
+                _report_writer.init_report(payload['report_path'], report_context)
+                _report_writer.finalize_report(payload['report_path'], report_context, result.get('status', 'ERROR'), error=result.get('error', ''))
+            finish_operation(payload, result.get('status', 'ERROR'))
+        recorded = result
+        if function.__name__ == 'execute_api_chain' and result.get('status') == 'SUCCESS':
+            recorded = {**result, 'status': 'CHAIN_SUCCESS'}
+        record(recorded)
+        return result
+    from cgi_pipeline.core.runtime_operation import runtime_operation_guard
+    return runtime_operation_guard(wrapped, audit_path=lambda task_id: _get_audit_path(task_id))
 
 
 def _step_id(step: dict) -> str:
@@ -75,16 +175,6 @@ def _receipt_output(receipt: dict) -> dict:
     """Project one canonical API receipt into the Workflow outputs context."""
     output = receipt.get('output') if isinstance(receipt, dict) else None
     return dict(output) if isinstance(output, dict) else {}
-
-
-def _is_save_api(api_id: str) -> bool:
-    """Use the catalog operation so namespaced API IDs remain valid."""
-    try:
-        from cgi_pipeline.catalog import get_capability
-        spec = get_capability(api_id)
-        return spec.get('capability') == 'scene.file' and spec.get('operation') == 'save'
-    except (KeyError, TypeError):
-        return api_id.rsplit('.', 1)[-1] == 'save_scene'
 
 
 def _get_resolver(project: str):
@@ -106,6 +196,15 @@ def _coerce_ext_filter(value):
     else:
         return None
     return [x if x.startswith('.') else f'.{x}' for x in parts]
+
+
+def workflow_source_inputs() -> dict:
+    """External inputs consumed by the existing source_resolution owner below."""
+    return {name: {'required': False, **definition} for name, definition in {
+        'category': {'type': 'string'}, 'source_path': {'type': 'string'},
+        'source_pipeline': {'type': 'string'}, 'source_stage': {'type': 'string'},
+        'source_ext_filter': {},
+    }.items()}
 
 
 def _resolve_workflow_source_candidate(
@@ -264,6 +363,7 @@ def _update_progress(task_instance, phase: str, message: str, step_info: str = '
     default_retry_delay=5,
     name='cgi_pipeline.core.tasks.execute_api_chain'
 )
+@_workspace_runtime
 def execute_api_chain(self, payload: dict):
     """
     链式执行：创建新 DCC 进程，顺序执行多个API，完成后退出。
@@ -292,17 +392,21 @@ def execute_api_chain(self, payload: dict):
     suppress_report = bool(payload.get('suppress_report', False))
 
     # ── 沙盒目录（所有出口的报告都落这儿）──
+    audit_only = audit_only_operation(payload, 'chain')
     external_run_dir = payload.get('run_dir')
-    if external_run_dir:
+    if audit_only:
+        run_dir = ''
+    elif external_run_dir:
         run_dir = Path(external_run_dir)
         run_dir.mkdir(parents=True, exist_ok=True)
     else:
-        run_dir = create_run_dir(task_id, project, asset_name, payload.get('submitted_at'))
-    info_dir = run_dir / '.info'
-    info_dir.mkdir(parents=True, exist_ok=True)
+        run_dir = Path(payload['run_dir']) if payload.get('workspace_report_path') else create_run_dir(task_id, project, asset_name, payload.get('submitted_at'))
+    info_dir = run_dir / '.info' if run_dir else ''
+    if info_dir:
+        info_dir.mkdir(parents=True, exist_ok=True)
 
     # ── 运行时唯一报告 ──
-    report_path = '' if suppress_report else (
+    report_path = '' if suppress_report or audit_only else (
         payload.get('report_path') or _report_writer.get_report_path(run_dir)
     )
     report_context = {
@@ -320,6 +424,8 @@ def execute_api_chain(self, payload: dict):
         entry = {
             'task_id': task_id, 'api_id': api_id or 'chain',
             'status': status, 'ts': time.time(), 'detail': detail,
+            **workspace_result(payload),
+            **({'scene_session': payload['scene_session']} if payload.get('scene_session') else {}),
             'step': step_idx, 'total_steps': len(api_chain),
         }
         with open(audit_path, 'a') as f:
@@ -356,9 +462,6 @@ def execute_api_chain(self, payload: dict):
     try:
         _write_audit('CHAIN_STARTED', f'{len(api_chain)} APIs')
 
-        # 热重载 API manifest，避免 Worker 长驻时新增 API 无法识别
-        _reload_capability_registry()
-
         dcc_type = _step_executor(api_chain[0]) if api_chain else 'maya'
 
         # 校验链内所有 API 属于同一 DCC
@@ -373,97 +476,107 @@ def execute_api_chain(self, payload: dict):
                 'chain_results': [], 'report_path': report_path,
             }
 
-        _update_progress(self, 'STARTING_WORKER', f'正在启动 {dcc_type.capitalize()} 后台进程')
-        worker = _create_worker(dcc_type, source_path)
         chain_results = []
-
-        # 链引擎统一打开文件或清空场景（无条件沙盒化）
+        validate_step_templates(api_chain, payload.get('_chain_outputs_in', {}))
         open_elapsed_sec = 0
-        import shutil
+        if audit_only:
+            worker = _create_worker(dcc_type, '')
+        elif payload.get('workspace_report_path'):
+            _check_cancellation(payload, chain_results=chain_results, report_path=report_path)
+            worker, source_path = prepare_scene(payload, dcc_type, _create_worker, _open_source_file,
+                lambda status, detail: _write_audit(status, json.dumps(detail, ensure_ascii=False)))
+        else:
+            _update_progress(self, 'STARTING_WORKER', f'正在启动 {dcc_type.capitalize()} 后台进程')
+            worker = _create_worker(dcc_type, source_path)
+            chain_results = []
 
-        def _stage_to_sandbox(src: str, role: str = 'param') -> str:
-            """无条件将文件拷贝到沙盒。所有链式执行都在沙盒内闭环操作。"""
-            if not src or not isinstance(src, str): return src
-            if not (src.endswith('.ma') or src.endswith('.mb') or src.endswith('.blend') or src.endswith('.json') or src.endswith('.abc')): return src
-            src_path = Path(src)
-            if not src_path.exists(): return src
-            # 已经在本次 run_dir 内的文件无需重复拷贝
-            try:
-                src_path.resolve().relative_to(run_dir.resolve())
-                _record_file_staged({
-                    'role': role, 'origin': str(src_path), 'sandbox': str(src_path),
-                    'skipped': True, 'reason': 'already_in_sandbox', 'elapsed_sec': 0.0,
-                })
-                return src
-            except ValueError:
-                pass
-            dst_path = run_dir / src_path.name
-            _t_copy = time.time()
-            reused = dst_path.exists()
-            if not dst_path.exists():
-                shutil.copy2(str(src_path), str(dst_path))
-                logger.info(f'[{task_id}] 沙盒化: {src_path.name} → {dst_path}')
-            _record_file_staged({
-                'role': role, 'origin': str(src_path), 'sandbox': str(dst_path),
-                'reused': reused, 'elapsed_sec': time.time() - _t_copy,
-            })
-            return str(dst_path)
+            # 链引擎统一打开文件或清空场景（无条件沙盒化）
+            open_elapsed_sec = 0
+            import shutil
 
-        # 扫描并沙盒化 api_chain 中的所有文件参数
-        for step in api_chain:
-            params = step.get('parameters', {})
-            for k, v in params.items():
-                if isinstance(v, str):
-                    params[k] = _stage_to_sandbox(v, role=f'step.{step.get("api_id", "?")}.{k}')
-
-        if source_path and dcc_type != 'pipeline':
-            # 无条件沙盒化主场景文件（X盘额外有只读锁，但所有路径都应在沙盒内操作）
-            src_p = Path(source_path)
-            try:
-                src_p.resolve().relative_to(run_dir.resolve())
-                # 已在 run_dir 内，无需拷贝
-            except ValueError:
+            def _stage_to_sandbox(src: str, role: str = 'param') -> str:
+                """无条件将文件拷贝到沙盒。所有链式执行都在沙盒内闭环操作。"""
+                if not src or not isinstance(src, str): return src
+                if not (src.endswith('.ma') or src.endswith('.mb') or src.endswith('.blend') or src.endswith('.json') or src.endswith('.abc')): return src
+                src_path = Path(src)
+                if not src_path.exists(): return src
+                # 已经在本次 run_dir 内的文件无需重复拷贝
                 try:
-                    local_path = str(run_dir / os.path.basename(source_path))
-                    reused = os.path.exists(local_path)
-                    _t_copy = time.time()
-                    if not reused:
-                        shutil.copy2(source_path, local_path)
-                    logger.info(f'[{task_id}] 沙盒化主场景: {source_path} → {local_path}')
+                    src_path.resolve().relative_to(run_dir.resolve())
                     _record_file_staged({
-                        'role': 'source_path', 'origin': source_path, 'sandbox': local_path,
-                        'reused': reused, 'elapsed_sec': time.time() - _t_copy,
+                        'role': role, 'origin': str(src_path), 'sandbox': str(src_path),
+                        'skipped': True, 'reason': 'already_in_sandbox', 'elapsed_sec': 0.0,
                     })
-                    source_path = local_path
-                except Exception as e:
-                    logger.warning(f'[{task_id}] 沙盒化主场景失败，使用原路径: {e}')
-            _write_audit('CHAIN_OPEN_FILE', source_path, -1, 'open_file')
-            _update_progress(self, 'OPENING_FILE', f'正在打开源文件: {source_path}')
-            _t_open = time.time()
-            ok, err = _open_source_file(worker, task_id, source_path, dcc_type)
-            open_elapsed_sec = time.time() - _t_open
-            if not ok:
-                meaningful_err = _translate_error(err, "open_file")
-                _write_audit('CHAIN_ABORTED', f'打开文件失败: {meaningful_err}')
-                _finalize_runtime_report('CHAIN_ABORTED', error=meaningful_err)
-                return {
-                    'task_id': task_id, 'status': 'CHAIN_ABORTED',
-                    'failed_step': -1, 'error': f'打开文件失败: {source_path}',
-                    'chain_results': [], 'report_path': report_path,
-                }
-            _write_audit('CHAIN_FILE_OPENED', source_path, -1, 'open_file')
-        elif not source_path and dcc_type in ('maya', 'blender'):
-            # 对于 Warm Pool，如果没有源文件，必须强制清空场景防止污染
-            ok, err = _open_source_file(worker, task_id, "", dcc_type)
-            if not ok:
-                meaningful_err = _translate_error(err, "open_file")
-                _write_audit('CHAIN_ABORTED', f'清空场景失败: {meaningful_err}')
-                _finalize_runtime_report('CHAIN_ABORTED', error=meaningful_err)
-                return {
-                    'task_id': task_id, 'status': 'CHAIN_ABORTED',
-                    'failed_step': -1, 'error': f'清空场景失败: {meaningful_err}',
-                    'chain_results': [], 'report_path': report_path,
-                }
+                    return src
+                except ValueError:
+                    pass
+                dst_path = run_dir / src_path.name
+                _t_copy = time.time()
+                reused = dst_path.exists()
+                if not dst_path.exists():
+                    shutil.copy2(str(src_path), str(dst_path))
+                    logger.info(f'[{task_id}] 沙盒化: {src_path.name} → {dst_path}')
+                _record_file_staged({
+                    'role': role, 'origin': str(src_path), 'sandbox': str(dst_path),
+                    'reused': reused, 'elapsed_sec': time.time() - _t_copy,
+                })
+                return str(dst_path)
+
+            # 扫描并沙盒化 api_chain 中的所有文件参数
+            for step in api_chain:
+                params = step.get('parameters', {})
+                for k, v in params.items():
+                    if isinstance(v, str):
+                        params[k] = _stage_to_sandbox(v, role=f'step.{step.get("api_id", "?")}.{k}')
+
+            if source_path and dcc_type != 'pipeline':
+                # 无条件沙盒化主场景文件（X盘额外有只读锁，但所有路径都应在沙盒内操作）
+                src_p = Path(source_path)
+                try:
+                    src_p.resolve().relative_to(run_dir.resolve())
+                    # 已在 run_dir 内，无需拷贝
+                except ValueError:
+                    try:
+                        local_path = str(run_dir / os.path.basename(source_path))
+                        reused = os.path.exists(local_path)
+                        _t_copy = time.time()
+                        if not reused:
+                            shutil.copy2(source_path, local_path)
+                        logger.info(f'[{task_id}] 沙盒化主场景: {source_path} → {local_path}')
+                        _record_file_staged({
+                            'role': 'source_path', 'origin': source_path, 'sandbox': local_path,
+                            'reused': reused, 'elapsed_sec': time.time() - _t_copy,
+                        })
+                        source_path = local_path
+                    except Exception as e:
+                        logger.warning(f'[{task_id}] 沙盒化主场景失败，使用原路径: {e}')
+                _write_audit('CHAIN_OPEN_FILE', source_path, -1, 'open_file')
+                _update_progress(self, 'OPENING_FILE', f'正在打开源文件: {source_path}')
+                _t_open = time.time()
+                ok, err = _open_source_file(worker, task_id, source_path, dcc_type)
+                open_elapsed_sec = time.time() - _t_open
+                if not ok:
+                    meaningful_err = _translate_error(err, "open_file")
+                    _write_audit('CHAIN_ABORTED', f'打开文件失败: {meaningful_err}')
+                    _finalize_runtime_report('CHAIN_ABORTED', error=meaningful_err)
+                    return {
+                        'task_id': task_id, 'status': 'CHAIN_ABORTED',
+                        'failed_step': -1, 'error': f'打开文件失败: {source_path}',
+                        'chain_results': [], 'report_path': report_path,
+                    }
+                _write_audit('CHAIN_FILE_OPENED', source_path, -1, 'open_file')
+            elif not source_path and dcc_type in ('maya', 'blender'):
+                # 对于 Warm Pool，如果没有源文件，必须强制清空场景防止污染
+                ok, err = _open_source_file(worker, task_id, "", dcc_type)
+                if not ok:
+                    meaningful_err = _translate_error(err, "open_file")
+                    _write_audit('CHAIN_ABORTED', f'清空场景失败: {meaningful_err}')
+                    _finalize_runtime_report('CHAIN_ABORTED', error=meaningful_err)
+                    return {
+                        'task_id': task_id, 'status': 'CHAIN_ABORTED',
+                        'failed_step': -1, 'error': f'清空场景失败: {meaningful_err}',
+                        'chain_results': [], 'report_path': report_path,
+                    }
 
         # 从 payload 中提取 workflow_id（由 execute_workflow 注入）
         _wf_id = payload.get('workflow_id', '')
@@ -477,25 +590,76 @@ def execute_api_chain(self, payload: dict):
         _chain_extra_params.setdefault('info_dir', str(info_dir))
         _report_step_offset = int(payload.get('_step_index_offset') or 0)
         _report_step_total = int(payload.get('_workflow_step_total') or len(api_chain))
+        _chain_warnings = []
+
+        # Optional low-roundtrip batch path.  It is deliberately limited to
+        # literal parameters: template-dependent chains keep the established
+        # step-by-step path because later steps depend on earlier outputs.
+        _batch_results = None
+        _batch_info = None
+        _chain_failure = None
+        _batch_mode = bool(payload.get('batch_mode'))
+        _batch_atomic = bool(payload.get('atomic', True))
+        if payload.get('batch_mode') and hasattr(worker, 'run_batch'):
+            _batch_payloads = []
+            _batch_literal = True
+            for i, step in enumerate(api_chain):
+                step_api_id = _step_id(step)
+                raw_params = step.get('parameters', {}) or {}
+                def _has_template(value):
+                    if isinstance(value, str):
+                        return '{{' in value or '${' in value
+                    if isinstance(value, dict):
+                        return any(_has_template(v) for v in value.values())
+                    if isinstance(value, (list, tuple)):
+                        return any(_has_template(v) for v in value)
+                    return False
+                if _has_template(raw_params) or _has_template(step.get('source_path')):
+                    _batch_literal = False
+                    break
+                _batch_payloads.append({
+                    'task_id': f'{task_id}_s{i}', 'api_id': step_api_id,
+                    'source_path': source_path,
+                    'project': payload.get('project', 'default'),
+                    'asset_name': payload.get('asset_name', 'untitled'),
+                    'run_dir': str(run_dir), 'info_dir': str(info_dir),
+                    'extra_params': dict(_chain_extra_params),
+                    'api_params': dict(raw_params),
+                    'api_context': {
+                        **(payload.get('api_context') or {}),
+                        'execution_mode': 'background',
+                        'workspace_id': payload.get('workspace_id', ''),
+                        'project': payload.get('project', 'default'),
+                        'asset_name': payload.get('asset_name', 'untitled'),
+                        'source_path': source_path, 'run_dir': str(run_dir),
+                    },
+                })
+            if _batch_literal and _batch_payloads:
+                _check_cancellation(payload, chain_results=chain_results, report_path=report_path)
+                batch_result = worker.run_batch(_batch_payloads, atomic=_batch_atomic)
+                validate_batch_result(batch_result, len(api_chain), _batch_atomic)
+                _batch_results = batch_result['results']
+                _batch_info = {k: v for k, v in batch_result.items() if k != 'results'}
 
         for i, step in enumerate(api_chain):
+            # Native atomic execution may have stopped early. Never dispatch omitted calls.
+            if _batch_results is not None and i >= len(_batch_results):
+                break
+            if _batch_results is None:
+                _check_cancellation(payload, chain_results=chain_results, report_path=report_path)
             step_api_id = _step_id(step)
             step['api_id'] = step_api_id
             step_params_raw = step.get('parameters', {})
+            initial_receipt, initial_failed = None, False
             # 每一步执行前按当前已完成 step 的 outputs 解析模板
-            try:
-                step_params = _resolve_template_vars(
-                    step_params_raw, _chain_outputs, _chain_extra_params, _chain_config
-                )
-            except Exception as _ex:
-                logger.warning(f'[{task_id}] step {i} 模板解析失败: {_ex}')
-                step_params = dict(step_params_raw)
+            step_params = _resolve_template_vars(
+                step_params_raw, _chain_outputs, _chain_extra_params, _chain_config
+            )
+            # A segment opens its first declared source once; later source fields
+            # are validated here, without adding per-step scene reopen semantics.
+            _resolve_template_vars(step.get('source_path'), _chain_outputs,
+                                   _chain_extra_params, _chain_config)
             step_task_id = f'{task_id}_s{i}'
-
-            if _is_save_api(step_api_id) and chain_results:
-                step_params = dict(step_params)
-                step_params['_chain_history'] = chain_results
-                step_params['_open_elapsed_sec'] = open_elapsed_sec
 
             step_payload = {
                 'task_id': step_task_id,
@@ -503,7 +667,6 @@ def execute_api_chain(self, payload: dict):
                 'source_path': source_path,
                 'project': payload.get('project', 'default'),
                 'asset_name': payload.get('asset_name', 'untitled'),
-                'parameters': step_params,
                 'run_dir': str(run_dir),
                 'info_dir': str(info_dir),
                 'extra_params': dict(_chain_extra_params),
@@ -512,7 +675,9 @@ def execute_api_chain(self, payload: dict):
                 step_payload['api_id'] = step_api_id
                 step_payload['api_params'] = dict(step_params)
                 step_payload['api_context'] = {
+                    **(payload.get('api_context') or {}),
                     'execution_mode': 'background',
+                    'workspace_id': payload.get('workspace_id', ''),
                     'project': payload.get('project', 'default'),
                     'asset_name': payload.get('asset_name', 'untitled'),
                     'source_path': source_path,
@@ -543,8 +708,90 @@ def execute_api_chain(self, payload: dict):
                     'progress': i / len(api_chain),
                     'message': f'正在执行: {step_api_id} ({i+1}/{len(api_chain)})',
                 })
-            result = worker.run_api(step_payload)
-            step_status = result.get('status', 'UNKNOWN')
+            if _batch_results is not None:
+                result = _batch_results[i]
+            else:
+                _check_cancellation(payload, chain_results=chain_results, report_path=report_path)
+                result = worker.run_api(step_payload)
+
+            failure_policy = step_failure_policy(step)
+            failure_action = failure_policy.get('action', 'abort')
+            recovery_decision = None
+
+            def _inspect_worker_result(candidate, candidate_api_id=step_api_id):
+                candidate_status = business_status(candidate)
+                candidate_detail = candidate.get('detail', '')
+                if not candidate_detail and isinstance(candidate, dict) and (
+                    'summary' in candidate or 'output' in candidate or 'api_id' in candidate
+                ):
+                    candidate_detail = json.dumps(candidate, ensure_ascii=False, default=str)
+                candidate_receipt = _report_writer.extract_receipt(
+                    candidate_detail or candidate, candidate_api_id, candidate_status
+                )
+                if candidate_status != 'SUCCESS' and candidate_receipt.get('status') == 'SUCCESS':
+                    candidate_receipt['status'] = candidate_status
+                candidate_effective = candidate_receipt.get('status') or candidate_status
+                candidate_failed = (
+                    candidate_effective in ('AUDIT_FAILED', 'NEEDS_ATTENTION', 'BLOCKED')
+                    or candidate_status != 'SUCCESS'
+                    or candidate_effective != 'SUCCESS'
+                )
+                return candidate_failed, candidate_status, candidate_detail, candidate_receipt
+
+            initial_failed, _initial_status, _initial_detail, initial_receipt = _inspect_worker_result(result)
+            if initial_failed and failure_action == 'repair_then_retry':
+                repair_step = failure_policy['repair_step']
+                repair_outputs = dict(_chain_outputs)
+                repair_outputs['__failed__'] = _receipt_output(initial_receipt)
+                repair_params = _resolve_template_vars(
+                    repair_step.get('parameters', {}),
+                    repair_outputs,
+                    _chain_extra_params,
+                    _chain_config,
+                )
+                _resolve_template_vars(repair_step.get('source_path'), _chain_outputs,
+                                       _chain_extra_params, _chain_config)
+                repair_api_id = repair_step['api_id']
+                repair_payload = {
+                    **step_payload,
+                    'task_id': f'{step_task_id}_repair',
+                    'api_id': repair_api_id,
+                    'api_params': dict(repair_params),
+                }
+                _check_cancellation(payload, chain_results=chain_results, report_path=report_path,
+                                    interrupted_step={'api_id': step_api_id, 'initial_receipt': initial_receipt})
+                _write_audit('STEP_REPAIR_START', f'step {i}: {repair_api_id}', i, repair_api_id)
+                repair_result = worker.run_api(repair_payload)
+                repair_failed, repair_status, repair_detail, repair_receipt = _inspect_worker_result(
+                    repair_result, repair_api_id
+                )
+                _write_audit(
+                    f'STEP_REPAIR_{repair_status}', str(repair_detail), i, repair_api_id
+                )
+                recovery_decision = {
+                    'action': 'repair_then_retry',
+                    'initial_status': initial_receipt.get('status') or _initial_status,
+                    'repair_api': repair_api_id,
+                    'repair_status': repair_receipt.get('status') or repair_status,
+                    'retried': not repair_failed,
+                }
+                if not repair_failed:
+                    _check_cancellation(payload, chain_results=chain_results, report_path=report_path,
+                                        interrupted_step={'api_id': step_api_id, 'initial_receipt': initial_receipt,
+                                                          'repair_receipt': repair_receipt})
+                    _write_audit('STEP_RETRY_START', f'step {i}: {step_api_id}', i, step_api_id)
+                    result = worker.run_api(step_payload)
+                    retry_failed, retry_status, retry_detail, retry_receipt = _inspect_worker_result(result)
+                    recovery_decision.update({
+                        'retry_status': retry_receipt.get('status') or retry_status,
+                        'recovered': not retry_failed,
+                    })
+                    _write_audit(
+                        f'STEP_RETRY_{retry_status}', str(retry_detail), i, step_api_id
+                    )
+                else:
+                    recovery_decision['recovered'] = False
+            step_status = business_status(result)
 
             raw_detail = result.get('detail', '')
             if not raw_detail and isinstance(result, dict) and (
@@ -568,6 +815,7 @@ def execute_api_chain(self, payload: dict):
                 'step': i, 'api_id': step_api_id,
                 'status': step_status, 'detail': raw_detail,
                 'memory_gb': round(mem_gb, 2),
+                **({'failure_policy': recovery_decision} if recovery_decision else {}),
             }
             chain_results.append(step_result)
             # audit detail 不截断：audit JSONL 是报告的单一事实源，
@@ -612,64 +860,100 @@ def execute_api_chain(self, payload: dict):
                 _chain_outputs[_step_key] = _inner_outputs
 
             effective_status = _inner_status or step_status
+            failure_status = ''
             if effective_status in ('AUDIT_FAILED', 'NEEDS_ATTENTION'):
-                _write_audit(
-                    'CHAIN_AUDIT_FAILED',
-                    f'step {i} ({step_api_id}) 审计未通过: {effective_status}',
-                    i,
-                    step_api_id,
-                )
-                _finalize_runtime_report('CHAIN_AUDIT_FAILED', error=f'step {i} ({step_api_id}) 审计未通过: {effective_status}')
-                return {
-                    'task_id': task_id, 'status': 'CHAIN_AUDIT_FAILED',
-                    'failed_step': i, 'failed_api': step_api_id,
-                    'detail': detail_str,
-                    'chain_results': chain_results,
-                    'report_path': report_path,
-                    'message': f'链在 step {i} ({step_api_id}) 审计未通过，已按后台批处理策略中止',
-                }
-
-            if _inner_status == 'BLOCKED':
-                _write_audit('CHAIN_BLOCKED', f'step {i} blocked: {step_api_id}')
-                _finalize_runtime_report('CHAIN_BLOCKED', error=f'step {i} blocked: {step_api_id}')
-                return {
-                    'task_id': task_id, 'status': 'CHAIN_BLOCKED',
-                    'failed_step': i, 'detail': detail_str,
-                    'chain_results': chain_results,
-                    'report_path': report_path,
-                }
-
-            if step_status != 'SUCCESS':
+                failure_status = 'CHAIN_AUDIT_FAILED'
+            elif effective_status == 'BLOCKED':
+                failure_status = 'CHAIN_BLOCKED'
+            elif step_status != 'SUCCESS' or effective_status != 'SUCCESS':
+                failure_status = 'CHAIN_ABORTED'
+            if failure_status:
                 chain_error = receipt.get('error') or translated_err or f'step {i} failed: {step_api_id}'
-                _write_audit('CHAIN_ABORTED', f'step {i} failed: {step_api_id}: {chain_error}')
-                _finalize_runtime_report(
-                    'CHAIN_ABORTED',
-                    error=f'step {i} ({step_api_id}) failed: {chain_error}',
-                )
-                return {
-                    'task_id': task_id, 'status': 'CHAIN_ABORTED',
+                if failure_action == 'warn_continue':
+                    warning = {
+                        'step': i,
+                        'api_id': step_api_id,
+                        'status': effective_status,
+                        'error': chain_error,
+                        'action': 'warn_continue',
+                    }
+                    _chain_warnings.append(warning)
+                    step_result['failure_policy'] = warning
+                    _write_audit('STEP_WARNING_CONTINUE', json.dumps(warning, ensure_ascii=False), i, step_api_id)
+                    failure_status = ''
+                elif failure_action == 'needs_attention':
+                    failure_status = 'CHAIN_NEEDS_ATTENTION'
+                elif failure_action == 'repair_then_retry' and failure_policy.get('on_exhausted', 'needs_attention') == 'needs_attention':
+                    failure_status = 'CHAIN_NEEDS_ATTENTION'
+                if not failure_status:
+                    continue
+                _chain_failure = _chain_failure or {
+                    'task_id': task_id, 'status': failure_status,
                     'failed_step': i, 'failed_api': step_api_id,
                     'error': chain_error,
                     'detail': detail_str,
-                    'chain_results': chain_results,
                     'report_path': report_path,
                 }
+                if not _batch_mode or _batch_atomic:
+                    break
 
+        if _batch_mode:
+            if _batch_info is None:
+                _batch_info = {
+                    'status': 'ERROR' if _chain_failure else 'SUCCESS',
+                    'completed': len(chain_results), 'requested': len(api_chain),
+                    'atomic': _batch_atomic, 'rolled_back': False,
+                }
+            _write_audit('BATCH_RESULT', json.dumps(_batch_info, ensure_ascii=False))
+            if _batch_info.get('status') != 'SUCCESS' and not _chain_failure:
+                _chain_failure = {
+                    'task_id': task_id, 'status': 'CHAIN_ABORTED',
+                    'error': 'Batch did not complete successfully', 'report_path': report_path,
+                }
+        if _chain_failure:
+            _write_audit(_chain_failure['status'], _chain_failure['error'])
+            _finalize_runtime_report(_chain_failure['status'], error=_chain_failure['error'])
+            return {**_chain_failure, 'chain_results': chain_results,
+                    **({'batch': _batch_info} if _batch_info is not None else {})}
+
+        chain_status = 'SUCCESS_WITH_WARNINGS' if _chain_warnings else 'SUCCESS'
         _write_audit('CHAIN_SUCCESS', f'{len(chain_results)} steps completed')
 
         # ── 运行时报告收尾 ──
         total_elapsed_min = (time.time() - _t_chain_start) / 60
         if not is_subchain:
-            _finalize_runtime_report('SUCCESS')
+            _finalize_runtime_report(chain_status)
 
         result = {
-            'task_id': task_id, 'status': 'SUCCESS',
+            'task_id': task_id, 'status': chain_status,
             'chain_results': chain_results,
             'report_path': report_path,
+            **({'warnings': _chain_warnings} if _chain_warnings else {}),
+            **({'batch': _batch_info} if _batch_info is not None else {}),
         }
         return result
 
+    except _CancellationRequested:
+        raise
+    except TemplateError as exc:
+        # A repair template can fail after its original API already returned.
+        # Retain that receipt exactly once; do not retry any completed call.
+        if ('initial_receipt' in locals() and initial_receipt and len(chain_results) == i
+                and initial_failed):
+            chain_results.append({'step': i, 'api_id': step_api_id,
+                                  'status': _initial_status, 'detail': _initial_detail})
+            _write_audit(f'STEP_{_initial_status}', str(_initial_detail), i, step_api_id)
+            if report_path:
+                _report_writer.upsert_step_finished(report_path, step_report_context,
+                    initial_receipt, worker_status=_initial_status, raw_detail=str(_initial_detail))
+        error = f'{type(exc).__name__}: {exc}'
+        _write_audit('CHAIN_ERROR', error)
+        _finalize_runtime_report('CHAIN_ERROR', error=error)
+        return {'task_id': task_id, 'status': 'CHAIN_ERROR', 'error_code': exc.code,
+                'error': error, 'failed_step': getattr(exc, 'step_index', i if 'i' in locals() else -1),
+                'chain_results': chain_results, 'report_path': report_path}
     except TimeoutError:
+        invalidate_scene(worker)
         tb = traceback.format_exc()
         _write_audit('TIMEOUT', tb)
         _finalize_runtime_report('TIMEOUT', error='任务超时', tb=tb)
@@ -678,6 +962,7 @@ def execute_api_chain(self, payload: dict):
     except Exception as exc:
         from celery.exceptions import SoftTimeLimitExceeded
         if isinstance(exc, SoftTimeLimitExceeded):
+            invalidate_scene(worker)
             _write_audit('TIMEOUT', 'Soft time limit exceeded (9 minutes). Terminating worker.')
             _finalize_runtime_report('TIMEOUT', error='Soft time limit exceeded (9 minutes). Terminating worker.')
             raise
@@ -685,6 +970,15 @@ def execute_api_chain(self, payload: dict):
         tb = traceback.format_exc()
         _write_audit('CHAIN_ERROR', tb)
         _finalize_runtime_report('CHAIN_ERROR', error=f'{type(exc).__name__}: {exc}', tb=tb)
+        if audit_only or payload.get('batch_mode') or payload.get('workspace_report_path'):
+            if not isinstance(exc, WorkspaceError):
+                invalidate_scene(worker)
+            # A transport exception can occur after DCC side effects. Never replay a batch.
+            raise
+        if payload.get('workspace_report_path'):
+            if not isinstance(exc, WorkspaceError):
+                invalidate_scene(worker)
+            raise
         raise self.retry(exc=exc)
 
     finally:
@@ -702,6 +996,7 @@ def execute_api_chain(self, payload: dict):
     default_retry_delay=5,
     name='cgi_pipeline.core.tasks.execute_api_operation'
 )
+@_workspace_runtime
 def execute_api_operation(self, payload: dict):
     """
     单API执行：创建新 DCC 进程 → 执行 → 质检 → 发布 → 退出。
@@ -711,7 +1006,8 @@ def execute_api_operation(self, payload: dict):
 
     try:
         validated_payload = ApiPayloadSchema(**payload)
-        payload = validated_payload.model_dump()
+        payload.clear()
+        payload.update(validated_payload.model_dump())
     except ValidationError as e:
         task_id = payload.get('task_id', 'unknown_task')
         api_id = payload.get('api_id', 'unknown_api')
@@ -740,6 +1036,8 @@ def execute_api_operation(self, payload: dict):
         entry = {
             'task_id': task_id, 'api_id': api_id,
             'status': status, 'ts': time.time(), 'detail': detail,
+            **workspace_result(payload),
+            **({'scene_session': payload['scene_session']} if payload.get('scene_session') else {}),
             'attempt': self.request.retries + 1,
         }
         with open(audit_path, 'a') as f:
@@ -749,10 +1047,12 @@ def execute_api_operation(self, payload: dict):
     _t_start = time.time()
     # 沙盒目录提前到 try 之前，所有出口都能用
     from cgi_pipeline.core.run_archive import create_run_dir
-    run_dir = create_run_dir(task_id, project, asset_name, payload.get('submitted_at'))
-    info_dir = run_dir / '.info'
-    info_dir.mkdir(parents=True, exist_ok=True)
-    report_path = _report_writer.get_report_path(run_dir)
+    audit_only = audit_only_operation(payload, 'api')
+    run_dir = '' if audit_only else (Path(payload['run_dir']) if payload.get('workspace_report_path') else create_run_dir(task_id, project, asset_name, payload.get('submitted_at')))
+    info_dir = run_dir / '.info' if run_dir else ''
+    if info_dir:
+        info_dir.mkdir(parents=True, exist_ok=True)
+    report_path = '' if audit_only else (payload.get('report_path') or _report_writer.get_report_path(run_dir))
     report_context = {
         'task_id': task_id,
         'asset_name': asset_name,
@@ -760,12 +1060,15 @@ def execute_api_operation(self, payload: dict):
         'source_path': payload.get('source_path', ''),
         'run_dir': str(run_dir),
     }
-    _report_writer.init_report(report_path, report_context)
+    if report_path:
+        _report_writer.init_report(report_path, report_context)
 
     def _record_file_staged(record: dict):
         _write_audit('FILE_STAGED', json.dumps(record, ensure_ascii=False))
 
     def _finalize_runtime_report(status: str, error: str = '', tb: str = ''):
+        if not report_path:
+            return
         elapsed_min = (time.time() - _t_start) / 60
         ctx = dict(report_context)
         ctx['source_path'] = payload.get('source_path', '') or ctx.get('source_path', '')
@@ -787,90 +1090,96 @@ def execute_api_operation(self, payload: dict):
 
     try:
         _write_audit('STARTED')
-        _reload_capability_registry()
         dcc_type = get_executor(api_id)
 
-        # 自动定位源文件
-        source_path = payload.get('source_path', '')
-        if not source_path and api_id not in _SKIP_AUDIT_APIS and dcc_type != 'pipeline':
-            _t_resolve = time.time()
-            try:
-                resolver = _get_resolver(project)
-                # 尝试按阶段优先级定位
-                resolved = resolver.resolve_by_stage('chr', asset_name)
-                if resolved and resolved.get('path'):
-                    source_path = resolved['path']
-                    logger.info(f'[{task_id}] AssetResolver 定位到: {source_path}')
-                    _record_file_staged({
-                        'node': '资产路径解析',
-                        'param': 'asset_name',
-                        'input': asset_name,
-                        'output': source_path,
-                        'status': 'SUCCESS',
-                        'elapsed_sec': time.time() - _t_resolve,
-                    })
-                else:
+        if audit_only:
+            source_path = ''
+            worker = _create_worker(dcc_type, source_path)
+        elif payload.get('workspace_report_path'):
+            worker, source_path = prepare_scene(payload, dcc_type, _create_worker, _open_source_file,
+                lambda status, detail: _write_audit(status, json.dumps(detail, ensure_ascii=False)))
+        else:
+            # 自动定位源文件
+            source_path = payload.get('source_path', '')
+            if not source_path and api_id not in get_skip_audit_capabilities() and dcc_type != 'pipeline':
+                _t_resolve = time.time()
+                try:
+                    resolver = _get_resolver(project)
+                    # 尝试按阶段优先级定位
+                    resolved = resolver.resolve_by_stage('chr', asset_name)
+                    if resolved and resolved.get('path'):
+                        source_path = resolved['path']
+                        logger.info(f'[{task_id}] AssetResolver 定位到: {source_path}')
+                        _record_file_staged({
+                            'node': '资产路径解析',
+                            'param': 'asset_name',
+                            'input': asset_name,
+                            'output': source_path,
+                            'status': 'SUCCESS',
+                            'elapsed_sec': time.time() - _t_resolve,
+                        })
+                    else:
+                        _record_file_staged({
+                            'node': '资产路径解析',
+                            'param': 'asset_name',
+                            'input': asset_name,
+                            'output': '',
+                            'status': '未找到',
+                            'elapsed_sec': time.time() - _t_resolve,
+                        })
+                except Exception as e:
                     _record_file_staged({
                         'node': '资产路径解析',
                         'param': 'asset_name',
                         'input': asset_name,
                         'output': '',
-                        'status': '未找到',
+                        'error': str(e),
                         'elapsed_sec': time.time() - _t_resolve,
                     })
-            except Exception as e:
-                _record_file_staged({
-                    'node': '资产路径解析',
-                    'param': 'asset_name',
-                    'input': asset_name,
-                    'output': '',
-                    'error': str(e),
-                    'elapsed_sec': time.time() - _t_resolve,
-                })
 
-        _update_progress(self, 'STARTING_WORKER', f'正在启动 {dcc_type.capitalize()} 后台进程')
-        worker = _create_worker(dcc_type, source_path)
+            _update_progress(self, 'STARTING_WORKER', f'正在启动 {dcc_type.capitalize()} 后台进程')
+            worker = _create_worker(dcc_type, source_path)
 
-        # 自动打开源文件或清空场景（无条件沙盒化）
-        if source_path and dcc_type != 'pipeline':
-            import shutil as _shutil
-            src_p = Path(source_path)
-            try:
-                src_p.resolve().relative_to(run_dir.resolve())
-            except ValueError:
+            # 自动打开源文件或清空场景（无条件沙盒化）
+            if source_path and dcc_type != 'pipeline':
+                import shutil as _shutil
+                src_p = Path(source_path)
                 try:
-                    local_path = str(run_dir / src_p.name)
-                    reused = os.path.exists(local_path)
-                    _t_copy = time.time()
-                    if not reused:
-                        _shutil.copy2(source_path, local_path)
-                    logger.info(f'[{task_id}] 沙盒化: {source_path} → {local_path}')
-                    _record_file_staged({
-                        'role': 'source_path',
-                        'origin': source_path,
-                        'sandbox': local_path,
-                        'reused': reused,
-                        'elapsed_sec': time.time() - _t_copy,
-                    })
-                    source_path = local_path
-                except Exception as e:
-                    logger.warning(f'[{task_id}] 沙盒化失败，使用原路径: {e}')
-            payload['source_path'] = source_path
-            _write_audit('CHAIN_OPEN_FILE', source_path)
-            _update_progress(self, 'OPENING_FILE', f'正在打开源文件: {source_path}')
-            _t_open = time.time()
-            ok, err = _open_source_file(worker, task_id, source_path, dcc_type)
-            open_elapsed = time.time() - _t_open
-            if not ok:
-                meaningful_err = _translate_error(err, "open_file")
-                _write_audit('OPEN_FILE_FAILED', meaningful_err)
-                _finalize_runtime_report('API_ERROR', error=meaningful_err)
-                return {'task_id': task_id, 'status': 'ERROR',
-                        'detail': f'打开文件失败: {source_path} — {meaningful_err}',
-                        'report_path': report_path}
-            _write_audit('CHAIN_FILE_OPENED', source_path)
-        elif not source_path and dcc_type in ('maya', 'blender'):
-            _open_source_file(worker, task_id, "", dcc_type)
+                    src_p.resolve().relative_to(run_dir.resolve())
+                except ValueError:
+                    try:
+                        local_path = str(run_dir / src_p.name)
+                        reused = os.path.exists(local_path)
+                        _t_copy = time.time()
+                        if not reused:
+                            _shutil.copy2(source_path, local_path)
+                        logger.info(f'[{task_id}] 沙盒化: {source_path} → {local_path}')
+                        _record_file_staged({
+                            'role': 'source_path',
+                            'origin': source_path,
+                            'sandbox': local_path,
+                            'reused': reused,
+                            'elapsed_sec': time.time() - _t_copy,
+                        })
+                        source_path = local_path
+                    except Exception as e:
+                        logger.warning(f'[{task_id}] 沙盒化失败，使用原路径: {e}')
+                payload['source_path'] = source_path
+                _write_audit('CHAIN_OPEN_FILE', source_path)
+                _update_progress(self, 'OPENING_FILE', f'正在打开源文件: {source_path}')
+                _t_open = time.time()
+                ok, err = _open_source_file(worker, task_id, source_path, dcc_type)
+                open_elapsed = time.time() - _t_open
+                if not ok:
+                    meaningful_err = _translate_error(err, "open_file")
+                    _write_audit('OPEN_FILE_FAILED', meaningful_err)
+                    _finalize_runtime_report('API_ERROR', error=meaningful_err)
+                    return {'task_id': task_id, 'status': 'ERROR',
+                            'detail': f'打开文件失败: {source_path} — {meaningful_err}',
+                            'report_path': report_path}
+                _write_audit('CHAIN_FILE_OPENED', source_path)
+            elif not source_path and dcc_type in ('maya', 'blender'):
+                _open_source_file(worker, task_id, "", dcc_type)
 
         # 执行API
         payload['source_path'] = source_path
@@ -880,6 +1189,7 @@ def execute_api_operation(self, payload: dict):
             api_context = dict(payload.get('api_context') or {})
             api_context.update({
                 'execution_mode': 'background',
+                'workspace_id': payload.get('workspace_id', ''),
                 'source_path': source_path,
                 'project': project,
                 'asset_name': asset_name,
@@ -898,8 +1208,11 @@ def execute_api_operation(self, payload: dict):
             'parameters': payload.get('api_params', {}),
             'source_path': source_path,
         }
-        _report_writer.upsert_step_started(report_path, step_report_context)
+        if report_path:
+            _report_writer.upsert_step_started(report_path, step_report_context)
+        _check_cancellation(payload, report_path=report_path)
         result = worker.run_api(payload)
+        result['status'] = business_status(result)
         logger.info(f'[{task_id}] API 执行完成: status={result["status"]}')
 
         raw_detail = result.get('detail', '')
@@ -916,10 +1229,11 @@ def execute_api_operation(self, payload: dict):
                 receipt['status'] = raw_status
             if raw_status == 'ERROR' and translated_err and not receipt.get('error'):
                 receipt['error'] = translated_err
-            _report_writer.upsert_step_finished(
-                report_path, step_report_context, receipt,
-                worker_status=raw_status, raw_detail=str(raw_detail),
-            )
+            if report_path:
+                _report_writer.upsert_step_finished(
+                    report_path, step_report_context, receipt,
+                    worker_status=raw_status, raw_detail=str(raw_detail),
+                )
             audit_status = f'STEP_{raw_status}' if raw_status in (
                 'BLOCKED', 'AUDIT_FAILED', 'NEEDS_ATTENTION'
             ) else 'STEP_ERROR'
@@ -932,10 +1246,11 @@ def execute_api_operation(self, payload: dict):
                     'report_path': report_path}
 
         receipt = _report_writer.extract_receipt(raw_detail or result, api_id, 'SUCCESS')
-        _report_writer.upsert_step_finished(
-            report_path, step_report_context, receipt,
-            worker_status='SUCCESS', raw_detail=str(raw_detail),
-        )
+        if report_path:
+            _report_writer.upsert_step_finished(
+                report_path, step_report_context, receipt,
+                worker_status='SUCCESS', raw_detail=str(raw_detail),
+            )
         _write_audit('STEP_SUCCESS', str(raw_detail))
         _write_audit('CHAIN_SUCCESS', '1 step completed')
 
@@ -946,7 +1261,10 @@ def execute_api_operation(self, payload: dict):
                'report_path': report_path}
         return ret
 
+    except _CancellationRequested:
+        raise
     except TimeoutError:
+        invalidate_scene(worker)
         tb = traceback.format_exc()
         _write_audit('TIMEOUT', tb)
         _finalize_runtime_report('TIMEOUT', error='任务超时', tb=tb)
@@ -955,13 +1273,18 @@ def execute_api_operation(self, payload: dict):
     except Exception as exc:
         from celery.exceptions import SoftTimeLimitExceeded
         if isinstance(exc, SoftTimeLimitExceeded):
+            invalidate_scene(worker)
             _write_audit('TIMEOUT', 'Soft time limit exceeded (9 minutes). Terminating worker.')
             _finalize_runtime_report('TIMEOUT', error='Soft time limit exceeded (9 minutes). Terminating worker.')
             raise
 
         tb = traceback.format_exc()
-        _write_audit('RETRY', tb)
+        _write_audit('ERROR' if audit_only or payload.get('workspace_report_path') else 'RETRY', tb)
         _finalize_runtime_report('ERROR', error=f'{type(exc).__name__}: {exc}', tb=tb)
+        if audit_only or payload.get('workspace_report_path'):
+            if not isinstance(exc, WorkspaceError):
+                invalidate_scene(worker)
+            raise
         raise self.retry(exc=exc)
 
     finally:
@@ -976,6 +1299,7 @@ def execute_api_operation(self, payload: dict):
     name='cgi_pipeline.core.tasks.execute_workflow',
     max_retries=0,
 )
+@_workspace_runtime
 def execute_workflow(self, payload: dict):
     """
     工作流执行：支持跨 DCC 编排 + 断点恢复 + 实时进度推送。
@@ -1002,6 +1326,9 @@ def execute_workflow(self, payload: dict):
         entry = {
             'task_id': task_id, 'workflow_id': workflow_id,
             'status': status, 'ts': time.time(), 'detail': detail,
+            **workspace_result(payload),
+            **payload.get('_workflow_result', {}),
+            **({'scene_session': payload['scene_session']} if payload.get('scene_session') else {}),
         }
         with open(audit_path, 'a') as f:
             f.write(json.dumps(entry) + '\n')
@@ -1016,10 +1343,18 @@ def execute_workflow(self, payload: dict):
             'progress': 0.0,
         })
 
-        # 加载工作流定义
-        from cgi_pipeline.core.workflow_engine import load_workflow
+        # Submission owns compilation; workers consume the same frozen plan.
         from cgi_pipeline.core.config_loader import load_project_config
-        wf = load_workflow(workflow_id)
+        wf = payload.get('_workflow_plan')
+        if not isinstance(wf, dict):
+            return {'task_id': task_id, 'workflow_id': workflow_id, 'status': 'WORKFLOW_ERROR',
+                    'error_code': 'WORKFLOW_PLAN_REQUIRED',
+                    'error': 'Missing submitted _workflow_plan snapshot; resubmit through the workflow entry.'}
+        extra_params = dict(wf['extra_params'])
+        # Input source binding may be resolved during submission before staging.
+        if source_path:
+            extra_params['source_path'] = source_path
+        save_state = payload['_workflow_result']
         steps = wf.get('steps', [])
         
         project_config = load_project_config(project)
@@ -1028,7 +1363,7 @@ def execute_workflow(self, payload: dict):
             _write_audit('WORKFLOW_ERROR', '工作流无步骤')
             return {'task_id': task_id, 'status': 'WORKFLOW_ERROR', 'error': '工作流无步骤'}
 
-        if not source_path:
+        if not source_path and not payload.get('workspace_report_path'):
             try:
                 resolved_source, resolved_meta = _resolve_workflow_source_candidate(
                     wf, project_config, asset_name, extra_params
@@ -1054,8 +1389,8 @@ def execute_workflow(self, payload: dict):
                 }
 
         # ── 创建运行目录(沙盒) + 统一报告 ──
-        run_dir = create_run_dir(task_id, project, asset_name, payload.get('submitted_at'))
-        master_report_path = _report_writer.get_report_path(run_dir)
+        run_dir = Path(payload['run_dir']) if payload.get('workspace_report_path') else create_run_dir(task_id, project, asset_name, payload.get('submitted_at'))
+        master_report_path = payload.get('report_path') or _report_writer.get_report_path(run_dir)
         _t_workflow_start = time.time()
         report_context = {
             'task_id': task_id,
@@ -1064,6 +1399,7 @@ def execute_workflow(self, payload: dict):
             'workflow_id': workflow_id,
             'source_path': source_path,
             'run_dir': str(run_dir),
+            **save_state,
         }
         _report_writer.init_report(master_report_path, report_context)
 
@@ -1074,14 +1410,24 @@ def execute_workflow(self, payload: dict):
             elapsed_min = (time.time() - _t_workflow_start) / 60
             ctx = dict(report_context)
             ctx['source_path'] = source_path
+            ctx.update(save_state)
             _report_writer.finalize_report(
                 master_report_path, ctx, status,
                 elapsed_min=elapsed_min, error=error, traceback_text=tb,
             )
         
+        # A semantic filename is separate from an executable staged path.
+        from cgi_pipeline.core.scene_session import source_display_name
+        extra_params['source_name'] = source_display_name(source_path, run_dir) if source_path else ''
+
         # 将原始 source_path 和相关文件隔离到沙盒中
         def _stage_to_sandbox(src: str, role: str = 'source_path') -> str:
             if not src: return src
+            if payload.get('workspace_report_path'):
+                from cgi_pipeline.core.scene_session import _stage
+                staged, copied = _stage(src, run_dir)
+                _record_file_staged({'role': role, 'origin': src, 'sandbox': staged, 'reused': not copied})
+                return staged
             src_path = Path(src)
             # 已经在本次 run_dir 内的文件无需重复拷贝
             try:
@@ -1114,11 +1460,22 @@ def execute_workflow(self, payload: dict):
                 'role': role, 'origin': str(src_path), 'sandbox': str(dst_path),
                 'reused': reused, 'elapsed_sec': time.time() - _t_copy,
             })
+            try:
+                origins_file = run_dir / '.info' / 'staged_origins.json'
+                origins_file.parent.mkdir(parents=True, exist_ok=True)
+                origins = {}
+                if origins_file.exists():
+                    origins = json.loads(origins_file.read_text(encoding='utf-8'))
+                origins[dst_path.name] = str(src_path.parent).replace('\\', '/')
+                origins_file.write_text(json.dumps(origins, indent=2, ensure_ascii=False), encoding='utf-8')
+            except Exception as _ex:
+                logger.warning(f"[{task_id}] 记录 staged_origins 失败: {_ex}")
             return str(dst_path)
 
-        source_path = _stage_to_sandbox(source_path, role='source_path')
+        if not payload.get('workspace_report_path'):
+            source_path = _stage_to_sandbox(source_path, role='source_path')
         for k, v in extra_params.items():
-            if isinstance(v, str) and (v.endswith('.ma') or v.endswith('.mb') or v.endswith('.blend') or v.endswith('.json') or v.endswith('.abc')):
+            if k != 'source_name' and isinstance(v, str) and (v.endswith('.ma') or v.endswith('.mb') or v.endswith('.blend') or v.endswith('.json') or v.endswith('.abc')):
                 extra_params[k] = _stage_to_sandbox(v, role=f'input.{k}')
 
         info_dir = run_dir / '.info'
@@ -1132,12 +1489,12 @@ def execute_workflow(self, payload: dict):
         payload['extra_params'] = extra_params
 
         try:
-            cleanup_old_runs(max_age_days=7)
+            if not payload.get('workspace_report_path'):
+                cleanup_old_runs(max_age_days=7)
         except Exception:
             pass
 
         # ── 按 DCC 类型分段 ──
-        _reload_capability_registry()
         segments = []  # [(dcc_type, [steps])]
         current_dcc = None
         current_steps = []
@@ -1166,12 +1523,15 @@ def execute_workflow(self, payload: dict):
         # ── 断点恢复：从 Redis 恢复已完成段和 outputs ──
         completed_segs = get_completed_segments(task_id) if resume_mode else set()
         all_outputs = restore_outputs(task_id) if resume_mode else {}
+        save_state.update(_workflow_save_state(wf, all_outputs))
         all_results = []
         total_steps_executed = 0
         collected_reports = [master_report_path]
         collected_outputs = {}
 
+        initialized_hosts = set()
         for seg_idx, (seg_dcc, seg_steps) in enumerate(segments):
+            _check_cancellation(payload, segments=all_results, report_path=master_report_path)
             # 断点恢复：跳过已完成段
             if seg_idx in completed_segs:
                 _write_audit('SEGMENT_SKIPPED', f'seg {seg_idx}: 已完成，跳过')
@@ -1187,9 +1547,11 @@ def execute_workflow(self, payload: dict):
             # workflow 只做"跨段 + 环境"级别的模板解析（input / config / 上段 outputs），
             # 本段内 step-to-step 的 {{outputs.<sibling>.xxx}} 由 chain 引擎在每步执行前补解析。
             resolved_steps = []
+            deferred_output_ids = set()
             for step in seg_steps:
                 resolved_params = _resolve_template_vars(
-                    step.get('parameters', {}), all_outputs, extra_params, project_config
+                    step.get('parameters', {}), all_outputs, extra_params, project_config,
+                    deferred_output_ids=deferred_output_ids,
                 )
                 resolved_step = {
                     'step_id': step.get('step_id', ''),
@@ -1202,9 +1564,13 @@ def execute_workflow(self, payload: dict):
                 if step.get('source_path'):
                     resolved_step['source_path'] = _resolve_template_vars(
                         {'source_path': step.get('source_path')},
-                        all_outputs, extra_params, project_config
+                        all_outputs, extra_params, project_config,
+                        deferred_output_ids=deferred_output_ids,
                     ).get('source_path')
+                if step.get('failure_policy'):
+                    resolved_step['failure_policy'] = step['failure_policy']
                 resolved_steps.append(resolved_step)
+                deferred_output_ids.add(step['step_id'])
 
             seg_task_id = f'{task_id}_seg{seg_idx}'
             _write_audit('SEGMENT_START',
@@ -1240,6 +1606,9 @@ def execute_workflow(self, payload: dict):
                 '_chain_config': project_config,         # 支持 {{config.x.y.z}}
                 '_step_index_offset': segment_step_offsets.get(seg_idx, 0),
                 '_workflow_step_total': _planned_step_total,
+                **workspace_result(payload),
+                '_workspace_subchain': bool(payload.get('workspace_report_path')),
+                'scene_action': payload.get('scene_action', 'continue') if seg_dcc not in initialized_hosts else 'continue',
             }
 
             # ── 在同一 Celery Worker 内同步执行子段 ──
@@ -1266,6 +1635,10 @@ def execute_workflow(self, payload: dict):
                 }
 
             seg_status = seg_result.get('status', 'UNKNOWN')
+            if seg_result.get('scene_session'):
+                payload['scene_session'] = seg_result['scene_session']
+            if seg_status in ('SUCCESS', 'CHAIN_SUCCESS', 'SUCCESS_WITH_WARNINGS'):
+                initialized_hosts.add(seg_dcc)
             seg_chain_results = seg_result.get('chain_results', [])
             total_steps_executed += len(seg_chain_results)
 
@@ -1305,6 +1678,8 @@ def execute_workflow(self, payload: dict):
                 'dcc': seg_dcc,
                 'status': seg_status,
                 'chain_results': seg_result.get('chain_results', []),
+                **({'warnings': seg_result['warnings']} if seg_result.get('warnings') else {}),
+                **{key: seg_result[key] for key in ('error_code', 'error', 'scene_session') if key in seg_result},
             })
 
             # 提取本段 outputs 供后续段使用
@@ -1314,20 +1689,27 @@ def execute_workflow(self, payload: dict):
                     step = resolved_steps[i]
                     _used_id = step.get('step_id') or inner.get('step_id', '') or cr.get('api_id', '')
                     outputs = _receipt_output(inner)
+                    if (step.get('api_id') == 'maya.asset.save_scene'
+                            and inner.get('status') == 'SUCCESS' and outputs.get('output_path')):
+                        save_state['result_saved'] = True
+                        save_state['saved_results'].append(outputs['output_path'])
                     if _used_id and outputs:
                         all_outputs[_used_id] = outputs
                 except Exception:
                     pass
 
             # 段失败则中断工作流
-            if seg_status not in ('SUCCESS', 'CHAIN_SUCCESS'):
+            if seg_status not in ('SUCCESS', 'CHAIN_SUCCESS', 'SUCCESS_WITH_WARNINGS'):
                 workflow_fail_status = (
-                    'WORKFLOW_AUDIT_FAILED'
+                    'CANCELLED' if seg_status == 'CANCELLED' else 'WORKFLOW_AUDIT_FAILED'
                     if seg_status in ('AUDIT_FAILED', 'STEP_AUDIT_FAILED', 'CHAIN_AUDIT_FAILED')
+                    else 'WORKFLOW_NEEDS_ATTENTION'
+                    if seg_status == 'CHAIN_NEEDS_ATTENTION'
                     else 'WORKFLOW_ABORTED'
                 )
-                _write_audit(workflow_fail_status, f'segment {seg_idx} failed: {seg_status}')
-                _finalize_runtime_report(workflow_fail_status, error=f'segment {seg_idx} failed: {seg_status}')
+                failure = {key: seg_result[key] for key in ('error_code', 'error', 'scene_session') if key in seg_result}
+                _write_audit(workflow_fail_status, json.dumps({'failed_segment': seg_idx, **failure}, ensure_ascii=False))
+                _finalize_runtime_report(workflow_fail_status, error=seg_result.get('error') or f'segment {seg_idx} failed: {seg_status}')
                 publish_event(task_id, {
                     'event_type': 'workflow.error',
                     'failed_segment': seg_idx,
@@ -1342,6 +1724,8 @@ def execute_workflow(self, payload: dict):
                     'failed_segment': seg_idx,
                     'segments': all_results,
                     'report_path': master_report_path,
+                    **save_state,
+                    **failure,
                 }
 
             # 只有成功段才持久化 outputs + 标记段完成，避免恢复时跳过失败段。
@@ -1350,32 +1734,47 @@ def execute_workflow(self, payload: dict):
 
         # ── 工作流成功完成 ──
         total_elapsed_min = (time.time() - _t_workflow_start) / 60
+        workflow_warnings = [
+            warning
+            for segment in all_results
+            for warning in segment.get('warnings', [])
+        ]
+        workflow_status = 'WORKFLOW_SUCCESS_WITH_WARNINGS' if workflow_warnings else 'WORKFLOW_SUCCESS'
         _write_audit('WORKFLOW_SUCCESS', f'{len(segments)} segments completed')
-        _finalize_runtime_report('SUCCESS')
+        _finalize_runtime_report(workflow_status)
 
     # (审计日志已直接写入沙盒，无需手动复制)
 
         # 收集所有产出路径并写入 manifest。机器中间产物保留在 outputs，
-        # 只有给人阅读的报告才进入 reports 并归档到沙盒根目录。
+        # 只有给人阅读的报告才进入 reports；工作区报告按操作/步骤隔离。
         for step_id, step_outputs in all_outputs.items():
             for field, value in step_outputs.items():
                 if isinstance(value, str) and value.lower().endswith(('.json', '.md', '.ma', '.mb', '.abc', '.blend', '.html', '.htm')):
                     collected_outputs[f'{step_id}.{field}'] = value
                     if is_report_path(value):
-                        copied_report = copy_to_run_dir(task_id, value)
+                        operation_dir = payload.get('operation_dir')
+                        filename = None
+                        if operation_dir and payload.get('workspace_report_path'):
+                            import hashlib
+                            identity = json.dumps([step_id, field], ensure_ascii=False, separators=(',', ':'))
+                            suffix = hashlib.sha256(identity.encode('utf-8')).hexdigest()[:16]
+                            filename = (f'{task_id}_{_safe_segment(step_id)[:32]}_'
+                                        f'{_safe_segment(field)[:24]}_{suffix}_{Path(value).name}')
+                        copied_report = copy_to_run_dir(task_id, value, filename, run_dir=operation_dir)
                         collected_reports.append(copied_report or value)
 
-        for removed_path in cleanup_root_machine_duplicates(run_dir):
+        for removed_path in ([] if payload.get('workspace_report_path') else cleanup_root_machine_duplicates(run_dir)):
             _write_audit('ROOT_DUPLICATE_CLEANED', removed_path)
 
         write_manifest(
             wf_id=task_id,
+            run_dir=payload.get('operation_dir'),
             workflow_id=workflow_id,
             asset_name=asset_name,
             project=project,
-            status='SUCCESS',
+            status=workflow_status,
             elapsed_min=total_elapsed_min,
-            inputs={'source_path': source_path, **extra_params},
+            inputs={'source_path': source_path, **extra_params, **save_state},
             outputs=collected_outputs,
             reports=collected_reports,
             segments=[{'seg': r['segment'], 'dcc': r['dcc'], 'status': r['status']} for r in all_results],
@@ -1386,7 +1785,7 @@ def execute_workflow(self, payload: dict):
 
         publish_event(task_id, {
             'event_type': 'workflow.done',
-            'status': 'SUCCESS',
+            'status': workflow_status,
             'progress': 1.0,
             'elapsed_min': round(total_elapsed_min, 2),
             'message': f'工作流完成，共 {len(segments)} 段 {total_steps_executed} 步',
@@ -1396,11 +1795,15 @@ def execute_workflow(self, payload: dict):
         return {
             'task_id': task_id,
             'workflow_id': workflow_id,
-            'status': 'SUCCESS',
+            'status': workflow_status,
             'segments': all_results,
             'report_path': master_report_path,
+            **save_state,
+            **({'warnings': workflow_warnings} if workflow_warnings else {}),
         }
 
+    except _CancellationRequested:
+        raise
     except Exception as exc:
         tb = traceback.format_exc()
         _write_audit('WORKFLOW_ERROR', tb)
@@ -1418,150 +1821,10 @@ def execute_workflow(self, payload: dict):
         return {
             'task_id': task_id,
             'status': 'WORKFLOW_ERROR',
+            'error_code': getattr(exc, 'code', 'WORKFLOW_EXECUTION_FAILED'),
             'error': f'{type(exc).__name__}: {exc}',
         }
 
     finally:
-        # Worker 与 DCC warm pool 由 service_manager/Dashboard 统一维护。
-        # 单个 workflow 结束后保持进程存活，后续任务直接排队复用。
+        # Keep this workspace's warm hosts until an explicit scoped release.
         pass
-
-
-def _resolve_template_vars(params: dict, outputs: dict, extra_params: dict, config: dict = None) -> dict:
-    """替换参数中的模板变量。
-
-    支持格式：
-      {{outputs.step_id.field}}                   → 从前序步骤输出中取值
-      {{input.xxx}}                               → 从工作流 extra_params 中取值
-      {{config.x.y.z}}                            → 从全局配置中取值（支持 .0 索引列表）
-      {{ <expr> | replace('A', 'B') }}            → 对表达式的取值做一次字符串替换
-      {{ <expr> | replace('A', 'B') | replace('C', 'D') }} → 可串联多个 replace
-
-    行为：整体匹配单个 {{ ... }} 占位符时，直接替换为解析值（保留 non-str 类型，
-    如 int/list）；若整串仅为占位符以外还有其他字面量，则走字符串拼接（强转 str）。
-    """
-    import re
-
-    config = config or {}
-    placeholder_re = re.compile(r'\{\{\s*([^{}]+?)\s*\}\}')
-    # expr 内部语法：
-    #   base = outputs.<step>.<field> | input.<name> | config.<dot.path>
-    #   tail = ( \s*\|\s* replace\(\s*'X'\s*,\s*'Y'\s*\) )*
-    base_re = re.compile(
-        r'^(?P<kind>outputs|input|config)\.(?P<path>[\w\.]+?)'
-        r'(?P<tail>(?:\s*\|\s*[^|]+)*)$'
-    )
-    filter_re = re.compile(
-        r'\|\s*replace\(\s*'
-        r'(?P<a>"(?:[^"\\]|\\.)*"|\'(?:[^\'\\]|\\.)*\')\s*,\s*'
-        r'(?P<b>"(?:[^"\\]|\\.)*"|\'(?:[^\'\\]|\\.)*\')\s*\)'
-    )
-
-    def _unquote(s: str) -> str:
-        s = s.strip()
-        if (s.startswith("'") and s.endswith("'")) or (s.startswith('"') and s.endswith('"')):
-            return bytes(s[1:-1], 'utf-8').decode('unicode_escape')
-        return s
-
-    def _resolve_base(kind: str, path: str):
-        keys = path.split('.')
-        if kind == 'outputs':
-            # outputs.<step>.<field>，支持 outputs.step.result.path 这样的嵌套字段。
-            if len(keys) < 2:
-                return None, False
-            step_id = keys[0]
-            step_outputs = outputs.get(step_id, {})
-            field = '.'.join(keys[1:])
-            if isinstance(step_outputs, dict) and field in step_outputs:
-                return step_outputs[field], True
-            curr = step_outputs
-            for key in keys[1:]:
-                if isinstance(curr, dict) and key in curr:
-                    curr = curr[key]
-                elif isinstance(curr, list) and key.isdigit() and int(key) < len(curr):
-                    curr = curr[int(key)]
-                else:
-                    return None, False
-            return curr, True
-        if kind == 'input':
-            if keys[0] in extra_params:
-                curr = extra_params[keys[0]]
-                for key in keys[1:]:
-                    if isinstance(curr, dict) and key in curr:
-                        curr = curr[key]
-                    elif isinstance(curr, list) and key.isdigit() and int(key) < len(curr):
-                        curr = curr[int(key)]
-                    else:
-                        return None, False
-                return curr, True
-            return None, False
-        if kind == 'config':
-            curr = config
-            for key in keys:
-                if isinstance(curr, dict) and key in curr:
-                    curr = curr[key]
-                elif isinstance(curr, list) and key.isdigit() and int(key) < len(curr):
-                    curr = curr[int(key)]
-                else:
-                    return None, False
-            return curr, True
-        return None, False
-
-    def _path_basename(value) -> str:
-        norm = str(value).replace('\\', '/').rstrip('/')
-        return norm.rsplit('/', 1)[-1]
-
-    def _path_dirname(value) -> str:
-        norm = str(value).replace('\\', '/').rstrip('/')
-        return norm.rsplit('/', 1)[0] if '/' in norm else ''
-
-    def _apply_filter(value, token: str):
-        token = token.strip()
-        if not token:
-            return value
-        replace_match = filter_re.fullmatch('|' + token)
-        if replace_match:
-            a = _unquote(replace_match.group('a'))
-            b = _unquote(replace_match.group('b'))
-            return str(value).replace(a, b)
-        if token == 'basename':
-            return _path_basename(value)
-        if token == 'stem':
-            return os.path.splitext(_path_basename(value))[0]
-        if token == 'dirname':
-            return _path_dirname(value)
-        raise ValueError(f'不支持的模板过滤器: {token}')
-
-    def _eval_expr(expr: str):
-        """解析一个 {{ ... }} 内部的表达式，返回 (value, ok)。"""
-        m = base_re.match(expr.strip())
-        if not m:
-            return None, False
-        val, ok = _resolve_base(m.group('kind'), m.group('path'))
-        if not ok:
-            return None, False
-        tail = m.group('tail') or ''
-        for token in tail.split('|')[1:]:
-            try:
-                val = _apply_filter(val, token)
-            except ValueError:
-                return None, False
-        return val, True
-
-    def _resolve_string(s: str):
-        # 整串就是单个占位符：保留原值类型
-        full = placeholder_re.fullmatch(s.strip())
-        if full:
-            val, ok = _eval_expr(full.group(1))
-            return val if ok else s
-
-        # 内嵌多个占位符或混合字面量：按字符串拼接
-        def _sub(m):
-            val, ok = _eval_expr(m.group(1))
-            return str(val) if ok else m.group(0)
-        return placeholder_re.sub(_sub, s)
-
-    resolved = {}
-    for k, v in params.items():
-        resolved[k] = _resolve_string(v) if isinstance(v, str) else v
-    return resolved

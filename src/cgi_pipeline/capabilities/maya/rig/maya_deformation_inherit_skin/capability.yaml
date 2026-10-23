@@ -1,5 +1,5 @@
 api_id: maya.rig.maya_deformation_inherit_skin
-version: 1.0.0
+version: 1.0.1
 name: maya_deformation_inherit_skin
 executor: maya
 capability: rigging.deformation
@@ -11,23 +11,87 @@ targets:
 - skin_weights
 access: write
 effects:
-  inspect: 只读取场景或标准数据，不改变资产。
-  apply: 按 API 实现对当前任务沙盒中的场景或数据执行操作。
+  scene_read: Both modes read source and target geometry and skin data.
+  file_read: Loads the source rig through a temporary reference.
+  scene_write: Both modes create temporary references/proxies and sample skin state; diagnose_only undoes target changes,
+    while apply_skin writes target skinClusters.
+  file_write: Both modes write diagnostic JSON/NPZ; apply_skin additionally saves output_path as a separate Maya scene.
 execution_modes:
 - local
 - background
-- foreground
 surfaces:
 - maya
 - service
 modes:
+- inspect
 - apply
-inputs: {}
+mode_binding:
+  input: mode
+  cases:
+  - value: diagnose_only
+    mode: inspect
+  - value: apply_skin
+    mode: apply
+inputs:
+  reference_rig_path:
+    type: string
+    required: true
+    description: 旧 Rig Maya 场景完整路径，用作权重采样来源。
+  reference_group:
+    type: string
+    required: true
+    description: 旧 Rig 中要采样的 mesh 根节点，例如 |Old|geo。
+  target_group:
+    type: string
+    default: '|Group|Geometry|cache'
+    description: 当前目标场景中要继承 Skin 的 mesh 根节点。
+  mode:
+    type: string
+    default: diagnose_only
+    choices: [diagnose_only, apply_skin]
+    description: diagnose_only 只输出诊断；apply_skin 写回 skinCluster 并保存 output_path。
+  apply_scope:
+    type: string
+    default: missing_only
+    choices: [missing_only, all]
+    description: 写回范围；missing_only 只处理无 skin mesh，all 覆盖全部目标 mesh。
+  output_path:
+    type: string
+    default: ''
+    description: apply_skin 模式下另存的新 Maya 场景完整路径。
+  info_dir:
+    type: string
+    default: ''
+    description: 诊断 JSON 与权重 NPZ 输出目录；为空时使用 source_path 同级 .info。
+  max_influences:
+    type: integer
+    default: 0
+    description: 每顶点最大保留 influence 数；0 表示不裁剪。
+  owner_map:
+    type: object
+    default: {}
+    description: 可选显式归属；键为目标 transform 或 target#component，值为去命名空间后的旧 Rig source transform 路径。
+  influence_map:
+    type: object
+    default: {}
+    description: 可选显式骨骼映射；键为旧 Rig influence 的去命名空间路径或叶名，值为当前场景 joint 路径。
 preconditions:
-- 项目配置通过统一 config/{project}_config.json 接口加载。
-- 后台模式由 CGI Worker 打开或复用对应 DCC 场景。
+- 目标场景由执行框架以 source_path 打开在任务沙盒中；不得覆盖发布目录或原始源资产。
+- 该文件级能力只在 background Worker 或本地测试上下文运行，不修改前台交互会话。
+- reference_rig_path 必须指向可读取的旧 Rig Maya 场景，reference_group 必须是其中的 mesh 根节点。
+- mode=apply_skin 时必须显式提供 output_path，并另存为新场景。
+- 第一版只继承 Skin，不传递 BlendShape、corrective 或 helper rig。
 idempotent: false
-outputs: {}
+outputs:
+  output_path: Actual operation output path; present only when this branch produces
+    or identifies a file.
+  weights_path: 'Optional by action: weights path returned by the source implementation.'
+  diagnostic_path: 'Optional by action: diagnostic path returned by the source implementation.'
+  source_meshes: 'Optional by action: source meshes returned by the source implementation.'
+  target_meshes: 'Optional by action: target meshes returned by the source implementation.'
+  processed_meshes: 'Optional by action: processed meshes returned by the source implementation.'
+  skipped_meshes: 'Optional by action: skipped meshes returned by the source implementation.'
+  issue_count: 'Optional by action: issue count returned by the source implementation.'
 statuses:
 - SUCCESS
 - PARTIAL
@@ -38,16 +102,19 @@ statuses:
 - CANCELLED
 errors:
   API_OPERATION_ERROR: 操作执行失败，详见报告。
-  API_IMPLEMENTATION_MISSING: 目录存在但没有本地实现。
+  MAYA_DEFORMATION_INHERIT_SKIN_FAILED: 引用、归属、权重写回、验证或回滚失败。
+  INHERIT_SKIN_NEEDS_ATTENTION: 归属或 influence 映射不唯一，需读取诊断后显式指定。
 recovery:
 - 读取 api_help 获取参数、前置条件和输出。
 - 失败时检查任务报告中的错误与恢复建议。
 help:
-  summary: maya_deformation_inherit_skin
-  usage: execute_api(maya.rig.maya_deformation_inherit_skin, params={...})
-  scenario: maya_deformation_inherit_skin
-  safety: read API 只读；write/destructive API 仅写入任务沙盒。
+  summary: 从旧 Rig 读取 Skin，按连通组件归属和 Maya 原生局部复制生成目标权重；不唯一时拒绝猜测。
+  usage: execute_api(maya.rig.maya_deformation_inherit_skin, params={reference_rig_path, reference_group, target_group, mode, apply_scope, output_path, info_dir, max_influences, owner_map, influence_map})
+  scenario: 先 diagnose_only 产出 ownership 与置信度诊断，再由显式 apply_skin 写入沙盒副本。
+  safety: source 与 reference 只读；整批变更在一个 undo chunk 内，临时引用和 proxy 必须清零，apply_skin 只写新的任务沙盒场景。
 tests:
-  contract: api.registry loads this manifest and api.runner validates its receipt.
-  smoke: 代表性 workflow 统一验收。
+  contract: tests/test_maya_rigging_contracts.py
+  smoke: Maya 2025 后台真实 rig 的 diagnose_only 与 apply_skin，验证权重归一化、无临时节点和源哈希不变。
+implementation: {status: implemented}
+verification: {level: live_tested, evidence: [tests/test_maya_rigging_contracts.py, audit/api-8a1bff728ae8.json, audit/api-7f0daea68537.json, audit/chain-8f48d7fe.json, audit/api-13b91b458135.json]}
 handler: cgi_pipeline.capabilities.maya.rig.maya_deformation_inherit_skin.adapter:execute

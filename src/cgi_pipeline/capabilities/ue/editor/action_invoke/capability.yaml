@@ -1,5 +1,5 @@
 api_id: ue.editor.action.invoke
-version: 1.0.0
+version: 1.0.1
 executor: ue
 capability: editor.automation
 operation: invoke
@@ -9,7 +9,8 @@ targets:
 - ue_editor
 access: destructive
 effects:
-  apply: Invokes one named UE_MCP_Bridge editor method.
+  unknown: Invokes the caller-selected UE_MCP_Bridge method; scene, file and host effects depend on method/arguments and cannot
+    be statically enumerated.
 execution_modes:
 - background
 surfaces:
@@ -40,6 +41,8 @@ idempotent: false
 outputs:
   result: Native method result from UE_MCP_Bridge.
   session: Connected UE Editor metadata.
+  bridge_protocol: Protocol reported by the selected UE bridge.
+  progress: Progress events returned by the selected UE bridge.
 statuses:
 - SUCCESS
 - ERROR
@@ -59,4 +62,10 @@ help:
 tests:
   contract: tests/test_api_catalog_additions.py
   smoke: Read-only get_build_status action in the final integration workflow.
+implementation:
+  status: implemented
+verification:
+  level: live_tested
+  evidence:
+  - audit/api-433b7bbc265f.json
 handler: cgi_pipeline.capabilities.ue.editor.action_invoke.handler:execute

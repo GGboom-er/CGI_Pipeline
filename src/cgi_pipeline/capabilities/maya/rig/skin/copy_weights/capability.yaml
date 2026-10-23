@@ -1,0 +1,51 @@
+api_id: maya.rig.skin.copy_weights
+version: 1.1.1
+executor: maya
+capability: rigging.skin
+operation: copy_weights
+stages: [rigging]
+targets: [skin_cluster, mesh]
+access: destructive
+effects:
+  scene_write: Copies or mirrors native skin weights and can create one missing target skinCluster.
+execution_modes: [local, foreground, background]
+surfaces: [maya, service]
+modes: [apply]
+inputs:
+  binding_policy: {type: string, default: copy_weights, choices: [copy_weights, inherit_source], description: Legacy copy or strict source binding inheritance onto clean targets.}
+  pairs: {type: array, default: [], description: "Strict mode batch: source and target identities {path, expected_uuid}; clean targets only, closestPoint transfer, native matrices/settings retained."}
+  source_mesh: {type: string, required: false, description: Explicit skinned source mesh.}
+  target_mesh: {type: string, required: false, description: Explicit distinct target mesh.}
+  source_skin_cluster: {type: string, description: Optional explicit source skinCluster.}
+  target_skin_cluster: {type: string, description: Optional explicit target skinCluster.}
+  create_missing_target_skin_cluster: {type: boolean, default: false, description: Bind the target to source influences when unbound.}
+  target_skin_name: {type: string, description: Optional new target skinCluster leaf name.}
+  surface_association: {type: string, default: closestPoint, choices: [closestPoint, rayCast, closestComponent], description: Native surface association strategy.}
+  influence_association: {type: array, default: [closestJoint, oneToOne, name], description: One to three unique native influence strategies.}
+  mirror: {type: boolean, default: false, description: Mirror instead of direct copy.}
+  mirror_mode: {type: string, default: YZ, choices: [XY, YZ, XZ], description: Native mirror plane.}
+  normalize: {type: boolean, default: true, description: Normalize copied native weights.}
+preconditions: [Source must have exactly one resolvable skinCluster., Target must have one skinCluster or allow explicit creation.]
+idempotent: true
+outputs:
+  source_mesh: 'Optional by action: source mesh returned by the source implementation.'
+  target_mesh: 'Optional by action: target mesh returned by the source implementation.'
+  source_skin_cluster: Resolved source binding.
+  target_skin_cluster: Resolved or created target binding.
+  created_target_skin_cluster: Whether the target binding was created.
+  surface_association: 'Optional by action: surface association returned by the source
+    implementation.'
+  influence_association: 'Optional by action: influence association returned by the
+    source implementation.'
+  mirror: 'Optional by action: mirror returned by the source implementation.'
+  mirror_mode: 'Optional by action: mirror mode returned by the source implementation.'
+  normalize: 'Optional by action: normalize returned by the source implementation.'
+  verified_vertices: Bounded native weight readback.
+statuses: [SUCCESS, ERROR]
+errors: {MAYA_RIG_SKIN_COPY_WEIGHTS_FAILED: "Validation, native copy, sampled normalization readback, or rollback failed."}
+recovery: [Use valid meshes and association strategies; permit target binding creation only when intended.]
+help: {summary: Copy or mirror Maya skin weights with explicit clusters and bounded readback., usage: "execute_api(maya.rig.skin.copy_weights, params={source_mesh, target_mesh, ...})", scenario: Reuse skinning between compatible meshes without custom one-off code., safety: Target bind and weight copy share one rollback-capable undo chunk.}
+tests: {contract: tests/test_maya_skin_copy_weights.py, smoke: Maya 2025.3 foreground copy/mirror and undo on disposable meshes.}
+implementation: {status: implemented}
+verification: {level: contract_tested, evidence: [tests/test_maya_skin_copy_weights.py]}
+handler: cgi_pipeline.capabilities.maya.rig.skin.copy_weights:copy_weights

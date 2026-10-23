@@ -1,0 +1,62 @@
+{
+  "$schema_version": "1.0.0",
+  "description": "YSJ 跨项目绑定映射与来源优先级配置：定义资产在 YSJ 与 F3CGT 之间的路径拓扑与别名对齐",
+  "search_priority": [
+    {
+      "project": "ysj",
+      "stage": "rig",
+      "path_pattern": "X:/Project/ysj/pub/assets/chr/{asset}/rig/rigMaster/ysj_chr_{asset}_rig_rigMaster_v*.ma",
+      "description": "优先使用 YSJ 本地正式发布的 rigMaster 绑定"
+    },
+    {
+      "project": "f3cgt",
+      "stage": "rig",
+      "path_pattern": "X:/Project/F3CGT/publish/asset/chr/{f3_asset}/rig/{f3_asset}_rig_rigging_main/chr_{f3_asset}_std_hi.ma",
+      "description": "若 YSJ 尚无正式绑定，自动回退到 F3CGT 发布的基底绑定"
+    }
+  ],
+  "tex_sources": [
+    {
+      "project": "ysj",
+      "path_pattern": "X:/Project/ysj/pub/assets/chr/{asset}/tex/texMaster/ysj_chr_{asset}_tex_texMaster_v*.blend"
+    },
+    {
+      "project": "f3cgt",
+      "path_pattern": "X:/Project/F3CGT/publish/asset/chr/{f3_asset}/tex/texMaster/chr_{f3_asset}_tex_v*.blend"
+    }
+  ],
+  "asset_aliases": {
+    "neZha": {
+      "f3cgt_name": "NaZha",
+      "note": "哪吒拼音差异 (neZha <-> NaZha)"
+    },
+    "jinZha": {
+      "f3cgt_name": "JinZha",
+      "note": "金吒首字母大写"
+    },
+    "muZha": {
+      "f3cgt_name": "MuZha",
+      "note": "木吒首字母大写"
+    },
+    "liJing": {
+      "f3cgt_name": "LiJing",
+      "note": "李靖首字母大写 (YSJ 网页标记手工上传)"
+    },
+    "jiDu": {
+      "f3cgt_name": "JiDu",
+      "note": "冀都已同步至 YSJ"
+    },
+    "sanZhaFanA": {
+      "f3cgt_name": "CDF_Fans_A",
+      "note": "三吒粉丝 A 映射至 F3CGT CDF_Fans_A"
+    },
+    "giftGirl": {
+      "f3cgt_name": "CDF_BaiXing_C",
+      "note": "送礼女孩映射至 CDF_BaiXing_C"
+    },
+    "giftGirlMom": {
+      "f3cgt_name": "CDF_BaiXing_B",
+      "note": "送礼女孩母亲映射至 CDF_BaiXing_B"
+    }
+  }
+}

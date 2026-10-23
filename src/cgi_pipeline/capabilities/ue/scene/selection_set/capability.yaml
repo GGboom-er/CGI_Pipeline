@@ -1,0 +1,31 @@
+api_id: ue.scene.selection.set
+version: 1.0.1
+executor: ue
+capability: scene.selection
+operation: set
+stages: [editor]
+targets: [level_actor]
+access: write
+effects:
+  scene_write: Replaces actor selection in one editor transaction.
+execution_modes: [foreground]
+surfaces: [ue, service]
+modes: [apply]
+inputs:
+  actors: {type: array, required: true, description: "Actor object paths, names, or labels; empty clears selection."}
+  max_items: {type: integer, default: 200, description: "Maximum actors, hard limit 1000."}
+preconditions: [Runs in UE5 Editor with a loaded level.]
+idempotent: true
+outputs:
+  before: Previous selection.
+  after: Resulting selection.
+  status: Operation result status inside output; distinct from the API receipt status.
+  truncated: Whether input exceeded max_items.
+statuses: [SUCCESS, ERROR]
+errors: {UE_SCENE_CORE_OPERATION_FAILED: Invalid actor or editor context.}
+recovery: [Use object paths for ambiguous actors.]
+help: {summary: Replace selected UE actors., usage: "execute_api(ue.scene.selection.set, params={actors})", scenario: Establish a deterministic actor selection., safety: Undoable editor state write.}
+tests: {contract: tests/test_ue_scene_core_apis.py, smoke: UE5 Editor selection set.}
+handler: cgi_pipeline.capabilities.ue.scene_core:set_selection
+implementation: {status: implemented}
+verification: {level: contract_tested, evidence: [tests/test_ue_scene_core_apis.py]}

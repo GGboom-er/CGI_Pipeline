@@ -4,7 +4,19 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, model_validator
+
+
+def _catalog_for_payload(payload, info):
+    from cgi_pipeline.catalog import snapshot
+
+    selected = (info.context or {}).get('catalog_snapshot')
+    if selected is None:
+        selected = snapshot()
+    expected = (getattr(payload, 'api_context', None) or {}).get('expected_catalog_version')
+    if expected is not None and expected != selected[1]:
+        raise ValueError('CATALOG_VERSION_STALE: capability catalog changed before validation')
+    return selected
 
 
 class ApiPayloadSchema(BaseModel):
@@ -31,14 +43,14 @@ class ApiPayloadSchema(BaseModel):
         return values
 
     @model_validator(mode="after")
-    def validate_api_params(self):
+    def validate_api_params(self, info: ValidationInfo):
         from cgi_pipeline.core.capability_registry import resolve_api_id
-        from cgi_pipeline.catalog import get_capability
         from cgi_pipeline.contracts import ApiContractError, validate_params
 
         try:
-            self.api_id = resolve_api_id(self.api_id)
-            spec = get_capability(self.api_id)
+            selected = _catalog_for_payload(self, info)
+            self.api_id = resolve_api_id(self.api_id, catalog_snapshot=selected)
+            spec = selected[0][self.api_id]
             normalized = validate_params(spec, dict(self.api_params or {}))
         except (KeyError, ApiContractError) as exc:
             raise ValueError(str(exc)) from exc
@@ -58,19 +70,19 @@ class ApiChainPayloadSchema(BaseModel):
     api_chain: list[dict[str, Any]] = Field(..., min_length=1)
 
     @model_validator(mode="after")
-    def validate_chain(self):
+    def validate_chain(self, info: ValidationInfo):
         from cgi_pipeline.core.capability_registry import resolve_api_id
-        from cgi_pipeline.catalog import get_capability
         from cgi_pipeline.contracts import ApiContractError, validate_params
 
+        selected = _catalog_for_payload(self, info)
         for index, step in enumerate(self.api_chain):
             api_id = step.get("api_id")
             if not api_id:
                 raise ValueError(f"API chain step {index} missing api_id")
             try:
-                canonical_id = resolve_api_id(str(api_id))
+                canonical_id = resolve_api_id(str(api_id), catalog_snapshot=selected)
                 step["api_id"] = canonical_id
-                spec = get_capability(canonical_id)
+                spec = selected[0][canonical_id]
                 params = validate_params(spec, step.get("parameters") or {})
             except (KeyError, ApiContractError) as exc:
                 raise ValueError(f"step {index} ({api_id}): {exc}") from exc

@@ -1,0 +1,46 @@
+api_id: maya.animation.bake
+version: 1.0.1
+executor: maya
+capability: animation.bake
+operation: bake
+stages: [animation, rigging]
+targets: [animation, keyframes, simulation]
+access: destructive
+effects:
+  scene_write: 'action=bake: Samples explicit Maya node attributes to keyframes without deleting constraints.'
+execution_modes: [local, foreground, background]
+surfaces: [maya, service]
+modes: [apply]
+inputs:
+  action: {type: string, required: true, choices: [bake], description: "Animation bake action."}
+  nodes: {type: array, required: true, description: "Unique explicit nodes resolved to long paths."}
+  attributes: {type: array, required: true, description: "Unique relative plug names shared by all nodes."}
+  start_time: {type: number, required: true, description: "Inclusive bake start frame."}
+  end_time: {type: number, required: true, description: "Inclusive bake end frame."}
+  sample_by: {type: number, default: 1.0, description: "Positive sample interval."}
+  simulation: {type: boolean, default: false, description: "Evaluate the whole scene at each sample; uses a tighter workload cap."}
+  disable_implicit_control: {type: boolean, default: false, description: "Disable implicit controls such as IK after baking; does not delete explicit constraints."}
+  preserve_outside_keys: {type: boolean, default: true, description: "Preserve keys outside the bake range."}
+  sparse: {type: boolean, default: false, description: "Use Maya sparseAnimCurveBake."}
+  minimize_rotation: {type: boolean, default: true, description: "Minimize discontinuous rotation during baking."}
+  max_items: {type: integer, default: 200, description: "Per-list bound; hard limit 2000."}
+preconditions: [Every requested plug exists; the bounded target-sample workload fits the simulation or standard cap.]
+idempotent: true
+outputs:
+  action: 'Optional by action: action returned by the source implementation.'
+  nodes: 'Optional by action: nodes returned by the source implementation.'
+  attributes: 'Optional by action: attributes returned by the source implementation.'
+  time: 'Optional by action: time returned by the source implementation.'
+  sample_by: 'Optional by action: sample by returned by the source implementation.'
+  simulation: 'Optional by action: simulation returned by the source implementation.'
+  changed_channels: Maya baked channel count.
+  target_samples: Validated workload size.
+  items: Per-plug before and verified after key counts.
+statuses: [SUCCESS, ERROR]
+errors: {MAYA_ANIMATION_OPERATION_FAILED: "Bake inputs, native command, or key readback failed."}
+recovery: [A failed bake rolls back its Maya undo chunk; explicit constraints are never deleted by this API.]
+help: {summary: "Bake bounded explicit Maya attributes to keyframes.", usage: "execute_api(maya.animation.bake, params={action, nodes, attributes, start_time, end_time})", scenario: "Bake constraints or simulation before export while retaining explicit rig nodes.", safety: "One undo chunk; simulation uses a tighter cap and preserve_outside_keys defaults true."}
+tests: {contract: tests/test_maya_animation_p1_batch2.py, smoke: "Foreground bake and undo on disposable animation nodes."}
+implementation: {status: implemented}
+verification: {level: contract_tested, evidence: [tests/test_maya_animation_p1_batch2.py]}
+handler: cgi_pipeline.capabilities.maya.animation_bake:bake_animation

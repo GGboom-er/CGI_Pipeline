@@ -14,6 +14,7 @@ import os
 import re
 import time
 import traceback as _traceback
+import uuid
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -317,28 +318,61 @@ def _api_label(api_id: str) -> str:
 
 @contextlib.contextmanager
 def _locked_file(path: Path):
-    path.parent.mkdir(parents=True, exist_ok=True)
     lock_path = path.with_name(path.name + ".lock")
+    if path.is_symlink() or lock_path.is_symlink():
+        raise ValueError("Report output and lock cannot be file links.")
+    path.parent.mkdir(parents=True, exist_ok=True)
     start = time.time()
     fd = None
     while True:
         try:
             fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            os.write(fd, str(os.getpid()).encode("utf-8"))
             break
         except FileExistsError:
             if time.time() - start > _LOCK_TIMEOUT_SEC:
                 raise TimeoutError(f"等待报告锁超时: {lock_path}")
             time.sleep(0.05)
     try:
+        os.write(fd, str(os.getpid()).encode("utf-8"))
         yield
     finally:
-        if fd is not None:
-            os.close(fd)
         try:
-            lock_path.unlink()
-        except FileNotFoundError:
-            pass
+            os.close(fd)
+        finally:
+            try:
+                lock_path.unlink()
+            except FileNotFoundError:
+                pass
+
+
+def _publish_text(path: Path, text: str) -> None:
+    """Publish a complete file while the caller owns its report lock."""
+    temporary = path.with_name(f"{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+    if path.is_symlink() or temporary.is_symlink():
+        raise ValueError("Report output cannot be a file link.")
+    created = False
+    try:
+        with temporary.open("x", encoding="utf-8") as handle:
+            created = True
+            handle.write(text)
+        for attempt in range(4):
+            try:
+                temporary.replace(path)
+                break
+            except PermissionError:
+                if attempt == 3:
+                    raise
+                time.sleep(0.01 * (attempt + 1))
+    finally:
+        if created:
+            temporary.unlink(missing_ok=True)
+
+
+def _refresh_workspace(report_path: Path) -> None:
+    # A workspace render reads atomically published operation reports. Never
+    # take its lock while holding this report's lock (the inverse order).
+    from cgi_pipeline.core.workspace import refresh_report_for_path
+    refresh_report_for_path(report_path)
 
 
 def _block_markers(block_id: str) -> tuple[str, str]:
@@ -349,59 +383,70 @@ def _block_markers(block_id: str) -> tuple[str, str]:
     )
 
 
+def _upsert_block_text(text: str, block_id: str, markdown: str,
+                       before_block_id: str = "final") -> str:
+    """Apply one block update without publishing an intermediate report."""
+    start_marker, end_marker = _block_markers(block_id)
+    block = f"{start_marker}\n{markdown.rstrip()}\n{end_marker}\n"
+    pattern = re.compile(
+        re.escape(start_marker) + r".*?" + re.escape(end_marker) + r"\n?",
+        re.DOTALL,
+    )
+    if pattern.search(text):
+        text = pattern.sub(lambda _m: block, text)
+    else:
+        before_start, _ = _block_markers(before_block_id)
+        idx = text.find(before_start)
+        if idx >= 0:
+            text = text[:idx].rstrip() + "\n\n" + block + "\n" + text[idx:].lstrip()
+        else:
+            text = text.rstrip() + "\n\n" + block if text else block
+    return text.rstrip() + "\n"
+
+
+def _without_block_markers(text: str) -> str:
+    marker_re = re.compile(r"^\s*<!--\s*report:block:(?:start|end)\s+.*?-->\s*$")
+    lines = [line for line in text.splitlines() if not marker_re.match(line)]
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def upsert_block(report_path: str | Path, block_id: str, markdown: str,
                  before_block_id: str = "final") -> None:
     """按 block id 替换或插入报告模块。"""
     path = Path(report_path)
-    start_marker, end_marker = _block_markers(block_id)
-    block = f"{start_marker}\n{markdown.rstrip()}\n{end_marker}\n"
-
     with _locked_file(path):
         text = path.read_text(encoding="utf-8") if path.exists() else ""
-        replaced = False
-        pattern = re.compile(
-            re.escape(start_marker) + r".*?" + re.escape(end_marker) + r"\n?",
-            re.DOTALL,
-        )
-        if pattern.search(text):
-            text = pattern.sub(lambda _m: block, text)
-            replaced = True
-        if not replaced:
-            before_start, _ = _block_markers(before_block_id)
-            idx = text.find(before_start)
-            if idx >= 0:
-                text = text[:idx].rstrip() + "\n\n" + block + "\n" + text[idx:].lstrip()
-            else:
-                text = text.rstrip() + "\n\n" + block if text else block
-        path.write_text(text.rstrip() + "\n", encoding="utf-8")
+        _publish_text(path, _upsert_block_text(text, block_id, markdown, before_block_id))
+    _refresh_workspace(path)
 
 
 def _strip_block_markers(report_path: str | Path) -> None:
     """最终报告不保留内部 upsert marker，避免 Markdown 查看器显示实现细节。"""
     path = Path(report_path)
-    if not path.exists():
-        return
-    marker_re = re.compile(r"^\s*<!--\s*report:block:(?:start|end)\s+.*?-->\s*$")
-    text = path.read_text(encoding="utf-8")
-    lines = [line for line in text.splitlines() if not marker_re.match(line)]
-    path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+    with _locked_file(path):
+        if not path.exists():
+            return
+        text = path.read_text(encoding="utf-8")
+        _publish_text(path, _without_block_markers(text))
+    _refresh_workspace(path)
 
 
 def init_report(report_path: str | Path, task_context: Dict[str, Any]) -> str:
     """初始化 REPORT.md。重复调用不会清空已有 step block。"""
     path = Path(report_path)
-    if not path.exists():
-        path.parent.mkdir(parents=True, exist_ok=True)
-        asset = task_context.get("asset_name") or "untitled"
-        anchor_start, anchor_end = _block_markers("execution_anchor")
-        path.write_text(
-            f"# {asset} Task Report\n\n{anchor_start}\n## Execution\n{anchor_end}\n",
-            encoding="utf-8",
-        )
-    upsert_block(path, "header", render_header(task_context, "RUNNING"),
-                 before_block_id="execution_anchor")
-    upsert_block(path, "final", render_final(task_context, "RUNNING"),
-                 before_block_id="__never__")
+    with _locked_file(path):
+        if path.exists():
+            text = path.read_text(encoding="utf-8")
+        else:
+            asset = task_context.get("asset_name") or "untitled"
+            anchor_start, anchor_end = _block_markers("execution_anchor")
+            text = f"# {asset} Task Report\n\n{anchor_start}\n## Execution\n{anchor_end}\n"
+        text = _upsert_block_text(text, "header", render_header(task_context, "RUNNING"),
+                                  before_block_id="execution_anchor")
+        text = _upsert_block_text(text, "final", render_final(task_context, "RUNNING"),
+                                  before_block_id="__never__")
+        _publish_text(path, text)
+    _refresh_workspace(path)
     return str(path)
 
 
@@ -417,6 +462,13 @@ def render_header(task_context: Dict[str, Any], status: str) -> str:
         lines.append(f"| Project | {_escape_md(task_context.get('project'))} |")
     if task_context.get("workflow_id"):
         lines.append(f"| Workflow | `{_escape_md(task_context.get('workflow_id'))}` |")
+    if 'effective_parameters' in task_context:
+        parameters = json.dumps(task_context['effective_parameters'], ensure_ascii=False, sort_keys=True)
+        lines.append(f"| Effective Parameters | `{_escape_md(parameters)}` |")
+        lines.append(f"| Save Requested | {bool(task_context.get('save_requested'))} |")
+        lines.append(f"| Result Saved | {bool(task_context.get('result_saved'))} |")
+        saved = task_context.get('saved_results') or []
+        lines.append(f"| Saved Results | {_escape_md(', '.join(saved)) if saved else 'None'} |")
     if task_context.get("source_path"):
         lines.append(f"| Source File | {_fmt_path(task_context.get('source_path'))} |")
     if task_context.get("run_dir"):
@@ -452,14 +504,16 @@ def finalize_report(report_path: str | Path, task_context: Dict[str, Any],
                     final_status: str, elapsed_min: Optional[float] = None,
                     error: str = "", traceback_text: str = "") -> None:
     context = dict(task_context)
-    upsert_block(report_path, "header", render_header(context, final_status))
-    upsert_block(
-        report_path,
-        "final",
-        render_final(context, final_status, elapsed_min, error, traceback_text),
-        before_block_id="__never__",
-    )
-    _strip_block_markers(report_path)
+    path = Path(report_path)
+    with _locked_file(path):
+        text = path.read_text(encoding="utf-8") if path.exists() else ""
+        text = _upsert_block_text(text, "header", render_header(context, final_status))
+        text = _upsert_block_text(
+            text, "final", render_final(context, final_status, elapsed_min, error, traceback_text),
+            before_block_id="__never__",
+        )
+        _publish_text(path, _without_block_markers(text))
+    _refresh_workspace(path)
 
 
 def _step_block_id(step_context: Dict[str, Any]) -> str:

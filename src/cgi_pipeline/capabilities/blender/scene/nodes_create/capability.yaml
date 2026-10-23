@@ -1,0 +1,33 @@
+api_id: blender.scene.nodes.create
+version: 1.0.1
+name: nodes_create
+executor: blender
+capability: scene.nodes
+operation: create
+stages: [modeling, rigging, animation]
+targets: [scene_object]
+access: write
+effects:
+  scene_write: Creates and links bounded Blender objects through bpy.data.
+execution_modes: [local, foreground, background]
+surfaces: [blender, service]
+modes: [apply]
+inputs:
+  items: {type: array, required: true, description: "[{object_type, name?, collection?, parent?}]"}
+  max_items: {type: integer, default: 100, description: Maximum creates; hard limit 2000.}
+preconditions: [Collections and parents already exist when named.]
+idempotent: false
+outputs:
+  items: Per-object before after type and collection.
+  count: Number of returned or processed items for this action.
+  succeeded: Number of successful per-item operations.
+  failed: Number of failed per-item operations.
+  truncated: Whether the operation reached its configured result or input bound.
+statuses: [SUCCESS, PARTIAL, ERROR]
+errors: {BLENDER_SCENE_CORE_OPERATION_FAILED: Invalid object type collection parent or context.}
+recovery: [Correct item definitions then retry.]
+help: {summary: Create bounded Blender objects without UI operators., usage: "execute_api(blender.scene.nodes.create, params={items})", scenario: Create scene data blocks and objects., safety: Writes the current scene and should run inside the host transaction.}
+tests: {contract: tests/test_blender_scene_core_apis.py}
+handler: cgi_pipeline.capabilities.blender.scene_core:create_nodes
+implementation: {status: implemented}
+verification: {level: contract_tested, evidence: [tests/test_blender_scene_core_apis.py]}

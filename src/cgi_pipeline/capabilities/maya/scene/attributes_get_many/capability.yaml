@@ -1,0 +1,31 @@
+api_id: maya.scene.attributes.get_many
+version: 1.0.1
+name: attributes_get_many
+executor: maya
+capability: scene.attributes
+operation: query
+stages: [modeling, rigging, animation]
+targets: [attribute]
+access: read
+effects:
+  scene_read: Reads bounded Maya attribute values and metadata.
+execution_modes: [local, foreground, background]
+surfaces: [maya, service]
+modes: [inspect]
+inputs:
+  items: {type: array, required: true, description: "[{node, attribute}]"}
+  max_items: {type: integer, default: 500, description: Maximum plugs.}
+preconditions: [Items use explicit node and attribute names.]
+idempotent: true
+outputs:
+  items: Plug existence, value, type and lock state.
+  count: Number of returned or processed items for this action.
+  truncated: Whether the operation reached its configured result or input bound.
+statuses: [SUCCESS, ERROR]
+errors: {MAYA_BATCH_OPERATION_FAILED: Invalid plug query or Maya context.}
+recovery: [Correct the plug list or reduce max_items.]
+help: {summary: Read many Maya attributes in one call., usage: "execute_api(maya.scene.attributes.get_many, params={items})", scenario: Sample MFace controller and DG values., safety: Read-only and bounded.}
+tests: {contract: tests/test_scene_batch_apis.py, smoke: Foreground Maya attribute query.}
+implementation: {status: implemented, module: maya.scene_batch:get_attributes_many}
+verification: {level: contract_tested, evidence: [tests/test_scene_batch_apis.py]}
+handler: cgi_pipeline.capabilities.maya.scene_batch:get_attributes_many

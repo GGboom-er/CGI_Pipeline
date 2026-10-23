@@ -16,6 +16,122 @@
     },
     "entrypoints": {
       "maya": "adPose.ui:show_in_maya"
+    },
+    "python_paths": [
+      ".."
+    ]
+  },
+  {
+    "package_id": "cache_sequence_binder",
+    "name": "Blender Cache Sequence Binder",
+    "category": "cache",
+    "stages": [
+      "animation",
+      "lighting"
+    ],
+    "hosts": [
+      "blender"
+    ],
+    "source": {
+      "type": "workspace",
+      "path": "Y:/GGbommer/scripts/Notes/DCC/blender/cache_sequence_binder"
+    },
+    "python_paths": [
+      ".."
+    ],
+    "versions": {
+      "blender": [
+        "5.0"
+      ]
+    },
+    "entrypoints": {
+      "blender": "cache_sequence_binder:register"
+    },
+    "lifecycle": {
+      "blender": "addon"
+    }
+  },
+  {
+    "package_id": "pipeline_shelf",
+    "name": "Maya Pipeline Shelf",
+    "category": "toolbox",
+    "stages": [
+      "animation",
+      "rigging",
+      "modeling"
+    ],
+    "hosts": [
+      "maya"
+    ],
+    "source": {
+      "type": "workspace",
+      "path": "Y:/GGbommer/scripts/Notes"
+    },
+    "entrypoints": {
+      "maya": "DCC.maya.ui.shelf:show_shelf"
+    },
+    "python_paths": [
+      ".",
+      "DCC/common"
+    ],
+    "versions": {
+      "maya": [
+        "2025"
+      ]
+    }
+  },
+  {
+    "package_id": "xgen_cache",
+    "name": "XGen Curve and Hair Cache",
+    "category": "grooming",
+    "stages": [
+      "rigging",
+      "animation"
+    ],
+    "hosts": [
+      "maya"
+    ],
+    "source": {
+      "type": "workspace",
+      "path": "Y:/GGbommer/scripts/Notes/DCC/maya"
+    },
+    "entrypoints": {
+      "maya": "xgen_cache:show"
+    },
+    "python_paths": [
+      "."
+    ],
+    "versions": {
+      "maya": [
+        "2025"
+      ]
+    }
+  },
+  {
+    "package_id": "ysj_crowd",
+    "name": "YSJ Crowd Editor Tools",
+    "category": "crowd",
+    "stages": [
+      "animation",
+      "layout"
+    ],
+    "hosts": [
+      "ue"
+    ],
+    "source": {
+      "type": "workspace",
+      "path": "Y:/GGbommer/scripts/Notes/Projects/YSJ/scripts"
+    },
+    "python_paths": [
+      "."
+    ],
+    "versions": {
+      "ue": [
+        "5.7"
+      ]
+    },
+    "entrypoints": {
+      "ue": "ysj_ue_crowd_dcc_tool:register_tool_menus"
     }
   }
 ]

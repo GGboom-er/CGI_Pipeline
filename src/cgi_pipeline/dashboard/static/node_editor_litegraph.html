@@ -1334,7 +1334,7 @@
                 es.onmessage = (e) => {
                     try {
                         const data = JSON.parse(e.data);
-                        if (['SUCCESS', 'ERROR', 'TIMEOUT'].includes(data.status)) {
+                        if (data.terminal === true) {
                             es.close();
                             resolve(data);
                         }

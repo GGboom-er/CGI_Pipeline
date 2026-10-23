@@ -1,0 +1,52 @@
+api_id: maya.xgen.export
+version: 2.2.1
+name: xgen_export
+executor: maya
+capability: xgen
+operation: export
+stages: [rigging, animation]
+targets: [curves, hair]
+access: write
+effects:
+  scene_read: Reads XGen descriptions and archive geometry for export verification.
+  scene_write: Temporarily converts hair and changes frame/visibility/export settings; cleanup restores settings and removes
+    owned conversion nodes.
+  host_state_write: Temporarily coalesces XGen editor refreshes during export.
+  file_read: Reads generated Alembic/XPD data for verification.
+  file_write: Publishes xgen_hair.abc and manifest without overwrite; writes task-work files and, for xpd, system-temp intermediates.
+execution_modes: [local, foreground, background]
+surfaces: [maya, service]
+modes: [apply]
+inputs:
+  directory: {type: string, required: true, description: Existing new-version output directory.}
+  backend: {type: string, default: verified, description: "Allowed: verified or xpd. verified preserves root UV with repeated conversion. xpd omits root UV; requires one identity-transform growth mesh, zero taper and none/linear/smooth width ramp. No full geometry re-read in xpd mode."}
+preconditions: [Maya 2025 with registered xgen_cache package available., "Curve records are per NURBS shape; packed Houdini curves are not supported yet."]
+idempotent: false
+outputs:
+  groups: Traditional XGen palette, description and primitive records.
+  start: 'Optional by action: start returned by the source implementation.'
+  end: 'Optional by action: end returned by the source implementation.'
+  fps: 'Optional by action: fps returned by the source implementation.'
+  scene: Current Maya scene path from the independent XGen source.
+  unit: 'Optional by action: unit returned by the source implementation.'
+  schema_version: Independent XGen export manifest schema version.
+  status: Operation result status inside output; distinct from the API receipt status.
+  files: Published archive records containing object paths, counts and frames.
+  backend: 'Optional by action: backend returned by the source implementation.'
+  root_uv_exported: Whether the selected export backend exports root UV data.
+  verification: Geometry verification level for the selected export backend.
+  sampling_check: Repeated sampling tolerance and retry records.
+  timings: Export extraction, writing and verification timings in seconds.
+  elapsed_seconds: Total independent XGen export duration in seconds.
+statuses: [SUCCESS, ERROR]
+errors: {XGEN_OPERATION_FAILED: Invalid input or unavailable package; see error.}
+recovery: [Read error and inspect current scene before retrying., "record and rebuild use Maya undo; file export rejects existing outputs."]
+help:
+  summary: "export using the same core as the XGen desktop tool."
+  usage: "execute_api(maya.xgen.export, params={...})"
+  scenario: XGen curve structure preparation and final hair cache publishing.
+  safety: "Explicit selected scope. Original records and existing export roots/files are never overwritten."
+tests: {contract: tests/test_xgen_api.py, smoke: PL227 Maya foreground structure roundtrip.}
+implementation: {status: implemented}
+verification: {level: contract_tested, evidence: [tests/test_xgen_api.py]}
+handler: cgi_pipeline.capabilities.maya.xgen_api:execute
