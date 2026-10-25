@@ -601,8 +601,9 @@ def test_server_instructions_document_long_workflow_recovery():
     instructions = server._build_instructions()
     assert all(name in instructions for name in EXPOSED_TOOLS)
     assert "registry-controlled" in instructions
-    assert "For long workflows, use wait=False" in instructions
-    assert "keep the returned task_id" in instructions
+    assert "capped below the client tool timeout" in instructions
+    assert "PROGRESS keeps the task_id" in instructions
+    assert "waits server-side" in instructions
     assert "do not resubmit" in instructions
 
 

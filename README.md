@@ -103,6 +103,8 @@ $py = "Y:\GGbommer\scripts\.conda_envs\brain\python.exe"
 
 API/batch 默认等待结果；前台 `wait=false` 也会先返回 `SUBMITTED/task_id`，随后通过 `get_task_result` 恢复同一执行。前台后台线程依附 MCP 服务进程，退出前应等待结果；客户端断开/超时不能当作操作未发生，勿重新提交。UE 场景 API 经已有 UE_MCP_Bridge 的编辑器 Python 通道运行 canonical handler，不新增执行器；仍须目标编辑器能导入当前 CGI 源码及依赖。
 
+等待与回执预算：execute_api/batch/workflow 的等待和 `get_task_result` 的服务端等待都截断在客户端工具超时之前（`CGI_MCP_MAX_WAIT_SEC`，默认 110 秒，对应 Codex `tool_timeout_sec=120` 减 10 秒）；到点返回 `PROGRESS` 和原 `task_id`，再调 `get_task_result(task_id)` 继续等待，`wait_sec=0` 立即读当前状态。公开工具结果超过 4 KiB 时默认只返回摘要（状态、错误、产物路径、小字段 output、大字段的大小与结构、`receipt_ref`），`detail=true` 返回全量；全量结果里单个回执仍受 64 KiB 内联预算，超出部分按 `audit_path`/`entry_index` 读原审计。`audit/mcp_calls.jsonl` 每行记录 `response_bytes`。
+
 `list_workflows` 从展开的 workflow 模板及 API 输入元数据生成 `input_contract` 与 `mcp_call_template`，外部输入缺失或类型不符在工作区/Worker 启动前拒绝。源文件也可由已声明的 `source_resolution` 按 project + asset_name 定位，或复用 workspace 已记录来源；不会仅因省略 source_path 拒绝这两条入口。`run_dir/info_dir` 由运行时提供，输出步骤引用留到执行时解析。
 
 `PARTIAL` 表示已结束但不完整，`AUDIT_FAILED` 表示质量检查失败；同步返回、恢复、工作区与报告保留业务状态。MCP 调用审计仅保存返回的任务/工作区/业务 ID、错误码和必要时间，不复制参数、代码或结果全文。`dispatch_return_ms` 包含提交函数内的等待（同步前台也含执行），`recovery_wait_ms` 是后续恢复轮询等待，`api_execution_ms` 来自 receipt；这些边界不同，不相减推断网络或 Hook 开销。

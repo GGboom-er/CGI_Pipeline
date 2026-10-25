@@ -21,6 +21,7 @@ from cgi_pipeline.server.internals import (
 from cgi_pipeline.server.models import ExecuteApiInput, ExecuteWorkflowInput
 from cgi_pipeline.server.models import ExecuteBatchInput
 from cgi_pipeline.server.public_surface import EXPOSED_TOOLS
+from cgi_pipeline.server.receipt_view import max_wait_sec, project_result
 
 WORKSPACE_FIELDS = ('workspace_id', 'business_task_id', 'run_dir', 'report_path',
                     'workspace_report_path', 'operation_dir', 'scene_session', 'runtime')
@@ -61,23 +62,33 @@ async def prune_tools_to_whitelist(mcp):
             mcp.local_provider.remove_tool(name)
 
 
-async def _wait_for_task(task_id: str, timeout_sec: int, poll_interval_sec: float) -> dict:
-    """Wait for one CGI queue task without blocking the MCP event loop."""
+async def _wait_for_task(task_id: str, timeout_sec: int | None, poll_interval_sec: float) -> dict:
+    """Wait for one CGI queue task without blocking the MCP event loop.
+
+    The wait is capped below the client tool timeout so the caller receives a
+    recoverable state instead of a transport timeout.
+    """
     from cgi_pipeline.core.task_status import is_terminal
 
+    timeout_sec = min(timeout_sec or max_wait_sec(), max_wait_sec())
     deadline = asyncio.get_running_loop().time() + timeout_sec
-    while asyncio.get_running_loop().time() < deadline:
+    state = {}
+    while True:
         state = await lifecycle.run_sync(get_task_result, task_id)
         if is_terminal(state.get("status", "")):
             return state
         remaining = deadline - asyncio.get_running_loop().time()
-        if remaining > 0:
-            await asyncio.sleep(min(poll_interval_sec, remaining))
+        if remaining <= 0:
+            break
+        await asyncio.sleep(min(poll_interval_sec, remaining))
     return {
+        **{key: state[key] for key in (*WORKSPACE_FIELDS, "audit_path", "step", "api_id", "progress", "event_type")
+           if key in state},
         "task_id": task_id,
         "status": "PROGRESS",
+        "last_status": state.get("status", ""),
         "message": f"已等待 {timeout_sec}s 未达终态，任务仍在后台执行。",
-        "recovery_hint": "使用 get_task_result(task_id) 继续读取同一任务，不要重新提交。",
+        "recovery_hint": "调用 get_task_result(task_id) 继续等待同一任务（服务端等待，无需客户端轮询），不要重新提交。",
     }
 
 
@@ -166,7 +177,7 @@ def register_operation_tools(mcp):
             if error:
                 return _with_catalog_version(error, current_version)
             result = await lifecycle.run_sync(_dispatch_foreground, submit_foreground_batch_task, payload, wait=params.wait)
-            return _with_catalog_version(result, current_version)
+            return project_result(_with_catalog_version(result, current_version), params.detail)
         submit = await lifecycle.run_sync(_submit_chain, {
             "workspace_project": params.workspace_project,
             "workspace_id": params.workspace_id,
@@ -179,11 +190,11 @@ def register_operation_tools(mcp):
             "batch_mode": True, "atomic": params.atomic,
         })
         if not params.wait or submit.get("status") != "SUBMITTED":
-            return _with_catalog_version(submit, current_version)
+            return project_result(_with_catalog_version(submit, current_version), params.detail)
         result = await _wait_for_task(
             submit["task_id"], params.wait_timeout_sec, params.poll_interval_sec,
         )
-        return _with_catalog_version(_execution_state(submit, result), current_version)
+        return project_result(_with_catalog_version(_execution_state(submit, result), current_version), params.detail)
 
     @mcp.tool(
         name="execute_api",
@@ -200,8 +211,10 @@ def register_operation_tools(mcp):
 
         Read api_help when selecting an unknown API or after a stale-contract
         response. For a known contract, pass expected_catalog_version and execute
-        directly. Set wait=False for intentional asynchronous submission;
-        get_task_result then resumes the same task without resubmission.
+        directly. The wait is capped below the client tool timeout; a PROGRESS
+        result is resumed with get_task_result, which waits server-side, never by
+        resubmitting. Results over 4 KiB are summarized; pass detail=True for the
+        full receipt.
         """
         current_version, stale = _catalog_version_guard(params.expected_catalog_version)
         if stale:
@@ -233,7 +246,7 @@ def register_operation_tools(mcp):
         )
         submit['timings_ms'] = {'dispatch_return_ms': (time.perf_counter() - started) * 1000}
         if not params.wait or submit.get("status") != "SUBMITTED":
-            return _with_catalog_version(submit, current_version)
+            return project_result(_with_catalog_version(submit, current_version), params.detail)
 
         wait_started = time.perf_counter()
         state = await _wait_for_task(
@@ -243,7 +256,7 @@ def register_operation_tools(mcp):
         state['timings_ms'] = {**submit['timings_ms'], 'recovery_wait_ms': (time.perf_counter() - wait_started) * 1000}
         receipt = state.get("receipt")
         if receipt:
-            return _with_catalog_version({
+            return project_result(_with_catalog_version({
                 "task_id": submit["task_id"],
                 "api_id": params.api_id,
                 "status": receipt["status"],
@@ -254,8 +267,8 @@ def register_operation_tools(mcp):
                     for key in (*WORKSPACE_FIELDS, "audit_path", "timings_ms")
                     if key in state
                 },
-            }, current_version)
-        return _with_catalog_version(state, current_version)
+            }, current_version), params.detail)
+        return project_result(_with_catalog_version(state, current_version), params.detail)
 
     @mcp.tool(
         name="pipeline_execute_workflow",
@@ -270,10 +283,11 @@ def register_operation_tools(mcp):
     async def execute_workflow_tool(params: ExecuteWorkflowInput) -> dict:
         """Run a registered workflow using its declared runtime lifecycle.
 
-        wait=True is the default and returns the final step checklist and report.
-        For a workflow likely to exceed the client's tool timeout, use
-        wait=False, retain the returned task_id, then call get_task_result with
-        that id until terminal. A client timeout is not a reason to resubmit.
+        wait=True is the default and returns the final step checklist and report,
+        or PROGRESS with the task_id when the client-safe wait cap is reached;
+        get_task_result then waits server-side for the same task. A client
+        timeout is not a reason to resubmit. Results over 4 KiB are summarized;
+        pass detail=True for the full result.
         """
         submit = await lifecycle.run_sync(_submit_workflow,
             {
@@ -289,7 +303,7 @@ def register_operation_tools(mcp):
             }
         )
         if not params.wait or submit.get("status") != "SUBMITTED":
-            return submit
+            return project_result(submit, params.detail)
 
         task_id = submit["task_id"]
         state = await _wait_for_task(
@@ -298,7 +312,7 @@ def register_operation_tools(mcp):
         state = _execution_state(submit, state)
         if state.get("status") == "PROGRESS":
             state["workflow_id"] = params.workflow_id
-            return state
+            return project_result(state, params.detail)
 
         steps = await lifecycle.run_sync(collect_workflow_steps, task_id)
         final_status = state.get("status", "UNKNOWN")
@@ -318,4 +332,4 @@ def register_operation_tools(mcp):
             result["recovery_hint"] = (
                 f"工作流未成功({final_status})。查看 step_checklist 和 report_path 定位。"
             )
-        return result
+        return project_result(result, params.detail)

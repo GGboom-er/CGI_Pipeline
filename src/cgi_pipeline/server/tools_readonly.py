@@ -8,6 +8,7 @@ from cgi_pipeline.server.http_lifecycle import lifecycle
 from cgi_pipeline.contracts import Access, Effect, ExecutionMode, Executor, Mode, Surface
 from cgi_pipeline.server.internals import get_task_result
 from cgi_pipeline.server.models import ExecuteApiInput, TaskQueryInput
+from cgi_pipeline.server.receipt_view import project_result
 
 
 def execute_call_template(spec: dict, version: str) -> dict:
@@ -160,16 +161,28 @@ def register_readonly_tools(mcp):
         },
     )
     async def get_task_result_tool(params: TaskQueryInput) -> dict:
-        """Recover a task without resubmitting. Terminal receipt or step_receipts contain
-        complete API data within a shared 64 KiB inline budget. A receipt_ref gives
-        audit_path and zero-based parsed entry_index for larger data; read that
-        original JSONL entry's detail, not the clipped display log. For a nested
-        foreground batch, result_index selects detail.results[result_index].
+        """Recover a task without resubmitting. By default the server waits for a
+        terminal state up to a client-safe cap (wait_sec=0 reads the current state),
+        so one call replaces client polling. Results over 4 KiB are summarized
+        (status, artifacts, errors, small output fields, receipt_ref); detail=True
+        returns the full result. In full results, terminal receipt or step_receipts
+        contain complete API data within a shared 64 KiB inline budget; a nested
+        receipt_ref gives audit_path and zero-based parsed entry_index for larger
+        data; read that original JSONL entry's detail, not the clipped display log.
+        For a nested foreground batch, result_index selects detail.results[result_index].
         batch contains completion counts, atomic policy and Maya undo outcome.
         rolled_back does not cover files or other non-undoable side effects. Workflow
         terminals also include steps, outputs, report, and post-compare summary.
         """
-        return await lifecycle.run_sync(get_task_result, params.task_id)
+        from cgi_pipeline.core.task_status import is_terminal
+
+        result = await lifecycle.run_sync(get_task_result, params.task_id)
+        status = result.get("status", "")
+        # Unknown ids return at once instead of holding the call for the whole cap.
+        if params.wait_sec != 0 and not is_terminal(status) and status not in ("NOT_FOUND", "UNKNOWN"):
+            from cgi_pipeline.server.tools_operations import _wait_for_task
+            result = await _wait_for_task(params.task_id, params.wait_sec, 0.5)
+        return project_result(result, params.detail)
 
     @mcp.tool(
         name="list_workflows",

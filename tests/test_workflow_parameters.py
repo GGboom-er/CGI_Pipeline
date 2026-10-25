@@ -283,7 +283,7 @@ def test_pipeline_mcp_memory_transport_preserves_workflow_result_and_recovery(ru
             assert isinstance(result, dict), returned.content
             if not wait:
                 assert result['status'] == 'SUBMITTED'
-                queued = await client.call_tool('get_task_result', {'params': {'task_id': result['task_id']}})
+                queued = await client.call_tool('get_task_result', {'params': {'task_id': result['task_id'], 'wait_sec': 0}})
                 assert queued.structured_content['effective_parameters'] == {'mode': 'geometry', 'save_result': False}
                 assert queued.structured_content['result_saved'] is False
                 await drive(result['task_id'])

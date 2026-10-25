@@ -34,6 +34,8 @@ class TaskQueryInput(BaseModel):
 
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
     task_id: str = Field(..., min_length=1, description="Task id returned by execute_api or pipeline_execute_workflow.")
+    wait_sec: Optional[int] = Field(default=None, ge=0, description="Seconds to wait server-side for a terminal state; omitted or larger values use the client-safe cap (CGI_MCP_MAX_WAIT_SEC, default 110). 0 returns the current state at once.")
+    detail: bool = Field(default=False, description="False returns a summary of at most 4 KiB (status, artifacts, errors, small output fields, receipt_ref); True returns the full receipt.")
 
 
 class ExecuteApiInput(WorkspaceInput):
@@ -56,8 +58,9 @@ class ExecuteApiInput(WorkspaceInput):
     execution_mode: str = Field(default="background", description="background workspace-affine runtime or foreground DCC session, when supported by the API.")
     foreground_port: Optional[int] = Field(default=None, description="Explicit Maya or Blender foreground port when required by api_help.")
     wait: bool = Field(default=True, description="Wait for the final receipt by default; False returns a recoverable task id.")
-    wait_timeout_sec: int = Field(default=1800, ge=1, description="Maximum seconds to wait before returning PROGRESS.")
+    wait_timeout_sec: Optional[int] = Field(default=None, ge=1, description="Seconds to wait before returning PROGRESS; omitted or larger values are capped below the client tool timeout (CGI_MCP_MAX_WAIT_SEC, default 110). Continue with get_task_result, which waits again server-side.")
     poll_interval_sec: float = Field(default=0.25, gt=0, description="Task-result polling interval while waiting.")
+    detail: bool = Field(default=False, description="False returns a summary of at most 4 KiB (status, artifacts, errors, small output fields, receipt_ref); True returns the full receipt.")
 
 
 class ExecuteWorkflowInput(WorkspaceInput):
@@ -70,8 +73,9 @@ class ExecuteWorkflowInput(WorkspaceInput):
     asset_name: str = Field(default="untitled", description="Asset name for run reports and project resolution.")
     extra_params: Optional[dict] = Field(default=None, description="Workflow input values used by its declared templates.")
     wait: bool = Field(default=True, description="Wait for the final workflow result by default; for long workflows, False returns a task_id that get_task_result resumes without resubmission.")
-    wait_timeout_sec: int = Field(default=1800, ge=1, description="Maximum seconds to wait before returning PROGRESS.")
+    wait_timeout_sec: Optional[int] = Field(default=None, ge=1, description="Seconds to wait before returning PROGRESS; omitted or larger values are capped below the client tool timeout (CGI_MCP_MAX_WAIT_SEC, default 110). Continue with get_task_result, which waits again server-side.")
     poll_interval_sec: float = Field(default=0.25, gt=0, description="Task-result polling interval while waiting.")
+    detail: bool = Field(default=False, description="False returns a summary of at most 4 KiB (status, artifacts, errors, small output fields, receipt_ref); True returns the full receipt.")
 
 
 class ExecuteBatchInput(WorkspaceInput):
@@ -98,5 +102,6 @@ class ExecuteBatchInput(WorkspaceInput):
     foreground_port: Optional[int] = Field(default=None)
     atomic: bool = Field(default=True, description="True stops on first failure; False continues all calls. Maya rolled_back only confirms an undo attempt succeeded, not disk/external side effects. Inspect batch counts and every receipt; batches are never automatically replayed.")
     wait: bool = Field(default=True)
-    wait_timeout_sec: int = Field(default=1800, ge=1)
+    wait_timeout_sec: Optional[int] = Field(default=None, ge=1, description="Seconds to wait before returning PROGRESS; omitted or larger values are capped below the client tool timeout (CGI_MCP_MAX_WAIT_SEC, default 110). Continue with get_task_result, which waits again server-side.")
     poll_interval_sec: float = Field(default=0.25, gt=0)
+    detail: bool = Field(default=False, description="False returns a summary of at most 4 KiB (status, artifacts, errors, small output fields, receipt_ref); True returns the full receipt.")

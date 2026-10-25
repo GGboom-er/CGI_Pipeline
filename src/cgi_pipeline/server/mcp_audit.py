@@ -110,6 +110,7 @@ def _result_metadata(result: Any) -> dict:
         return {}
     record = {key: value[:256] for key in _AUDIT_ID_KEYS
               if isinstance((value := data.get(key)), str) and value}
+    record['response_bytes'] = len(json.dumps(data, ensure_ascii=False, default=str).encode('utf-8'))
     receipt = data.get('receipt') or data.get('detail')
     receipt = receipt if isinstance(receipt, Mapping) else {}
     for key in ('error_code', 'error_type'):
