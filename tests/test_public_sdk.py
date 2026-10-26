@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+import yaml
 from fastmcp.client.client import CallToolResult
 from fastmcp.exceptions import ToolError
 
@@ -25,7 +27,8 @@ def test_manifest_mode_bindings_resolve_without_changing_business_selectors():
     from cgi_pipeline.catalog import list_capabilities
     from cgi_pipeline.contracts import make_api_receipt
 
-    expected = {
+    # Spot checks for long-standing bindings; the full expectation comes from each manifest.
+    known = {
         "maya.animation.curves.manage": {"query": "inspect", "set_tangent_types": "apply"},
         "maya.animation.expressions.manage": {"list": "inspect", "create": "apply", "update": "apply", "delete": "apply"},
         "maya.animation.keyframes.manage": {"query": "inspect", "set": "apply", "delete": "apply"},
@@ -38,14 +41,20 @@ def test_manifest_mode_bindings_resolve_without_changing_business_selectors():
         "maya.rig.skeleton.normalize_scales": {True: "inspect", False: "apply"},
         "maya.asset.maya_master_cleanup": {"check": "inspect", "fix": "apply"},
     }
-    bound = {row["api_id"]: row for row in list_capabilities() if "mode_binding" in row}
-    assert set(bound) == set(expected)
+    # Host-local execution covers Maya-executed APIs; pipeline-executed bindings have their own tests.
+    bound = {row["api_id"]: row for row in list_capabilities()
+             if "mode_binding" in row and row.get("executor") == "maya"}
+    expected = {api_id: {case["value"]: case["mode"] for case in spec["mode_binding"]["cases"]}
+                for api_id, spec in bound.items()}
+    assert set(known) <= set(bound)
+    assert {api_id: expected[api_id] for api_id in known} == known
     for api_id, spec in bound.items():
         selector = spec["mode_binding"]["input"]
         base = {}
         for name, definition in spec["inputs"].items():
             if definition.get("required"):
-                base[name] = {"string": "probe", "array": [], "object": {}}[definition["type"]]
+                base[name] = {"string": "probe", "array": [], "object": {}, "integer": 0, "number": 0.0,
+                              "boolean": False}[definition["type"]]
         for value, mode in expected[api_id].items():
             observed = []
 
@@ -75,7 +84,9 @@ def test_invalid_mode_selector_is_rejected_before_loading_handler(api_id, params
 
 def test_cleanup_rejects_the_unimplemented_save_path_before_loading_handler():
     spec = api.help('maya.asset.maya_master_cleanup')
-    assert spec['version'] == '1.0.1'
+    manifest = yaml.safe_load((Path(__file__).resolve().parents[1] / 'src/cgi_pipeline/capabilities/maya/asset/'
+                               'maya_master_cleanup/capability.yaml').read_text(encoding='utf-8'))
+    assert spec['version'] == str(manifest['version'])
     assert 'save_path' not in spec['inputs']
     with patch('cgi_pipeline.execution.load_handler') as load:
         result = api.execute_local(spec['api_id'], {'mode': 'fix', 'save_path': 'unused.ma'}, host='maya')

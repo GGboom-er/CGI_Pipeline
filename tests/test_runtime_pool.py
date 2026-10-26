@@ -9,6 +9,12 @@ import pytest
 from cgi_pipeline.core.runtime_pool import RuntimePool, RuntimePoolError
 
 
+@pytest.fixture(autouse=True)
+def default_slot_budget(monkeypatch):
+    """Pin the documented default; the host .env (loaded on import) may configure another one."""
+    monkeypatch.setenv('CGI_RUNTIME_MAX_SLOTS', '3')
+
+
 def ample_memory():
     return 64 * 1024 ** 3
 

@@ -1,6 +1,15 @@
+import sys
 from types import SimpleNamespace
 
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def unsaved_blender_host(monkeypatch):
+    """Plain Python has no bpy: stand in for an unsaved .blend, so origin-directory fallback finds nothing."""
+    if "bpy" not in sys.modules:
+        monkeypatch.setitem(sys.modules, "bpy", SimpleNamespace(
+            data=SimpleNamespace(filepath=""), path=SimpleNamespace(abspath=lambda path: path)))
 
 @pytest.mark.parametrize("path", ["X:/Project/a.png", "Y:/work/S/a.png", "//server/share/a.png"])
 def test_non_s_texture_policy_leaves_other_roots_unchanged(path):

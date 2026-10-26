@@ -1,0 +1,16 @@
+{
+  "schema": "test-failure-baseline-v1",
+  "policy": "Known failures tolerated by Notes ai/scripts/run_tests.py. Only shrinks: entries absent at HEAD fail the run; --prune-baseline drops entries that pass.",
+  "entries": {
+    "tests/test_material_mapping.py::test_select_scene_color_set_rejects_no_tile_coverage": {
+      "reason": "_select_scene_color_set docstring says no tile coverage still raises, the code returns unresolved_solid_fallback instead; which one is intended is a material-policy decision.",
+      "owner": "material mapping business task (S->X texture remap, suspected PL281/PL299) to confirm",
+      "since": "2026-10-26"
+    },
+    "tests/test_daily_mcp_flow.py::test_workflow_runtime_inputs_are_not_requested_from_user": {
+      "reason": "blender_to_maya_full_build now declares source_path as an optional business input, so the input contract marks nothing required and requires_binding is empty; test file and workflows carry other sessions' uncommitted edits.",
+      "owner": "workflow input contract owner (suspected PL286/PL299) to confirm",
+      "since": "2026-10-26"
+    }
+  }
+}

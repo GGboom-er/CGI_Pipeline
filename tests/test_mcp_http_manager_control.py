@@ -28,7 +28,7 @@ class HttpManagerControlTests(unittest.TestCase):
 
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory(prefix="http_control_isolated_")
-        self.directory = Path(self.temp.name)
+        self.directory = Path(self.temp.name).resolve()  # long form: Resolve-Path expands 8.3 names
         self.control = self.directory / "control.json"
         self.control.write_text(json.dumps({
             "protocol_version": 1, "pid": 424242,
@@ -40,12 +40,16 @@ class HttpManagerControlTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp.cleanup()
 
-    def _run(self, body: str, setup: str = "") -> dict:
+    def _run(self, body: str, setup: str = "", native_workspace_stub: bool = True) -> dict:
+        # The isolated directory stands in for the repository root, so receipts live under its
+        # projects/ tree. Native workspace identity is stubbed except in the test that covers it.
+        workspace_stub = ("function Confirm-InitialCutoverWorkspace {param($ReceiptPath,$ProjectsRoot)}"
+                          if native_workspace_stub else "")
         script = f"""
 $ErrorActionPreference='Stop'
 . {_quote(HELPER)}
 $ControlFile={_quote(self.control)}
-$ProjectRoot={_quote(ROOT)}
+$ProjectRoot={_quote(self.directory)}
 $ListenAddress='127.0.0.1'; $Port=49999
 $DrainTimeoutSeconds=1; $ShutdownTimeoutSeconds=1
 $script:calls=[Collections.Generic.List[string]]::new()
@@ -85,6 +89,7 @@ function Invoke-RestMethod {{
         generation=$(if($script:wrongGeneration){{'wrong'}}else{{$control.generation}});
         state=$state;active_count=$count;lease_epoch=$script:epoch;lease_remaining_seconds=60}}
 }}
+{workspace_stub}
 {setup}
 try {{ {body}; $errorText=$null }} catch {{ $errorText=$_.Exception.Message }}
 @{{error=$errorText;calls=@($script:calls.ToArray());drains=$script:drains}}|ConvertTo-Json -Compress
@@ -172,7 +177,8 @@ try {{ {body}; $errorText=$null }} catch {{ $errorText=$_.Exception.Message }}
             ],
         }
         data.update(changes)
-        path = self.directory / "cutover.json"
+        path = self.directory / "projects" / "default" / "fixture_ws" / "cutover.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(data), encoding="utf-8")
         return path
 
@@ -251,7 +257,8 @@ function Invoke-CooperativeShutdown {{
 
     def test_cutover_workspace_uses_existing_native_identity_validation(self) -> None:
         result = self._run(
-            f"Confirm-InitialCutoverWorkspace {_quote(self.control)} {_quote(ROOT / 'projects' / 'ysj')}"
+            f"Confirm-InitialCutoverWorkspace {_quote(self.control)} {_quote(ROOT / 'projects' / 'ysj')}",
+            native_workspace_stub=False,
         )
         self.assertIn("not inside a valid native CGI workspace", result["error"])
         self.assertEqual(result["calls"], [])

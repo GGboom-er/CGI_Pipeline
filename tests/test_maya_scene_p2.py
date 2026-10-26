@@ -215,4 +215,4 @@ def test_scene_p2_manifests_validate():
         spec = validate_spec(yaml.safe_load(path.read_text(encoding="utf-8")), str(path))
         assert spec["api_id"] == api_id
         assert spec["implementation"]["status"] == "implemented"
-        assert spec["verification"]["level"] == "contract_tested"
+        assert spec["verification"]["level"] in {"contract_tested", "live_tested"}  # at least contract-tested

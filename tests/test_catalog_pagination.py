@@ -193,7 +193,6 @@ def test_target_query_aliases_share_results_and_pagination_fingerprints(alias, c
 
 @pytest.mark.parametrize("api_id", [
     "maya.asset.maya_freeze_transforms",
-    "maya.rig.maya_clean_skinweights",
     "maya.rig.maya_fix_shape_names",
 ])
 def test_source_path_scene_open_effects_are_discoverable(api_id):
@@ -203,6 +202,15 @@ def test_source_path_scene_open_effects_are_discoverable(api_id):
     for effect in ("file_read", "host_state_write"):
         assert "context.source_path" in spec["effects"][effect]
         assert api_id in {row["api_id"] for row in api.list(effects=[effect])}
+
+
+def test_skinweight_cleanup_declares_no_scene_open():
+    # Its handler no longer opens context.source_path; scene opening belongs to scene_action.
+    from cgi_pipeline import api
+
+    spec = api.help("maya.rig.maya_clean_skinweights")
+    assert "file_read" not in spec["effects"]
+    assert "context.source_path" not in spec["effects"].get("host_state_write", "")
 
 
 @pytest.mark.parametrize("api_id,condition", [

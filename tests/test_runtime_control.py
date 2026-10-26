@@ -49,6 +49,8 @@ class FakeService:
 
 @pytest.fixture
 def unit(tmp_path, monkeypatch):
+    # Pin the slot budget: the host .env (loaded on import) may configure another one.
+    monkeypatch.setenv('CGI_RUNTIME_MAX_SLOTS', '3')
     pool = RuntimePool(tmp_path / 'pool', allow_external_root=True, memory_probe=lambda: 64 * 1024 ** 3)
     service = FakeService()
     monkeypatch.setattr(control, 'process_state', lambda identity, lease, factory: factory.worker_state)
