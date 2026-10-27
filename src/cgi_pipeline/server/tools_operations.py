@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import uuid
 import time
 from cgi_pipeline.server.http_lifecycle import lifecycle
@@ -92,6 +93,28 @@ async def _wait_for_task(task_id: str, timeout_sec: int | None, poll_interval_se
     }
 
 
+async def _foreground_within_cap(dispatch, task_id: str, timeout_sec: int | None) -> dict:
+    """Run a waiting foreground call unchanged, but never past the client-safe cap.
+
+    A call that finishes in time returns its full synchronous result (scene_session,
+    report). A longer DCC call (Maya foreground can run an hour) keeps running on its
+    shielded thread and the caller gets PROGRESS + task_id instead of a client timeout;
+    get_task_result recovers the terminal audit the thread writes when it ends.
+    """
+    timeout_sec = min(timeout_sec or max_wait_sec(), max_wait_sec())
+    job = asyncio.ensure_future(lifecycle.run_sync(dispatch))
+    done, _running = await asyncio.wait({job}, timeout=timeout_sec)
+    if job in done:
+        return job.result()
+    return {
+        "task_id": task_id,
+        "status": "PROGRESS",
+        "last_status": "RUNNING",
+        "message": f"前台调用已等待 {timeout_sec}s 未结束，仍在 DCC 中执行。",
+        "recovery_hint": "调用 get_task_result(task_id) 继续等待同一任务（服务端等待，无需客户端轮询），不要重新提交。",
+    }
+
+
 def register_operation_tools(mcp):
     """Register catalog execution and workflow composition only."""
 
@@ -176,7 +199,9 @@ def register_operation_tools(mcp):
             error = await lifecycle.run_sync(_bind_workspace, payload, 'batch', foreground=True)
             if error:
                 return _with_catalog_version(error, current_version)
-            result = await lifecycle.run_sync(_dispatch_foreground, submit_foreground_batch_task, payload, wait=params.wait)
+            dispatch = functools.partial(_dispatch_foreground, submit_foreground_batch_task, payload, wait=params.wait)
+            result = (await _foreground_within_cap(dispatch, payload["task_id"], params.wait_timeout_sec)
+                      if params.wait else await lifecycle.run_sync(dispatch))
             return project_result(_with_catalog_version(result, current_version), params.detail)
         submit = await lifecycle.run_sync(_submit_chain, {
             "workspace_project": params.workspace_project,
@@ -221,10 +246,14 @@ def register_operation_tools(mcp):
             return stale
 
         started = time.perf_counter()
-        submit = await lifecycle.run_sync(
+        foreground_wait = params.wait and params.execution_mode == "foreground"
+        task_id = f"api-{uuid.uuid4().hex[:12]}"
+        dispatch = functools.partial(
             _submit_api_to_celery,
             params.api_id,
             {
+                # Known before dispatch so a capped foreground wait can still hand it back.
+                "task_id": task_id,
                 "workspace_project": params.workspace_project,
                 "project": params.project,
                 "workspace_id": params.workspace_id,
@@ -244,6 +273,8 @@ def register_operation_tools(mcp):
                 },
             },
         )
+        submit = (await _foreground_within_cap(dispatch, task_id, params.wait_timeout_sec)
+                  if foreground_wait else await lifecycle.run_sync(dispatch))
         submit['timings_ms'] = {'dispatch_return_ms': (time.perf_counter() - started) * 1000}
         if not params.wait or submit.get("status") != "SUBMITTED":
             return project_result(_with_catalog_version(submit, current_version), params.detail)

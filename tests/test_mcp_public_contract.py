@@ -3,6 +3,7 @@
 import asyncio
 import json
 import threading
+import time
 import uuid
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -213,6 +214,40 @@ def test_execute_api_foreground_submissions_do_not_block_each_other():
 
     assert sorted(observed_ports) == [7123, 7124]
     assert [result["status"] for result in results] == ["SUBMITTED", "SUBMITTED"]
+
+
+def test_foreground_wait_is_async_dispatch_plus_capped_wait():
+    """A waiting foreground call must not block past the client timeout (Maya can run an hour)."""
+    class _FakeMcp:
+        def tool(self, **metadata):
+            def capture(function):
+                if metadata.get("name") == "execute_api":
+                    self.execute_api = function
+                return function
+            return capture
+
+    mcp = _FakeMcp()
+    tools_operations.register_operation_tools(mcp)
+    seen = []
+
+    def submit(_api_id, payload):
+        seen.append(payload["task_id"])
+        time.sleep(payload["params"]["seconds"])
+        return {"task_id": payload["task_id"], "status": "SUCCESS", "scene_session": {"foreground_port": 7123}}
+
+    def call(seconds):
+        params = ExecuteApiInput(api_id="maya.scene.selection.get", execution_mode="foreground",
+                                 foreground_port=7123, expected_catalog_version=catalog_version(),
+                                 wait=True, wait_timeout_sec=1, params={"seconds": seconds})
+        return asyncio.run(mcp.execute_api(params))
+
+    with patch.object(tools_operations, "_submit_api_to_celery", side_effect=submit):
+        quick, slow = call(0), call(1.5)
+
+    # In time: the full synchronous result as before. Past the cap: PROGRESS with the same task_id.
+    assert quick["status"] == "SUCCESS" and quick["scene_session"]["foreground_port"] == 7123
+    assert slow["status"] == "PROGRESS" and slow["task_id"] == seen[1]
+    assert "get_task_result" in slow["recovery_hint"]
 
 
 def test_execute_api_rejects_stale_contract_before_submission():
