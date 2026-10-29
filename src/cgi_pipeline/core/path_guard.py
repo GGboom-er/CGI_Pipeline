@@ -16,7 +16,7 @@ import json
 from pathlib import Path
 
 from cgi_pipeline.core.bootstrap import cfg as _cfg
-from cgi_pipeline.core.manifest import get_readonly_drives, get_readonly_unc_prefixes
+from cgi_pipeline.core.manifest import get_readonly_drives, get_readonly_unc_prefixes, normalize_path
 
 # ─── 配置加载 ───
 
@@ -37,7 +37,7 @@ def _load_protected_roots() -> list[str]:
             try:
                 data = json.loads(cfg_file.read_text(encoding='utf-8'))
                 for r in data.get('protected_roots', []):
-                    roots.add(r.replace('\\', '/').rstrip('/').lower())
+                    roots.add(_normalize(r))
             except Exception:
                 pass
 
@@ -45,9 +45,17 @@ def _load_protected_roots() -> list[str]:
     return _PROTECTED_ROOTS
 
 
-def _normalize(path: str) -> str:
-    """统一路径格式为小写正斜杠"""
-    return path.replace('\\', '/').rstrip('/').lower()
+_normalize = normalize_path
+
+
+def _within(norm: str, root: str) -> bool:
+    """按路径段比较：'//server' 只覆盖自身与 '//server/...'，不覆盖 '//serverbackup'。
+
+    裸盘符根 'x:' 还覆盖盘符相对路径 'x:a'。两参数都须已经过 _normalize。
+    """
+    if len(root) == 2 and root[1] == ':':
+        return norm[:2] == root
+    return norm == root or norm.startswith(root + '/')
 
 
 # ─── 公开 API ───
@@ -71,19 +79,13 @@ def is_protected_path(path: str) -> bool:
     norm = _normalize(path)
     if _under_readonly_root(norm):
         return True
-    for root in _load_protected_roots():
-        if norm.startswith(root):
-            return True
-    return False
+    return any(_within(norm, root) for root in _load_protected_roots())
 
 
 def _under_readonly_root(norm: str) -> bool:
     """manifest 只读盘符与 UNC 前缀；norm 须已经过 _normalize。"""
-    # 盘符级硬拦截（从 manifest 读取）
-    if norm[:2] in get_readonly_drives():
-        return True
-    # UNC 路径拦截（从 manifest 读取）
-    return any(norm.startswith(prefix) for prefix in get_readonly_unc_prefixes())
+    roots = (*get_readonly_drives(), *get_readonly_unc_prefixes())
+    return any(_within(norm, root) for root in roots)
 
 
 def describe_protected_roots() -> list[str]:

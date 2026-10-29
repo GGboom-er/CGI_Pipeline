@@ -8,6 +8,7 @@
 #   Layer 3: .env（环境变量）
 
 import json
+import re
 
 from cgi_pipeline.paths import CONFIG_ROOT
 
@@ -35,9 +36,29 @@ def get_manifest() -> dict:
     return _manifest
 
 
+# Win32 设备/长路径前缀（分隔符已统一为 '/'、已小写）：'\\?\'、'\\.\'、'\??\'，可带 'UNC\'。
+_DEVICE_PREFIX = re.compile(r'^(?://[?.]/|/\?\?/)(unc/)?')
+
+
+def normalize_path(path: str) -> str:
+    r"""受保护根的显示与 path_guard 拦截共用的唯一规范化。
+
+    剥掉设备前缀（'\\?\X:\a' -> 'x:/a'，'\\?\UNC\server\s' -> '//server/s'），
+    统一为小写正斜杠、合并重复分隔符（保留 UNC 开头的 '//'）、去掉结尾 '/'。
+    """
+    value = str(path).replace('\\', '/').lower()
+    prefix = _DEVICE_PREFIX.match(value)
+    if prefix:
+        value = ('//' if prefix.group(1) else '') + value[prefix.end():]
+    collapsed = re.sub(r'/+', '/', value)
+    if value.startswith('//'):
+        collapsed = '/' + collapsed
+    return collapsed.rstrip('/')
+
+
 def _canonical_drive(entry: str) -> str:
     """'x'、'X:'、'x:/'、'x:\\' 统一为 path_guard 比较用的 'x:'。"""
-    return entry.replace('\\', '/').rstrip('/').rstrip(':').lower() + ':'
+    return normalize_path(entry).rstrip(':') + ':'
 
 
 def get_readonly_drives() -> frozenset:
@@ -47,8 +68,7 @@ def get_readonly_drives() -> frozenset:
 
 def get_readonly_unc_prefixes() -> list[str]:
     m = get_manifest()
-    prefixes = (p.replace('\\', '/').rstrip('/').lower()
-                for p in m.get('principles', {}).get('readonly_unc_prefixes', []))
+    prefixes = (normalize_path(p) for p in m.get('principles', {}).get('readonly_unc_prefixes', []))
     # '//server/' 与 '\\server\' 是同一根，去重后保持登记顺序。
     return list(dict.fromkeys(prefixes))
 
