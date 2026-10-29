@@ -741,3 +741,32 @@ def test_mcp_audit_rotates_to_a_bounded_number_of_files(tmp_path):
         "mcp_calls.jsonl.1",
         "mcp_calls.jsonl.2",
     ]
+
+
+def test_server_instructions_lead_with_canonical_protected_roots_within_budget():
+    # Claude Code reads only the first 4096 characters of server instructions.
+    instructions = server._build_instructions()
+    assert len(instructions) <= 3500
+    head = instructions[:1000]
+    roots_line = next(line for line in head.splitlines() if "protected roots" in line.lower())
+    assert "X:/" in roots_line
+    assert "//server/" in roots_line
+    assert "::" not in roots_line
+
+
+@pytest.mark.parametrize("drive", ["x:", "X:", "x", "X:/", "x:\\"])
+def test_protected_root_display_and_guard_share_one_normalization(monkeypatch, drive):
+    from cgi_pipeline.core import manifest, path_guard
+
+    monkeypatch.setattr(manifest, "_manifest", {"principles": {
+        "readonly_drives": [drive],
+        "readonly_unc_prefixes": ["//server/", r"\\server" "\\"],
+    }})
+    monkeypatch.setattr(path_guard, "_load_protected_roots", lambda: ["x:/project", "//server", "z:/prod"])
+
+    assert manifest.get_readonly_drives() == {"x:"}
+    assert path_guard.describe_protected_roots() == ["X:/", "//server/", "Z:/prod/"]
+    assert path_guard.is_protected_path(r"x:\other\a.ma")
+    assert path_guard.is_protected_path(r"\\server\share\a.ma")
+    assert path_guard.is_protected_path("Z:/prod/a.ma")
+    assert not path_guard.is_protected_path("Y:/work/a.ma")

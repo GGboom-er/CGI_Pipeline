@@ -1,6 +1,7 @@
 """Exercise contract delivery across the actual FastMCP JSON boundary, without DCCs."""
 
 import asyncio
+import json
 from copy import deepcopy
 from unittest.mock import patch
 
@@ -9,8 +10,9 @@ import pytest
 from fastmcp import Client
 from pydantic import ValidationError
 
-from cgi_pipeline.catalog import catalog_version, list_capabilities, page_capabilities
+from cgi_pipeline.catalog import capability_help, catalog_version, list_capabilities, page_capabilities
 from cgi_pipeline.contracts import validate_params
+from cgi_pipeline.paths import REPOSITORY_ROOT
 from cgi_pipeline.server.models import ExecuteApiInput
 from cgi_pipeline.server.tools_operations import register_operation_tools
 from cgi_pipeline.server.tools_readonly import register_readonly_tools
@@ -67,13 +69,19 @@ def test_business_status_across_real_mcp_boundary(status, is_error):
 def test_instructions_explain_sandbox_exceptions():
     instructions = _build_instructions()
     assert "system auto-creates task sandbox" not in instructions
-    assert "Existing UE editor and read-only Pipeline calls" in instructions
     assert "Foreground calls operate the selected session's existing scene" in instructions
     assert "protected paths remain read-only in every mode" in instructions
     assert 'Background saves stay inside the workspace' not in instructions
-    assert 'not only the current run_dir' in instructions
-    assert 'same OS directory lock' in instructions
     assert 'pipeline.runtime.status/release' in instructions
+    # Details moved out of the client's instruction budget stay findable at their owners.
+    assert "Sandbox creation rules and status codes: README 快速使用" in instructions
+    assert "save_scene api_help" in instructions
+    readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
+    assert "UE 现有编辑器调用、只读 Pipeline API" in readme
+    for api_id in ("maya.asset.save_scene", "blender.asset.save_scene"):
+        assert "version_lock" in json.dumps(capability_help(api_id), ensure_ascii=False)
+    assert "不是当前 run_dir 的跨任务权限隔离" in json.dumps(
+        capability_help("maya.asset.save_scene"), ensure_ascii=False)
 
 
 def test_fixed_facets_reject_invalid_values_but_valid_empty_search_succeeds():

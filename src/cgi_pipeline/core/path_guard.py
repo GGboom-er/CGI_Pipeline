@@ -69,18 +69,36 @@ def is_protected_path(path: str) -> bool:
     if not path:
         return False
     norm = _normalize(path)
-    # 盘符级硬拦截（从 manifest 读取）
-    drive = norm[:2]
-    if drive in get_readonly_drives():
+    if _under_readonly_root(norm):
         return True
-    # UNC 路径拦截（从 manifest 读取）
-    for prefix in get_readonly_unc_prefixes():
-        if norm.startswith(prefix):
-            return True
     for root in _load_protected_roots():
         if norm.startswith(root):
             return True
     return False
+
+
+def _under_readonly_root(norm: str) -> bool:
+    """manifest 只读盘符与 UNC 前缀；norm 须已经过 _normalize。"""
+    # 盘符级硬拦截（从 manifest 读取）
+    if norm[:2] in get_readonly_drives():
+        return True
+    # UNC 路径拦截（从 manifest 读取）
+    return any(norm.startswith(prefix) for prefix in get_readonly_unc_prefixes())
+
+
+def describe_protected_roots() -> list[str]:
+    """服务说明用的受保护根清单，与 is_protected_path 使用同一份规范化结果。
+
+    manifest 盘符显示为 'X:/'，UNC 显示为 '//server/'；项目配置里已被它们覆盖的根不重复列出。
+    """
+    labels = [drive.upper() + '/' for drive in sorted(get_readonly_drives())]
+    labels += [prefix + '/' for prefix in get_readonly_unc_prefixes()]
+    labels += sorted(_label(root) for root in _load_protected_roots() if not _under_readonly_root(root))
+    return labels
+
+
+def _label(root: str) -> str:
+    return (root[0].upper() + root[1:] if root[1:2] == ':' else root) + '/'
 
 
 def assert_save_allowed(save_path: str, context: str = '') -> None:

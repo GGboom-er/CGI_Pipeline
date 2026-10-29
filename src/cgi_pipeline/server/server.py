@@ -32,7 +32,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from cgi_pipeline.catalog import list_capabilities
-from cgi_pipeline.core.manifest import get_manifest
+from cgi_pipeline.core.path_guard import describe_protected_roots
 from cgi_pipeline.core.task_status import is_failure
 from cgi_pipeline.server.mcp_audit import build_mcp_audit
 from cgi_pipeline.server.public_surface import render_public_tool_routes
@@ -67,52 +67,43 @@ class PipelineMCP(FastMCP):
 
 def _build_instructions() -> str:
     """Shared routing/safety contract; tool descriptions supply only their own delta."""
-    m = get_manifest()
-    principles = m.get('principles', {})
-    status_codes = m.get('status_codes', {})
-
-    readonly_drives = ', '.join(d.upper() + ':/' for d in principles.get('readonly_drives', []))
-    unc_prefixes = ', '.join(principles.get('readonly_unc_prefixes', []))
-    status_str = ' | '.join(f'{k}={v}' for k, v in status_codes.items())
+    # Claude Code reads only the first 4096 characters: the safety boundary
+    # leads and the total stays within 3500. Moved details live in README
+    # 「快速使用」 or the owning API's api_help.
+    protected_roots = ', '.join(describe_protected_roots())
 
     return (
-        "CGI Pipeline: Maya, Blender and Unreal Editor. Use this registered transport; "
-        "do not create client-side raw socket, subprocess or commandPort connections.\n"
-        f"{render_public_tool_routes()}\n"
-        "Unknown API: read api_help, cache catalog_version. Known contract: execute directly with "
-        "expected_catalog_version; refresh once on CATALOG_VERSION_STALE. Workflow list supplies input bindings.\n"
+        "CGI Pipeline for Maya, Blender and Unreal Editor. Safety boundary: "
+        f"protected roots {protected_roots} (backslash forms included); protected paths remain read-only in every mode. "
+        "Never save over, rename, move or delete production assets there; stage copies into managed "
+        "projects/ or runs/ roots. Use only this registered transport; never bypass it with client-side raw "
+        "socket, subprocess or commandPort connections. Path guards are cooperative checks, not "
+        "operating-system isolation for arbitrary Python.\n\n"
+        f"{render_public_tool_routes()}\n\n"
+        "Unknown API: read api_help and cache catalog_version; known contracts execute directly with "
+        "expected_catalog_version, refreshing once on CATALOG_VERSION_STALE. list_workflows supplies input bindings.\n"
         "Calls wait by default, capped below the client tool timeout. PROGRESS keeps the task_id: call get_task_result, "
-        "which waits server-side; do not poll in a loop, and do not resubmit after a client timeout. Results over 4 KiB are "
-        "summarized with receipt_ref; pass detail=true only when the full receipt is needed. PARTIAL is terminal, not full success.\n"
-        "During a frontend update, HTTP_DRAINING with submitted=false means this call was not accepted; "
-        "reconnect after the frontend resumes before retrying it. Accepted tasks retain their task_id and "
-        "must be recovered without resubmission.\n"
-        "Foreground calls operate the selected session's existing scene using the contract's port/session; workspace_id "
-        "links receipts without staging. Authorized foreground work may use the actual project; each API retains "
-        "its own path restrictions. Background scene initialization stages explicit source inputs.\n"
-        "For a non-empty call collection containing only Maya/Blender inspect or preview operations, select a "
-        "foreground session, source_path or existing workspace_id, or explicitly use scene_action=open. "
-        "Mixed apply/query collections may initialize a scene. Modes describe intent, not permission or absence "
-        "of side effects; inspect effects and access.\n"
-        "workspace_id with scene_action=continue preserves a resident unsaved scene. If its owner is lost, "
-        "explicitly open a saved source; prior APIs are never replayed. Saving is an independent API choice. "
-        "Maya and Blender save_scene restrict current and target paths to managed projects/runs roots, not only the "
-        "current run_dir; both use the same OS directory lock for next-version saving.\n"
-        "Resident API/editing workspaces bind isolated runtime lanes (default maximum 3, with memory admission). "
-        "Automated workflow variants declare runtime_lifecycle=temporary: independent operation-owned workers, "
-        "no resident-slot cap, automatic memory waiting and own-runtime cleanup after verified success. "
-        "Failures retain diagnostics and their own scene. Same-workspace execution stays serial. "
-        "Only resident capacity returns RUNTIME_CAPACITY_BUSY without dispatch. Retain runtime_id/generation. "
-        "pipeline.runtime.status/release are standalone control APIs and need no free lane. "
-        "Release refuses pending/active work and dirty/unknown scenes unless discard is explicit.\n"
-        "project selects business rules; workspace_project selects storage, defaulting to project when omitted. "
-        "Use workspace_project=default for task sandboxes. Pass business_task_id to reuse "
-        "projects/{workspace_project}/{business_task_id}; retain workspace_id. "
-        "Existing UE editor and read-only Pipeline calls need no sandbox unless workspace_id, source_path "
-        "or scene_action=open is explicit.\n"
-        f"Protected roots: {readonly_drives}; {unc_prefixes}; protected paths remain read-only in every mode. "
-        "Path guards are cooperative checks, not operating-system isolation for arbitrary Python.\n"
-        f"{status_str}\n"
+        "which waits server-side; do not poll in a loop, and do not resubmit after a client timeout. Results over 4 KiB "
+        "return a summary with receipt_ref; use detail=true only when needed. PARTIAL is terminal, not full success. "
+        "HTTP_DRAINING with submitted=false was not accepted; retry after the frontend resumes.\n"
+        "Foreground calls operate the selected session's existing scene via the contract's port/session; workspace_id "
+        "only links receipts. Authorized foreground work may use the actual project; each API keeps its own path limits. "
+        "Independent sessions and output files may share the same workspace concurrently; do not wait for unrelated tasks. "
+        "workspace.lock guards short metadata transactions only: never hold it across API calls or an entire batch, "
+        "never delete it.\n"
+        "Background initialization stages explicit source inputs. Inspect/preview-only Maya/Blender collections need "
+        "a foreground session, source_path, workspace_id or scene_action=open; modes are intent, not permission. "
+        "scene_action=continue keeps the resident unsaved scene; if its owner is lost, open a saved source (APIs are "
+        "never replayed). Saving is a separate API (save_scene api_help).\n"
+        "Resident workspaces bind isolated runtime lanes (default max 3); only resident capacity returns "
+        "RUNTIME_CAPACITY_BUSY without dispatch. Retain runtime_id/generation. runtime_lifecycle=temporary workflows "
+        "use their own workers and may execute concurrently in the same workspace; resident calls share one scene and "
+        "remain serial per runtime. Duplicate operation delivery is fenced separately. pipeline.runtime.status/release "
+        "need no free lane (release rules: api_help; memory, locks and cleanup: README 快速使用).\n"
+        "project selects business rules; workspace_project selects storage, defaulting to project. Reuse the recorded "
+        "workspace_project; new classified asset tasks use project/flow (for example ysj/proxyRig), unclassified tasks "
+        "use default. business_task_id reuses projects/{workspace_project}/{business_task_id}; retain workspace_id. "
+        "Sandbox creation rules and status codes: README 快速使用.\n"
         "The MCP surface is registry-controlled; use API/workflow metadata for operation details."
     )
 

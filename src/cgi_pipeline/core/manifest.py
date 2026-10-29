@@ -35,15 +35,22 @@ def get_manifest() -> dict:
     return _manifest
 
 
+def _canonical_drive(entry: str) -> str:
+    """'x'、'X:'、'x:/'、'x:\\' 统一为 path_guard 比较用的 'x:'。"""
+    return entry.replace('\\', '/').rstrip('/').rstrip(':').lower() + ':'
+
+
 def get_readonly_drives() -> frozenset:
     m = get_manifest()
-    return frozenset(d.lower() for d in m.get('principles', {}).get('readonly_drives', []))
+    return frozenset(_canonical_drive(d) for d in m.get('principles', {}).get('readonly_drives', []))
 
 
 def get_readonly_unc_prefixes() -> list[str]:
     m = get_manifest()
-    return [p.replace('\\', '/').rstrip('/').lower()
-            for p in m.get('principles', {}).get('readonly_unc_prefixes', [])]
+    prefixes = (p.replace('\\', '/').rstrip('/').lower()
+                for p in m.get('principles', {}).get('readonly_unc_prefixes', []))
+    # '//server/' 与 '\\server\' 是同一根，去重后保持登记顺序。
+    return list(dict.fromkeys(prefixes))
 
 
 def get_status_codes() -> dict:

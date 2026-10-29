@@ -121,6 +121,8 @@ API/batch 默认等待结果；前台 `wait=false` 也会先返回 `SUBMITTED/ta
 
 前台默认操作选定端口的现有场景，不创建后台沙盒；显式传 workspace_id 时只把该前台操作归入已有业务目录，不会把后台场景自动搬到前台。前台不支持 `scene_action="open"`，明确的开场景动作仍由对应 API 执行。
 
+常见顶层状态码的中文含义登记在 `config/pipeline_manifest.json` 的 `status_codes`，例如 `BLOCKED`=路径保护拦截、`NEEDS_ATTENTION`=需人工决策、`CHAIN_ABORTED`=链中断；终态与失败分类以 `src/cgi_pipeline/core/task_status.py` 为准，各 API 可能返回的状态见其 `api_help` 的 `statuses`。
+
 已授权的增量任务直接使用用户指定的实际工程，不强制复制工程或另开隔离测试场景。客户端可为该任务启动、正常关闭或重启目标 DCC；启动前核实可执行文件和工程路径并优先复用匹配会话，关闭前妥善保存未保存内容，不强制结束无关会话。有登记的生命周期 API 时优先复用；没有时可用宿主进程启动入口及应用正常关闭机制，启动后重新发现并核对会话，场景与资产操作继续通过 CGI。后台场景处理的 staging 契约和受保护路径权限按原契约执行，不能把它们扩大为所有 DCC 操作都必须隔离。操作技能的维护源与客户端同步方式见本节上文。
 
 ## API 目录
