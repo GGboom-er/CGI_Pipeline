@@ -67,7 +67,7 @@ Dashboard 取消先持久化 `CANCEL_REQUESTED`，执行器在开始执行或下
 
 这是常见客户端的 JSON 表达；具体外层配置格式由客户端决定。无需指定工作目录，仓库配置和审计路径从安装位置定位。标准输出保留给 MCP 协议，诊断写到标准错误或日志。
 
-客户端还需能发现 `cgi-pipeline-operator` 操作 Skill；MCP 连接成功并不表示 Skill 已安装。本机唯一维护正文为 `C:/Users/yuweiming/.agents/skills/cgi-pipeline-operator/SKILL.md`，总目录以「CGI Pipeline 操作 Skill 维护源」精确登记；正常维护仍须有效授权任务。Claude 的 `C:/Users/yuweiming/.claude/skills/cgi-pipeline-operator` 使用既有 junction 读取同源；Codex 直接发现个人源。该源位于本机用户目录，不受 Notes/CGI Git 跟踪，不能据此宣称另一机器或重装后可自动恢复。Notes 的 `sync_skills.ps1` 只同步 Notes 自动治理技能，不负责这个项目操作 Skill。观察工具选择、实际阅图和编辑前后核验由该 Skill 的 Observe and verify 编排；参数和副作用仍看 `api_help`。接入验收须在新客户端会话实际采用 Skill，再核工具调用、图像显示与判断；已有客户端可能需要重新发现技能与工具。
+客户端还需能发现 `cgi-pipeline-operator` 操作 Skill；MCP 连接成功并不表示 Skill 已安装。唯一维护正文为本仓 [`.agents/skills/cgi-pipeline-operator/SKILL.md`](.agents/skills/cgi-pipeline-operator/SKILL.md)，与它调用的代码一起维护、提交；总目录以「CGI Pipeline 操作 Skill 维护源」登记；正常维护仍须有效授权任务。入口只在 Notes 项目 `.agents/skills/cgi-pipeline-operator`（Codex 发现）和 `.claude/skills/cgi-pipeline-operator`（Claude 发现），是指向仓内源的 junction，由 Notes `sync_skills.ps1` 派生，不当源、不在那里改；用户目录不放这个 skill，也不放指向它的链接，在 Notes 以外的目录开会话发现不到它；它不进 Notes `router_table.py`。换机器或重装后先拉本仓，再在 Notes 运行 `sync_skills.ps1` 重建入口。观察工具选择、实际阅图和编辑前后核验由该 Skill 的 Observe and verify 编排；参数和副作用仍看 `api_help`。接入验收须在新客户端会话实际采用 Skill，再核工具调用、图像显示与判断；已有客户端可能需要重新发现技能与工具。
 
 MCP 入口随客户端退出；Redis、工作区 Worker 及其后台 DCC 会话按需启动并跨客户端复用，不随入口退出关闭。新隔离后台使用目录里的 `pipeline.runtime.status/release` 管理；旧全局维护只处理 legacy，跳过所有带 runtime 标记的宿主。MCP 断开不代表已提交后台任务取消，可用 `get_task_result(task_id)` 恢复结果。
 
